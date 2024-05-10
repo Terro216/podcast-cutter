@@ -1,8 +1,8 @@
 # podcast-cutter
 
-### how to run
+## how to run
 
-install python 3.10 and poetry
+install python 3.10, poetry and clone repo
 
 ```shell
 poetry install
@@ -11,3 +11,10 @@ python main.py
 ```
 
 tg bot: https://t.me/podcast_cutter_bot (not really deployed yet)
+
+
+## Sources
+
+- https://core.telegram.org/bots
+- https://docs.python-telegram-bot.org/en/stable/examples.nestedconversationbot.html
+- https://podcastindex-org.github.io/docs-api/#get-/search/byterm
