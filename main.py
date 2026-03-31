@@ -167,6 +167,74 @@ async def handle_global_episode_choice(update: Update, context):
             return CUT_INTERVAL
 
 
+async def start_surprise(update: Update, context) -> int:
+    context.user_data.clear()
+    message = await update.message.reply_text(
+        "Fetching a random episode...", reply_markup=ReplyKeyboardRemove()
+    )
+    try:
+        random_episodes = await asyncio.to_thread(api.get_random_episode, 1)
+        await message.delete()
+        if random_episodes:
+            episode = random_episodes[0]
+            context.user_data["episode_url"] = episode.get("enclosureUrl")
+            context.user_data["episode_title"] = episode.get("title", "Random Episode")
+
+            await update.message.reply_text(
+                f"Surprise! We picked: {context.user_data['episode_title']}\n\nPlease enter the interval you want to cut (e.g., 01:20-02:00):"
+            )
+            return CUT_INTERVAL
+        else:
+            await update.message.reply_text("No random episodes found.")
+            return ConversationHandler.END
+    except Exception as e:
+        logging.error(f"Error in start_surprise: {e}")
+        await message.delete()
+        await update.message.reply_text(
+            "An error occurred while fetching a random episode."
+        )
+        return ConversationHandler.END
+
+
+async def start_trending(update: Update, context) -> int:
+    context.user_data.clear()
+    message = await update.message.reply_text(
+        "Fetching trending podcasts...", reply_markup=ReplyKeyboardRemove()
+    )
+    try:
+        trending_feeds = await asyncio.to_thread(api.get_trending_podcasts)
+        await message.delete()
+        if trending_feeds:
+            context.user_data["found_feeds_dict"] = {
+                str(feed["id"]): feed["title"] for feed in trending_feeds
+            }
+            keyboard = []
+            for feed in trending_feeds:
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            f"Title: {feed.get('title', 'Unknown')}, Author: {feed.get('author', 'Unknown')}",
+                            callback_data=str(feed["id"]),
+                        )
+                    ]
+                )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "Here are the trending podcasts:", reply_markup=reply_markup
+            )
+            return PODCAST_CHOICE
+        else:
+            await update.message.reply_text("No trending podcasts found.")
+            return ConversationHandler.END
+    except Exception as e:
+        logging.error(f"Error in start_trending: {e}")
+        await message.delete()
+        await update.message.reply_text(
+            "An error occurred while fetching trending podcasts."
+        )
+        return ConversationHandler.END
+
+
 async def handle_podcast_name(update: Update, context):
     if update.message:
         podcast_name = update.message.text
@@ -500,6 +568,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             KeyboardButton("Search Episodes Globally"),
         ],
         [
+            KeyboardButton("Trending Podcasts"),
+            KeyboardButton("Surprise Me"),
+        ],
+        [
             KeyboardButton("Help"),
         ],
     ]
@@ -535,6 +607,16 @@ def main() -> None:
             MessageHandler(
                 filters.Regex("^Search Episodes Globally$"),
                 start_global_search,
+            ),
+            CommandHandler("trending", start_trending),
+            MessageHandler(
+                filters.Regex("^Trending Podcasts$"),
+                start_trending,
+            ),
+            CommandHandler("surprise", start_surprise),
+            MessageHandler(
+                filters.Regex("^Surprise Me$"),
+                start_surprise,
             ),
         ],
         states={
