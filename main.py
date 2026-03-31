@@ -1,4 +1,7 @@
+import asyncio
 import logging
+import os
+
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -10,17 +13,18 @@ from telegram import (
 )
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    Updater,
-    MessageHandler,
-    CallbackQueryHandler,
     ConversationHandler,
+    MessageHandler,
+    Updater,
     filters,
 )
-from utils.api import API
-from utils.constants import BOT_TOKEN
 
+from utils.api import API
+from utils.audio import cut_audio, parse_interval
+from utils.constants import BOT_TOKEN
 
 # # Enable logging
 logging.basicConfig(
@@ -32,38 +36,170 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Define podcast cutting states
-ENTER_PODCAST_NAME, PODCAST_CHOICE, ENTER_EPISODE_NAME, EPISODE_CHOICE, CUT_INTERVAL = (
-    range(5)
-)
+(
+    ENTER_PODCAST_NAME,
+    PODCAST_CHOICE,
+    ENTER_EPISODE_NAME,
+    EPISODE_CHOICE,
+    CUT_INTERVAL,
+    ENTER_GLOBAL_SEARCH,
+    GLOBAL_EPISODE_CHOICE,
+) = range(7)
 
 api = API()
+processing_lock = asyncio.Lock()
 
 
 async def start_cutting(update: Update, context) -> str:
+    context.user_data.clear()
     await update.message.reply_text(
         "Please enter the name of the podcast:", reply_markup=ReplyKeyboardRemove()
     )
     return ENTER_PODCAST_NAME
 
 
+async def start_global_search(update: Update, context) -> str:
+    context.user_data.clear()
+    await update.message.reply_text(
+        "Please enter a person or keyword to search across all podcast episodes:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return ENTER_GLOBAL_SEARCH
+
+
+async def handle_global_search(update: Update, context):
+    query = update.message.text
+    context.user_data["global_search_query"] = query
+    context.user_data["podcast_episode_page"] = 1
+    context.user_data.pop("all_found_episodes", None)
+    return await render_global_episode_page(update, context)
+
+
+async def render_global_episode_page(update: Update, context):
+    query = context.user_data["global_search_query"]
+    page = context.user_data.get("podcast_episode_page", 1)
+
+    try:
+        if "all_found_episodes" not in context.user_data:
+            context.user_data["all_found_episodes"] = await asyncio.to_thread(
+                api.find_episodes_by_person, query
+            )
+        all_found_episodes = context.user_data["all_found_episodes"]
+        ep_start = (page - 1) * api.episodes_per_page
+        ep_end = ep_start + api.episodes_per_page
+        cur_page_episodes = all_found_episodes[ep_start:ep_end]
+
+        if cur_page_episodes:
+            has_next_page = ep_end < len(all_found_episodes)
+            keyboard = []
+            for episode in cur_page_episodes:
+                podcast_title = episode.get("feedTitle", "Podcast")[:20]
+                ep_title = episode.get("title", "Episode")[:30]
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            f"{podcast_title}: {ep_title}",
+                            callback_data=str(episode["id"]),
+                        )
+                    ]
+                )
+            if page > 1:
+                keyboard.append(
+                    [InlineKeyboardButton("Previous Page", callback_data="prev_page")]
+                )
+            if has_next_page:
+                keyboard.append(
+                    [InlineKeyboardButton("Next Page", callback_data="next_page")]
+                )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            text = f"Found episodes for '{query}'. Please choose one:"
+            if update.message:
+                await update.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                await update.callback_query.edit_message_text(
+                    text, reply_markup=reply_markup
+                )
+            return GLOBAL_EPISODE_CHOICE
+        else:
+            raise Exception("No episodes found.")
+    except Exception as e:
+        error_message = str(e)
+        logging.error(f"Error in global search: {error_message}")
+        msg = (
+            f"An error occurred: {error_message}\nPlease enter a different search term:"
+        )
+        if update.message:
+            await update.message.reply_text(msg)
+        else:
+            await update.callback_query.edit_message_text(msg)
+        context.user_data.pop("all_found_episodes", None)
+        return ENTER_GLOBAL_SEARCH
+
+
+async def handle_global_episode_choice(update: Update, context):
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if query.data == "next_page":
+            context.user_data["podcast_episode_page"] = (
+                context.user_data.get("podcast_episode_page", 1) + 1
+            )
+            return await render_global_episode_page(update, context)
+        elif query.data == "prev_page":
+            context.user_data["podcast_episode_page"] = (
+                context.user_data.get("podcast_episode_page", 1) - 1
+            )
+            return await render_global_episode_page(update, context)
+        else:
+            episode_id = query.data
+            context.user_data["episode_id"] = episode_id
+            all_found_episodes = context.user_data.get("all_found_episodes", [])
+            for ep in all_found_episodes:
+                if str(ep.get("id")) == str(episode_id):
+                    context.user_data["episode_url"] = ep.get("enclosureUrl")
+                    context.user_data["episode_title"] = ep.get("title")
+                    context.user_data["podcast_title"] = ep.get("feedTitle")
+                    break
+            await query.edit_message_text(
+                f"Selected episode: {context.user_data.get('episode_title', 'Unknown')}\nPlease enter the start-end interval (e.g., 01:20-02:00):"
+            )
+            return CUT_INTERVAL
+
+
 async def handle_podcast_name(update: Update, context):
-    podcast_name = update.message.text
+    if update.message:
+        podcast_name = update.message.text
+        context.user_data["podcast_name"] = podcast_name
+        context.user_data["podcast_page"] = 1
+    else:
+        podcast_name = context.user_data.get("podcast_name")
+
     podcast_page = context.user_data.get("podcast_page", 1)
 
     try:
-        found_feeds, has_next_page = api.find_podcasts_feeds(
-            podcast_name, podcast_page
+        found_feeds, has_next_page = await asyncio.to_thread(
+            api.find_podcasts_feeds, podcast_name, podcast_page
         )  # TODO: add memo
 
         if found_feeds:
+            context.user_data["found_feeds_dict"] = {
+                str(feed["id"]): feed["title"] for feed in found_feeds
+            }
             if len(found_feeds) == 1:
                 found_podcast = found_feeds[0]
                 context.user_data["podcast_id"] = found_podcast["id"]
-                await update.message.reply_text(
-                    f"Found podcast: {found_podcast['title']}"
-                )
+                context.user_data["podcast_title"] = found_podcast["title"]
+                if update.callback_query:
+                    await update.callback_query.edit_message_text(
+                        f"Found podcast: {found_podcast['title']}"
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"Found podcast: {found_podcast['title']}"
+                    )
                 logging.info(f"Selected single podcast ID: {found_podcast['id']}")
-                return ENTER_EPISODE_NAME
+                return await handle_podcast_episode(update, context)
             else:
                 # Create inline keyboard buttons for search results
                 keyboard = []
@@ -71,8 +207,8 @@ async def handle_podcast_name(update: Update, context):
                     keyboard.append(
                         [
                             InlineKeyboardButton(
-                                f'Title: {feed["title"]}, Author: {feed["author"]}',
-                                callback_data=feed["id"],
+                                f"Title: {feed['title']}, Author: {feed['author']}",
+                                callback_data=str(feed["id"]),
                             )
                         ]
                     )
@@ -90,9 +226,14 @@ async def handle_podcast_name(update: Update, context):
                     )
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-                await update.message.reply_text(
-                    "Please choose a podcast:", reply_markup=reply_markup
-                )
+                if update.callback_query:
+                    await update.callback_query.edit_message_text(
+                        "Please choose a podcast:", reply_markup=reply_markup
+                    )
+                else:
+                    await update.message.reply_text(
+                        "Please choose a podcast:", reply_markup=reply_markup
+                    )
                 return PODCAST_CHOICE
         else:
             raise Exception("Unexpected error :(")
@@ -112,31 +253,36 @@ async def handle_podcast_choice(update: Update, context):
 
     if query.data == "next_page":
         context.user_data["podcast_page"] = context.user_data.get("podcast_page", 1) + 1
-        return ENTER_PODCAST_NAME
+        return await handle_podcast_name(update, context)
     elif query.data == "prev_page":
         context.user_data["podcast_page"] = context.user_data.get("podcast_page", 1) - 1
-        return ENTER_PODCAST_NAME
+        return await handle_podcast_name(update, context)
     else:
         podcast_id = query.data
         context.user_data["podcast_id"] = podcast_id
+        context.user_data["podcast_title"] = context.user_data.get(
+            "found_feeds_dict", {}
+        ).get(podcast_id, "Podcast")
         logging.info(f"Selected podcast ID: {podcast_id}")
-        await query.edit_message_text(f"Selected podcast ID: {podcast_id}")
-        return ENTER_EPISODE_NAME
+        await query.edit_message_text(
+            f"Selected podcast: {context.user_data['podcast_title']}"
+        )
+        return await handle_podcast_episode(update, context)
 
 
 async def handle_podcast_episode(update: Update, context):
-    print("all_found_episodesasdadsads")  ## TODO: STOP HERE - no prints
     podcast_id = context.user_data["podcast_id"]
     podcast_episode_page = context.user_data.get("podcast_episode_page", 1)
 
     try:
-        print("all_found_episodes")
-        all_found_episodes = context.user_data.get(
-            "all_found_episodes", api.find_podcast_episodes(podcast_id)
-        )
-        print(all_found_episodes)
-        ep_end = len(all_found_episodes) / api.episodes_per_page * podcast_episode_page
-        cur_page_episodes = all_found_episodes[ep_end - api.episodes_per_page : ep_end]
+        if "all_found_episodes" not in context.user_data:
+            context.user_data["all_found_episodes"] = await asyncio.to_thread(
+                api.find_podcast_episodes, podcast_id
+            )
+        all_found_episodes = context.user_data["all_found_episodes"]
+        ep_start = (podcast_episode_page - 1) * api.episodes_per_page
+        ep_end = ep_start + api.episodes_per_page
+        cur_page_episodes = all_found_episodes[ep_start:ep_end]
         if cur_page_episodes:
             has_next_page = ep_end < len(all_found_episodes)
             keyboard = []
@@ -144,7 +290,7 @@ async def handle_podcast_episode(update: Update, context):
                 keyboard.append(
                     [
                         InlineKeyboardButton(
-                            f'ep {episode["title"]}',
+                            f"ep {episode['title']}",
                             callback_data=episode["id"],
                         )
                     ]
@@ -159,20 +305,31 @@ async def handle_podcast_episode(update: Update, context):
                 )
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await update.message.reply_text(
-                "Please choose episode (Or write title of the episode):",
-                reply_markup=reply_markup,
-            )
+            if update.message:
+                await update.message.reply_text(
+                    "Please choose episode (Or write title of the episode):",
+                    reply_markup=reply_markup,
+                )
+            else:
+                await update.callback_query.edit_message_text(
+                    "Please choose episode (Or write title of the episode):",
+                    reply_markup=reply_markup,
+                )
 
-            return PODCAST_CHOICE
+            return EPISODE_CHOICE
         else:
             raise Exception("Unexpected error :(")
     except Exception as e:
         error_message = str(e)
         logging.error(f"Error in handle_podcast_episode: {error_message}")
-        await update.message.reply_text(
-            f"An error occurred: {error_message}\nPlease enter/chose a different podcast episode:"
-        )
+        if update.message:
+            await update.message.reply_text(
+                f"An error occurred: {error_message}\nPlease enter/chose a different podcast episode:"
+            )
+        else:
+            await update.callback_query.edit_message_text(
+                f"An error occurred: {error_message}\nPlease enter/chose a different podcast episode:"
+            )
         return ENTER_EPISODE_NAME
 
 
@@ -188,63 +345,144 @@ async def handle_episode_choice(update: Update, context):
             context.user_data["podcast_episode_page"] = (
                 context.user_data.get("podcast_episode_page", 1) + 1
             )
-            return ENTER_EPISODE_NAME
+            return await handle_podcast_episode(update, context)
         elif query.data == "prev_page":
             context.user_data["podcast_episode_page"] = (
                 context.user_data.get("podcast_episode_page", 1) - 1
             )
-            return ENTER_EPISODE_NAME
+            return await handle_podcast_episode(update, context)
         else:
             episode_id = query.data
             context.user_data["episode_id"] = episode_id
-            # found_episode_link = episode["enclosureUrl"]
+            all_found_episodes = context.user_data.get("all_found_episodes", [])
+            for ep in all_found_episodes:
+                if str(ep.get("id")) == str(episode_id):
+                    context.user_data["episode_url"] = ep.get("enclosureUrl")
+                    context.user_data["episode_title"] = ep.get("title")
+                    break
+            await query.edit_message_text(
+                f"Selected episode: {context.user_data.get('episode_title', 'Unknown')}\nPlease enter the start-end interval (e.g., 01:20-02:00):"
+            )
             return CUT_INTERVAL
     elif update.message:
         # Сообщение пришло текстом
-        episode_name = update.message.text
-        # Сохраните выбранный эпизод в контексте пользователя
+        episode_query = update.message.text.lower()
         all_found_episodes = context.user_data["all_found_episodes"]
-        episode_id = None
-        for episode in all_found_episodes:
-            if episode["title"].lower() == episode_name.lower():
-                episode_id = episode["title"]
-                # found_episode_link = episode["enclosureUrl"]
-                break
-        if not episode_id:
-            await update.message.reply_text(f"episode not found( try again")
-            return ENTER_EPISODE_NAME
-        context.user_data["episode_id"] = episode_id
-        await update.message.reply_text(f"Ep: {episode_name}")
+
+        # Search by substring
+        matching_episodes = [
+            ep for ep in all_found_episodes if episode_query in ep["title"].lower()
+        ]
+
+        if not matching_episodes:
+            await update.message.reply_text("Episode not found( try again:")
+            return EPISODE_CHOICE
+
+        if len(matching_episodes) == 1:
+            episode = matching_episodes[0]
+            context.user_data["episode_id"] = episode["id"]
+            context.user_data["episode_url"] = episode.get("enclosureUrl")
+            context.user_data["episode_title"] = episode.get("title")
+            await update.message.reply_text(f"Selected episode: {episode.get('title')}")
+            await update.message.reply_text(
+                "Please enter the start-end interval (e.g., 01:20-02:00):"
+            )
+            return CUT_INTERVAL
+        else:
+            # Show the first 5 matches
+            keyboard = []
+            for episode in matching_episodes[:5]:
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            f"ep {episode['title']}",
+                            callback_data=str(episode["id"]),
+                        )
+                    ]
+                )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"Found {len(matching_episodes)} matching episodes. Please choose one:",
+                reply_markup=reply_markup,
+            )
+            return EPISODE_CHOICE
+
+
+async def handle_interval(update: Update, context):
+    interval_str = update.message.text
+    episode_url = context.user_data.get("episode_url")
+
+    if not episode_url:
         await update.message.reply_text(
-            "Please enter the start-end interval (in seconds):"
+            "Error: Could not find audio URL for this episode."
+        )
+        return ConversationHandler.END
+
+    try:
+        start_sec, end_sec = parse_interval(interval_str)
+    except ValueError as e:
+        await update.message.reply_text(
+            f"Invalid interval format: {e}. Try again (e.g., 01:20-02:00):"
         )
         return CUT_INTERVAL
 
+    msg = await update.message.reply_text(
+        "⏳ Added to processing queue... Waiting for an available slot."
+    )
 
-def handle_interval(update: Update, context):
-    # TODO: todo
-    end_time = update.message.text
-    podcast_id = context.user_data["podcast_id"]
-    start_time = context.user_data["start_time"]
+    async with processing_lock:
+        await msg.edit_text(
+            "⏳ Cutting podcast...\n\n(Note: If the host is protected, the bot will securely download the full episode in the background first. This might take a couple of minutes!)"
+        )
 
-    # Generate the cut podcast file based on podcast_id, start_time, and end_time
-    cut_podcast_file = "file"  # generate_cut_podcast(podcast_id, start_time, end_time)
+        try:
+            cut_file = await cut_audio(episode_url, start_sec, end_sec)
+            await msg.edit_text("📤 Uploading your cut audio...")
 
-    update.message.reply_document(document=cut_podcast_file)
-    update.message.reply_text("Here's your cut podcast!")
+            podcast_title = context.user_data.get("podcast_title", "Podcast").replace(
+                " ", "_"
+            )
+            episode_title = context.user_data.get("episode_title", "Episode").replace(
+                " ", "_"
+            )
+            safe_interval = interval_str.replace(":", "-").replace(" ", "")
+            filename = f"{podcast_title}-{episode_title}-{safe_interval}.mp3".replace(
+                "/", "_"
+            ).replace("\\", "_")
+
+            await update.message.reply_audio(
+                audio=open(cut_file, "rb"),
+                filename=filename,
+                title=f"{context.user_data.get('podcast_title', 'Podcast')} - {context.user_data.get('episode_title', 'Episode')} ({interval_str})",
+                caption="Here's your cut podcast!",
+            )
+            if os.path.exists(cut_file):
+                os.remove(cut_file)
+            await msg.delete()
+        except Exception as e:
+            await msg.edit_text(f"❌ Error cutting audio:\n{e}")
 
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context):
-    await update.message.reply_text("Task canceled. You can always try again.")
+    await update.message.reply_text(
+        "Task canceled. You can always try again.", reply_markup=ReplyKeyboardRemove()
+    )
     return ConversationHandler.END
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        f"sending help to {update.effective_user.first_name}"
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "🎙 *Podcast Cutter Bot*\n\n"
+        "Here are the available commands:\n"
+        "/start - Show the main menu\n"
+        "/cut_podcast - Start searching for a podcast by name\n"
+        "/search_episodes - Start searching episodes globally\n"
+        "/cancel - Cancel the current operation\n"
+        "/help - Show this help message"
     )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
 async def not_implemented_command(
@@ -255,15 +493,14 @@ async def not_implemented_command(
     )
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
-            KeyboardButton("Cut the podcast!"),
-            KeyboardButton("Uncut the podcast"),
+            KeyboardButton("Search Podcast by Name"),
+            KeyboardButton("Search Episodes Globally"),
         ],
         [
-            KeyboardButton("More buttons soon"),
-            KeyboardButton("About"),
+            KeyboardButton("Help"),
         ],
     ]
     reply_markup = ReplyKeyboardMarkup(
@@ -272,6 +509,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Hello! tap button below to do something", reply_markup=reply_markup
     )
+    return ConversationHandler.END
 
 
 def main() -> None:
@@ -281,34 +519,53 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(
         MessageHandler(
-            filters.Regex("^(Uncut the podcast|More buttons soon|About)$"),
-            not_implemented_command,
+            filters.Regex("^(Help)$"),
+            help_command,
         )
     )
 
     cut_podcast_handler = ConversationHandler(
         entry_points=[
             CommandHandler("cut_podcast", start_cutting),
+            CommandHandler("search_episodes", start_global_search),
             MessageHandler(
-                filters.Regex("^Cut the podcast!$"),
+                filters.Regex("^Search Podcast by Name$"),
                 start_cutting,
+            ),
+            MessageHandler(
+                filters.Regex("^Search Episodes Globally$"),
+                start_global_search,
             ),
         ],
         states={
             ENTER_PODCAST_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_podcast_name)
             ],
-            PODCAST_CHOICE: [CallbackQueryHandler(handle_podcast_choice)],
+            PODCAST_CHOICE: [
+                CallbackQueryHandler(handle_podcast_choice),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_podcast_name),
+            ],
             ENTER_EPISODE_NAME: [],
             EPISODE_CHOICE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_episode_choice),
                 CallbackQueryHandler(handle_episode_choice),
             ],
+            ENTER_GLOBAL_SEARCH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_global_search)
+            ],
+            GLOBAL_EPISODE_CHOICE: [
+                CallbackQueryHandler(handle_global_episode_choice),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_global_search),
+            ],
             CUT_INTERVAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_interval)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", start),
+            CommandHandler("help", help_command),
+        ],
         # per_message=True,
     )
     app.add_handler(cut_podcast_handler)
