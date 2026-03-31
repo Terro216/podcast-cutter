@@ -15,9 +15,9 @@ from utils.constants import (
 
 
 class API:
-    def new(cls):
+    def __new__(cls):
         if not hasattr(cls, "instance"):
-            cls.instance = super(API, cls).new(cls)
+            cls.instance = super(API, cls).__new__(cls)
         return cls.instance
 
     def __init__(self):
@@ -123,5 +123,51 @@ class API:
                 return data["items"]
             else:
                 raise Exception("No episodes found matching that person/keyword")
+        else:
+            raise Exception(f"API Error {response.status_code}: {response.text}")
+
+    def get_trending_podcasts(self, max_results: int = 10):
+        """
+        Gets trending podcasts from the index.
+        """
+        params = {
+            "max": max_results,
+            "pretty": True,
+        }
+        response = requests.get(
+            self.base_url + "/podcasts/trending",
+            params=params,
+            headers=self._get_headers(),
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("count", 0) > 0:
+                return data["feeds"]
+            else:
+                raise Exception("No trending podcasts found")
+        else:
+            raise Exception(f"API Error {response.status_code}: {response.text}")
+
+    def get_random_episode(self, max_results: int = 1):
+        """
+        Gets random episodes from the index.
+        """
+        params = {
+            "max": max_results,
+            "pretty": True,
+        }
+        response = requests.get(
+            self.base_url + "/episodes/random",
+            params=params,
+            headers=self._get_headers(),
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("count", 0) > 0:
+                return data["episodes"]
+            else:
+                raise Exception("No random episodes found")
         else:
             raise Exception(f"API Error {response.status_code}: {response.text}")
