@@ -285,6 +285,7 @@ def _cut_command(
     interval: Interval,
     *,
     transcode: bool,
+    metadata: dict[str, str] | None = None,
 ) -> list[str]:
     cmd = [
         "ffmpeg",
@@ -306,7 +307,15 @@ def _cut_command(
         "-map",
         "0:a:0",
         "-vn",
+        # Drop the source's metadata. Feeds routinely carry enormous ID3 tags —
+        # one popular show ships an 18 MB tag — and ffmpeg copies the whole
+        # thing into the cut, so a 30-second clip came out at 20 MB.
+        "-map_metadata",
+        "-1",
     ]
+    for key, value in (metadata or {}).items():
+        if value:
+            cmd += ["-metadata", f"{key}={value}"]
     if transcode:
         cmd += ["-c:a", "libmp3lame", "-b:a", _TRANSCODE_BITRATE]
     else:
@@ -323,13 +332,17 @@ async def _try_cut(
     transcode: bool,
     timeout: float,
     verify_timeout: float = 30.0,
+    metadata: dict[str, str] | None = None,
 ) -> str | None:
     """Attempt one cut. Returns ``None`` on success, else a reason string."""
     with contextlib.suppress(FileNotFoundError):
         output.unlink()
 
     code, stderr = await _run(
-        _cut_command(source, output, interval, transcode=transcode), timeout
+        _cut_command(
+            source, output, interval, transcode=transcode, metadata=metadata
+        ),
+        timeout,
     )
 
     if code != 0:
@@ -418,11 +431,13 @@ async def cut_episode(
     workdir: Path,
     settings: Settings,
     on_status: StatusCallback | None = None,
+    metadata: dict[str, str] | None = None,
 ) -> CutResult:
     """Extract ``interval`` from ``audio_url`` into ``workdir``.
 
     ``workdir`` is expected to be a per-job directory that the caller removes
-    afterwards, so no temporary file can outlive the request.
+    afterwards, so no temporary file can outlive the request. ``metadata``
+    replaces the source's tags on the cut (see ``_cut_command``).
     """
 
     async def status(message: str) -> None:
@@ -457,10 +472,11 @@ async def cut_episode(
             transcode=transcode,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
+            metadata=metadata,
         )
         if reason is None:
             return await _finalize(
-                output, transcode, interval, workdir, settings, status
+                output, transcode, interval, workdir, settings, status, metadata
             )
         logger.info(
             "Streaming cut failed (transcode=%s): %s", transcode, reason[:500]
@@ -497,11 +513,12 @@ async def cut_episode(
             transcode=transcode,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
+            metadata=metadata,
         )
         if reason is None:
             local_source.unlink(missing_ok=True)
             return await _finalize(
-                output, transcode, interval, workdir, settings, status
+                output, transcode, interval, workdir, settings, status, metadata
             )
         failures.append(reason)
         logger.info("Local cut failed (transcode=%s): %s", transcode, reason[:500])
@@ -521,6 +538,7 @@ async def _finalize(
     workdir: Path,
     settings: Settings,
     status: StatusCallback,
+    metadata: dict[str, str] | None = None,
 ) -> CutResult:
     """Enforce the upload size limit, re-encoding once if that might help."""
     size = output.stat().st_size
@@ -542,6 +560,7 @@ async def _finalize(
             transcode=True,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
+            metadata=metadata,
         )
         if reason is None:
             output.unlink(missing_ok=True)

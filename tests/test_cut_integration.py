@@ -57,6 +57,37 @@ def _make_source(directory: Path, name: str, codec_args: list[str]) -> Path:
     return path
 
 
+#: Bloat per tag. A single argv entry is capped at 128 KB by the kernel, so the
+#: fixture spreads the padding across several tags. Real feeds go far bigger —
+#: one popular show ships an 18 MB ID3 tag — but the leak is proportional, so a
+#: few hundred KB is enough to detect it.
+BLOAT_PER_TAG = 100_000
+BLOAT_TAGS = ("comment", "description", "synopsis")
+BLOAT_BYTES = BLOAT_PER_TAG * len(BLOAT_TAGS)
+
+
+def _make_bloated_source(directory: Path, name: str) -> Path:
+    """An MP3 carrying a large ID3 tag, the way real podcast feeds do."""
+    path = directory / name
+    padding = []
+    for tag in BLOAT_TAGS:
+        padding += ["-metadata", f"{tag}={'x' * BLOAT_PER_TAG}"]
+
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi",
+            "-i", f"sine=frequency=440:duration={SOURCE_SECONDS}",
+            "-c:a", "libmp3lame", "-b:a", "64k",
+            *padding,
+            str(path),
+        ],
+        check=True,
+    )
+    assert path.stat().st_size > BLOAT_BYTES, "the fixture is not actually bloated"
+    return path
+
+
 class _AudioHandler(BaseHTTPRequestHandler):
     """Serves the generated files, plus routes that misbehave on purpose.
 
@@ -104,6 +135,7 @@ def audio_server(tmp_path_factory):
     _make_source(directory, "a.mp3", ["-c:a", "libmp3lame", "-b:a", "64k"])
     _make_source(directory, "a.m4a", ["-c:a", "aac", "-b:a", "64k"])
     _make_source(directory, "a.wav", ["-c:a", "pcm_s16le"])
+    _make_bloated_source(directory, "bloated.mp3")
 
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(_AudioHandler, directory=directory)
@@ -119,15 +151,35 @@ def audio_server(tmp_path_factory):
         thread.join(timeout=5)
 
 
-def cut(url: str, start: int, end: int, workdir: Path, **settings_overrides):
+def cut(url: str, start: int, end: int, workdir: Path, metadata=None, **overrides):
     return asyncio.run(
         cut_episode(
             url,
             Interval(start=start, end=end),
             workdir,
-            _settings(**settings_overrides),
+            _settings(**overrides),
+            metadata=metadata,
         )
     )
+
+
+def read_tags(path: Path) -> dict[str, str]:
+    output = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format_tags",
+            "-of", "default=nw=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    tags = {}
+    for line in output.splitlines():
+        key, _, value = line.partition("=")
+        tags[key.removeprefix("TAG:").lower()] = value
+    return tags
 
 
 class TestProbe:
@@ -225,6 +277,66 @@ class TestCutting:
         assert workdir.exists()
         shutil.rmtree(workdir)
         assert not workdir.exists()
+
+
+class TestMetadata:
+    """Source tags are dropped; ours are written instead."""
+
+    def test_a_giant_source_tag_does_not_end_up_in_the_cut(
+        self, audio_server, tmp_path
+    ):
+        # Real regression: one popular feed ships an 18 MB ID3 tag, ffmpeg
+        # copied it verbatim, and a 30-second clip came out at 20 MB.
+        result = cut(f"{audio_server}/bloated.mp3", 5, 15, tmp_path / "bloated")
+
+        # Ten seconds of 64 kbps audio is ~80 KB; a leak would add ~300 KB.
+        assert result.size < BLOAT_BYTES / 2, (
+            f"cut is {result.size} bytes; the source tag leaked into it"
+        )
+
+    def test_the_source_tags_do_not_survive_the_cut(self, audio_server, tmp_path):
+        # Size is a proxy; this checks the tags themselves are gone.
+        result = cut(f"{audio_server}/bloated.mp3", 5, 15, tmp_path / "tags-gone")
+        tags = read_tags(result.path)
+        for tag in BLOAT_TAGS:
+            assert "x" * 100 not in tags.get(tag, ""), f"{tag} leaked from the source"
+
+    def test_writes_our_own_tags(self, audio_server, tmp_path):
+        result = cut(
+            f"{audio_server}/a.mp3",
+            5,
+            15,
+            tmp_path / "tagged",
+            metadata={"title": "Ep 1 [0:05–0:15]", "artist": "Some Show"},
+        )
+        tags = read_tags(result.path)
+        assert tags.get("title") == "Ep 1 [0:05–0:15]"
+        assert tags.get("artist") == "Some Show"
+
+    def test_survives_titles_with_awkward_characters(self, audio_server, tmp_path):
+        # Tag values are passed as separate argv entries, so quotes and dashes
+        # in a feed title cannot break the command.
+        title = 'He said "hi" -- then left; rm -rf /'
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "awkward",
+            metadata={"title": title},
+        )
+        assert read_tags(result.path).get("title") == title
+
+    def test_empty_tag_values_are_skipped(self, audio_server, tmp_path):
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "empty-tags",
+            metadata={"title": "", "artist": "Show"},
+        )
+        tags = read_tags(result.path)
+        assert not tags.get("title")
+        assert tags.get("artist") == "Show"
 
 
 class TestFailureMessages:

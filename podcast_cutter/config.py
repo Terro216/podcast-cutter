@@ -67,8 +67,22 @@ class Settings:
             raise ConfigError("MAX_CONCURRENT_JOBS must be at least 1.")
 
 
-def _required(name: str) -> str:
+def _env(name: str) -> str:
+    """Read one variable, tolerating quotes left in by the loader.
+
+    ``python-dotenv`` strips surrounding quotes from a ``.env`` file, but
+    ``docker run --env-file`` passes them through literally. A token arriving
+    as ``"123:abc"`` then fails authentication for no visible reason, so strip
+    a matching pair here rather than making that someone's afternoon.
+    """
     value = (os.getenv(name) or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
+def _required(name: str) -> str:
+    value = _env(name)
     if not value:
         raise ConfigError(
             f"Environment variable {name} is not set. "
@@ -78,7 +92,7 @@ def _required(name: str) -> str:
 
 
 def _positive_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
+    raw = _env(name)
     if not raw:
         return default
     try:
@@ -94,7 +108,7 @@ def load_settings() -> Settings:
     """Read the environment (and ``.env``) into a validated :class:`Settings`."""
     load_dotenv()
 
-    base_url = (os.getenv("PODCAST_API_BASEURL") or DEFAULT_API_BASE_URL).strip()
+    base_url = _env("PODCAST_API_BASEURL") or DEFAULT_API_BASE_URL
     # A trailing slash would turn every request path into a double slash.
     base_url = base_url.rstrip("/")
     if not base_url.startswith(("http://", "https://")):
@@ -112,7 +126,5 @@ def load_settings() -> Settings:
         max_concurrent_jobs=_positive_int(
             "MAX_CONCURRENT_JOBS", Settings.max_concurrent_jobs
         ),
-        work_dir=Path(
-            (os.getenv("WORK_DIR") or "").strip() or "/tmp/podcast-cutter"
-        ),
+        work_dir=Path(_env("WORK_DIR") or "/tmp/podcast-cutter"),
     )

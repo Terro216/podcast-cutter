@@ -2,6 +2,7 @@ import pytest
 
 from podcast_cutter.audio import (
     Interval,
+    _cut_command,
     container_for_codec,
     parse_interval,
     parse_timestamp,
@@ -142,3 +143,65 @@ class TestContainerForCodec:
         # The original bug: every AAC episode was written to .mp3 with
         # `-c copy`, which ffmpeg always rejects.
         assert container_for_codec("aac") != "mp3"
+
+
+class TestCutCommand:
+    def _cmd(self, **kwargs):
+        from pathlib import Path
+
+        return _cut_command(
+            "https://example.com/a.mp3",
+            Path("/tmp/out.mp3"),
+            Interval(start=10, end=40),
+            **{"transcode": False, **kwargs},
+        )
+
+    def test_drops_the_source_metadata(self):
+        # Feeds ship multi-megabyte ID3 tags; copying one into a 30-second cut
+        # made the clip hundreds of times larger than its audio.
+        cmd = self._cmd()
+        assert "-map_metadata" in cmd
+        assert cmd[cmd.index("-map_metadata") + 1] == "-1"
+
+    def test_seeks_before_the_input(self):
+        # -ss after -i would decode everything up to the start point.
+        cmd = self._cmd()
+        assert cmd.index("-ss") < cmd.index("-i")
+
+    def test_takes_one_audio_stream_only(self):
+        cmd = self._cmd()
+        assert cmd[cmd.index("-map") + 1] == "0:a:0"
+        assert "-vn" in cmd
+
+    def test_passes_the_interval(self):
+        cmd = self._cmd()
+        assert cmd[cmd.index("-ss") + 1] == "10"
+        assert cmd[cmd.index("-t") + 1] == "30"
+
+    def test_copies_by_default_and_encodes_when_asked(self):
+        assert "copy" in self._cmd(transcode=False)
+        assert "libmp3lame" in self._cmd(transcode=True)
+
+    def test_writes_supplied_tags(self):
+        cmd = self._cmd(metadata={"title": "Ep 1", "artist": "Show"})
+        assert "title=Ep 1" in cmd
+        assert "artist=Show" in cmd
+
+    def test_skips_empty_tags(self):
+        cmd = self._cmd(metadata={"title": "", "artist": "Show"})
+        assert "title=" not in cmd
+
+    def test_http_options_are_omitted_for_local_files(self):
+        from pathlib import Path
+
+        cmd = _cut_command(
+            Path("/tmp/source.mp3"),
+            Path("/tmp/out.mp3"),
+            Interval(start=0, end=5),
+            transcode=False,
+        )
+        # ffmpeg aborts with "Option user_agent not found" on a local input.
+        assert "-user_agent" not in cmd
+
+    def test_http_options_are_present_for_urls(self):
+        assert "-user_agent" in self._cmd()

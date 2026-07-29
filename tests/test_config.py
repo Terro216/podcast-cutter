@@ -51,6 +51,36 @@ class TestRequiredValues:
         assert load_settings().bot_token == "123:abc"
 
 
+class TestQuotedValues:
+    """`docker run --env-file` passes quotes through literally."""
+
+    @pytest.mark.parametrize("raw", ['"123:abc"', "'123:abc'", '  "123:abc"  '])
+    def test_surrounding_quotes_are_removed(self, monkeypatch, raw):
+        with_env(monkeypatch, BOT_TOKEN=raw)
+        assert load_settings().bot_token == "123:abc"
+
+    def test_quoted_base_url_is_accepted(self, monkeypatch):
+        with_env(
+            monkeypatch, PODCAST_API_BASEURL='"https://api.podcastindex.org/api/1.0"'
+        )
+        assert load_settings().api_base_url == "https://api.podcastindex.org/api/1.0"
+
+    def test_quoted_numbers_are_accepted(self, monkeypatch):
+        with_env(monkeypatch, MAX_CUT_SECONDS='"300"')
+        assert load_settings().max_cut_seconds == 300
+
+    @pytest.mark.parametrize("raw", ['"unbalanced', "quo'ted", 'a"b'])
+    def test_only_matching_outer_pairs_are_stripped(self, monkeypatch, raw):
+        # A quote that is part of the value must survive.
+        with_env(monkeypatch, BOT_TOKEN=raw)
+        assert load_settings().bot_token == raw
+
+    def test_an_empty_quoted_value_counts_as_missing(self, monkeypatch):
+        with_env(monkeypatch, BOT_TOKEN='""')
+        with pytest.raises(ConfigError, match="BOT_TOKEN"):
+            load_settings()
+
+
 class TestBaseUrl:
     def test_defaults(self, monkeypatch):
         with_env(monkeypatch)

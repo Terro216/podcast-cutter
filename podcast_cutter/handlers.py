@@ -546,6 +546,21 @@ class PodcastCutterBot:
 
         return ConversationHandler.END
 
+    @staticmethod
+    def _id3_tags(episode: Episode, interval: Interval) -> dict[str, str]:
+        """Tags written onto the cut, replacing the source's.
+
+        The source tags are dropped wholesale because feeds ship huge embedded
+        artwork, so the clip needs its own or it arrives untitled.
+        """
+        span = f"{format_duration(interval.start)}–{format_duration(interval.end)}"
+        return {
+            "title": truncate(one_line(episode.title), 120) + f" [{span}]",
+            "artist": truncate(one_line(episode.feed_title), 120),
+            "album": truncate(one_line(episode.feed_title), 120),
+            "comment": "Cut with @podcast_cutter_bot",
+        }
+
     async def _perform_cut(
         self, update: Update, episode: Episode, interval: Interval, raw_interval: str
     ) -> None:
@@ -573,6 +588,7 @@ class PodcastCutterBot:
                     workdir,
                     self.settings,
                     on_status=set_status,
+                    metadata=self._id3_tags(episode, interval),
                 )
 
                 await set_status("📤 Uploading…")
