@@ -6,6 +6,7 @@ import logging
 import warnings
 
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -125,7 +126,24 @@ def _build_conversation_handler(
     )
 
 
+#: Shown in Telegram's own command menu. Without this the commands work but
+#: are invisible unless someone reads /help.
+BOT_COMMANDS = [
+    ("search", "Find a podcast by name"),
+    ("person", "Find episodes mentioning someone"),
+    ("trending", "What is popular right now"),
+    ("surprise", "A random episode"),
+    ("cancel", "Stop what you are doing"),
+    ("help", "How this works"),
+]
+
+
 async def _on_startup(application: Application) -> None:
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+    except TelegramError as exc:
+        # Cosmetic; never worth refusing to start over.
+        logger.warning("Could not publish the command list: %s", exc)
     logger.info("Bot started")
 
 
