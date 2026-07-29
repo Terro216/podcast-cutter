@@ -1,38 +1,55 @@
-# Podcast Cutter Bot - Project Overview & Development Plan
+# Podcast Cutter Bot — status and roadmap
 
-## Project Overview
-`podcast-cutter` is a Telegram bot built with `python-telegram-bot` that allows users to search for podcasts, browse episodes, and specify a time interval to extract a specific segment of the audio. The extracted segment is then sent back to the user as an audio file, ready to be shared.
+## What this is
 
-Currently, the bot implements a basic conversation handler with states for searching podcasts and episodes via an external API. However, the actual audio downloading, cutting mechanism, and robust input handling are missing or incomplete. 
+`podcast-cutter` is a Telegram bot built on `python-telegram-bot`. Users search
+for podcasts, browse episodes, name a time interval, and get that segment back
+as an audio file. See `README.md` for setup and layout.
 
-## Development Plan: Path to Production-Ready
+This document tracks what is done and what is not. It was originally a plan
+written before the core existed; the items below reflect the current code.
 
-To make this bot "unbreakable" and production-ready, we need to implement the core logic, fix existing bugs, enforce limits, and add polish. 
+## Done
 
-### 1. Core Functionality Implementation
-- **Audio Processing Engine**: Integrate `ffmpeg` (via `ffmpeg-python` or `pydub`) to handle downloading and cutting audio streams. Whenever possible, we should stream the cut directly or download only the necessary chunks to save bandwidth and storage.
-- **Interval Parsing**: Create a robust parser for the `CUT_INTERVAL` state. It must support multiple formats (e.g., `MM:SS-MM:SS`, `HH:MM:SS-HH:MM:SS`, or `1m30s-2m`) and validate the input against the actual episode length.
-- **Conversation Flow Fixes**: 
-  - Fix synchronous/asynchronous mismatches in `main.py` (e.g., `handle_interval` is currently synchronous).
-  - Fix the `ENTER_EPISODE_NAME` and `EPISODE_CHOICE` states which currently have mixed logic.
+**Core**
+- Audio engine on ffmpeg: stream-copy over HTTP range requests, download-then-cut
+  fallback, and re-encode to MP3 when no container fits the source codec.
+- Output container follows the source codec, so AAC/M4A episodes work.
+- Results are verified with ffprobe before sending — ffmpeg can exit 0 having
+  written an unplayable fragment.
+- Interval parser accepting `MM:SS`, `HH:MM:SS`, raw seconds and `1h30m`, with
+  several range separators, validated against the episode length.
 
-### 2. Limits and Safeguards (Making it Unbreakable)
-- **Duration/Size Limits**: Telegram bots have a standard 50MB file upload limit. We must enforce a maximum cut duration (e.g., 10-15 minutes max, depending on bitrate) to guarantee the file can be sent.
-- **Asynchronous Processing**: Audio processing can be slow. Downloading and cutting must be offloaded to background tasks (`asyncio.create_task` or a task queue like Celery/Redis) so the bot doesn't freeze for other users.
-- **Disk Space Management**: Implement a strict cleanup mechanism. Temporary audio files must be deleted immediately after sending or if an error occurs.
-- **Graceful Error Handling**: Catch API timeouts, invalid RSS feeds, unavailable audio files, and parsing errors. The user should always receive a friendly error message and be returned to a safe state.
-- **Rate Limiting & Throttling**: Prevent users from spamming heavy processing requests. Limit users to 1 concurrent cutting task.
+**Safeguards**
+- Cut duration capped (default 15 min); oversized results are re-encoded before
+  being refused, so the Telegram upload limit is respected.
+- Timeouts on every external call: API requests, ffprobe, ffmpeg, downloads and
+  uploads. Nothing can hang the bot indefinitely.
+- Concurrency: a global semaphore bounds simultaneous ffmpeg jobs, and each user
+  is limited to one cut at a time.
+- Every job gets its own temporary directory, removed in a `finally`.
+- Conversation timeout plus `allow_reentry`, so no state is a dead end and menu
+  buttons always work.
+- Typed errors with user-facing messages, and a global error handler.
+- Config validated at startup, naming any missing variable.
 
-### 3. Fancy Features & Polish
-- **Live Progress Updates**: Since downloading and cutting takes time, send a "Processing..." message and update it with a progress bar (e.g., `[██████░░░░] 60% Downloading...`).
-- **Rich Media Metadata (ID3 Tags)**: Apply proper ID3 tags to the cut audio file. Set the title to `[Cut] Original Title`, author to the podcast author, and attach the podcast's cover art as the album thumbnail.
-- **Inline Keyboard Improvements**: Add "Cancel" buttons at every step of the conversation. Improve pagination UI.
-- **Caching**: Cache podcast search results and episode lists (using an in-memory store or Redis) to reduce external API calls and speed up navigation.
-- **Welcome / About / Help**: Polish the `/start`, `/help`, and "About" sections with clear instructions on how to use the bot.
+**Quality**
+- 180 tests, including end-to-end cutting against audio served over a local HTTP
+  server (redirects, 403, 404, codec fallbacks).
+- ruff clean; runs as a non-root user in Docker.
 
-## Next Steps for Implementation
-1. Review and refactor `main.py` to fix the conversation handler states and callback queries.
-2. Implement the `utils.audio` module for parsing timestamps and wrapping `ffmpeg`.
-3. Add downloading and processing logic inside `handle_interval`.
-4. Apply the file cleanup context managers and Telegram file upload logic.
-5. Add metadata tagging and progress updating.
+## Not done
+
+- **Live progress bar.** Status messages are sent ("cutting", "uploading"), but
+  there is no percentage or bar during long downloads.
+- **ID3 tags and cover art.** The upload carries title and performer, but the
+  file itself gets no embedded tags or podcast artwork.
+- **Caching.** Search results live only in the user's session; identical queries
+  from different users each hit the API. Redis or an in-memory TTL cache would
+  cut latency and API load.
+- **Persistence.** Sessions are in-memory, so a restart drops in-flight
+  conversations. `PicklePersistence` would fix that.
+- **Cancel during a cut.** The cancel button leaves the conversation but does not
+  kill a running ffmpeg job.
+- **Episode-length validation before listing.** Episodes whose duration the API
+  does not report are only checked once ffprobe runs.
