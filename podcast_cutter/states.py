@@ -87,6 +87,8 @@ class Session:
     episodes: list[Episode] = field(default_factory=list)
     episode: Episode | None = None
     recents: list[Episode] = field(default_factory=list)
+    #: Whether the recent list has been pulled from the database yet.
+    recents_loaded: bool = False
     #: Typed filter narrowing the episode list, without discarding it.
     episode_filter: str = ""
 
@@ -242,9 +244,14 @@ def reset_session(user_data: MutableMapping[str, Any]) -> Session:
     flow is being abandoned.
     """
     previous = user_data.get(_SESSION_KEY)
-    recents = list(previous.recents) if isinstance(previous, Session) else []
+    known = isinstance(previous, Session)
+    recents = list(previous.recents) if known else []
 
     user_data.clear()
-    session = Session(recents=recents)
+    # Carrying `recents_loaded` over avoids re-reading the database on every
+    # cancel, since the list itself is carried over too.
+    session = Session(
+        recents=recents, recents_loaded=previous.recents_loaded if known else False
+    )
     user_data[_SESSION_KEY] = session
     return session

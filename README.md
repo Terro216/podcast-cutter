@@ -46,6 +46,9 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `MAX_CUT_SECONDS`     | no       | Longest interval a user may request (900)|
 | `MAX_CONCURRENT_JOBS` | no       | Simultaneous ffmpeg jobs (2)             |
 | `WORK_DIR`            | no       | Scratch space for in-flight cuts         |
+| `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|
+| `LOG_RETENTION_DAYS`  | no       | Journal retention, 0 keeps everything (90)|
+| `ADMIN_IDS`           | no       | Telegram ids allowed to run `/stats`     |
 
 Missing or malformed values fail at startup with a message naming the variable,
 rather than surfacing later as a confusing runtime error.
@@ -59,7 +62,36 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The image ships ffmpeg and runs as an unprivileged user.
+The image ships ffmpeg and runs as an unprivileged user. A named volume is
+mounted at `/data` for the journal and log files — see below for why that
+matters.
+
+### Operating it
+
+`/stats` prints a panel: clips cut, success rate, timings, busiest podcasts and
+what failed. It is admin-only. Put your Telegram id in `ADMIN_IDS`; if you do
+not know it, send `/stats` once and the log will tell you:
+
+```
+Ignoring /stats from user 12345678. Set ADMIN_IDS=12345678 to allow it.
+```
+
+The journal itself is plain SQLite, so anything the panel does not answer is a
+query away:
+
+```shell
+docker compose exec podcast-cutter \
+  sqlite3 /data/podcast_cutter.db \
+  "SELECT outcome, count(*) FROM events WHERE action='cut' GROUP BY outcome"
+```
+
+**The volume is not optional.** Container logs do not survive a redeploy:
+`docker compose up --build` creates a new container and the old json log goes
+with it. Anything you want to keep has to be under `/data`.
+
+Rows older than `LOG_RETENTION_DAYS` are deleted at startup. The journal stores
+real Telegram user ids alongside what was searched and cut, so pick a retention
+window you are comfortable with, or set `0` to keep everything.
 
 ### Locally
 
@@ -99,6 +131,7 @@ podcast_cutter/
   audio.py                 interval parsing, ffprobe, ffmpeg cutting
   text.py                  escaping, filenames, progress bars
   states.py                screen stack and the per-user session
+  store.py                 SQLite journal and the persisted recent list
   screens.py               pure state → (text, keyboard) renderers
   keyboards.py             menus, pagination, callback-data vocabulary
   handlers.py              the text router, callback router and cut job

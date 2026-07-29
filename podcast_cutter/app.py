@@ -8,6 +8,8 @@ which handler shadows which — the routers themselves decide.
 from __future__ import annotations
 
 import logging
+import shutil
+from logging.handlers import RotatingFileHandler
 
 from telegram import BotCommand, MenuButtonCommands, Update
 from telegram.error import TelegramError
@@ -27,6 +29,7 @@ from .audio import ensure_ffmpeg_available
 from .config import Settings, load_settings
 from .handlers import PodcastCutterBot
 from .states import Screen
+from .store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +46,71 @@ BOT_COMMANDS = [
 ]
 
 
+LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+
+
 def configure_logging() -> None:
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        level=logging.INFO,
-    )
+    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     # httpx logs a line per request, including every getUpdates poll.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram.ext.Application").setLevel(logging.INFO)
 
 
+def add_file_logging(settings: Settings) -> None:
+    """Also write logs to a rotating file under the data directory.
+
+    Container logs do not survive a redeploy: ``docker compose up --build``
+    creates a new container and the old json log is discarded with it. Writing
+    to a mounted directory as well is what makes the history outlive a deploy.
+    """
+    try:
+        settings.log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            settings.log_path,
+            maxBytes=settings.log_file_bytes,
+            backupCount=settings.log_file_count,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        logging.getLogger().addHandler(handler)
+        logger.info("Logging to %s", settings.log_path)
+    except OSError as exc:
+        # A read-only or missing volume must not stop the bot from running.
+        logger.warning("File logging disabled: %s", exc)
+
+
+def sweep_work_dir(settings: Settings) -> None:
+    """Delete job directories left behind by a crash or a kill.
+
+    Each cut cleans up after itself, but a hard stop mid-job leaks one
+    directory, and nothing else would ever remove it.
+    """
+    work_dir = settings.work_dir
+    if not work_dir.is_dir():
+        return
+
+    removed = 0
+    for leftover in work_dir.glob("cut-*"):
+        if leftover.is_dir():
+            shutil.rmtree(leftover, ignore_errors=True)
+            removed += 1
+    if removed:
+        logger.info("Removed %d leftover job director%s",
+                    removed, "y" if removed == 1 else "ies")
+
+
 async def _on_startup(application: Application) -> None:
     bot: PodcastCutterBot = application.bot_data["bot"]
+    store: Store = application.bot_data["store"]
+    settings: Settings = application.bot_data["settings"]
+
+    purged = await store.purge(settings.log_retention_days)
+    if purged:
+        logger.info(
+            "Purged %d journal rows older than %d days",
+            purged,
+            settings.log_retention_days,
+        )
 
     try:
         me = await application.bot.get_me()
@@ -78,6 +134,8 @@ async def _on_startup(application: Application) -> None:
 async def _on_shutdown(application: Application) -> None:
     client: PodcastIndexClient = application.bot_data["api_client"]
     await client.aclose()
+    store: Store = application.bot_data["store"]
+    await store.aclose()
     logger.info("Bot stopped")
 
 
@@ -97,6 +155,8 @@ def register_handlers(application: Application, bot: PodcastCutterBot) -> None:
     application.add_handler(CommandHandler("surprise", bot.command(bot.act_surprise)))
     application.add_handler(CommandHandler("recent", bot.command(bot.act_recent)))
     application.add_handler(CommandHandler("menu", bot.command(bot.act_menu)))
+    # Admin-only; silently unavailable to everyone else.
+    application.add_handler(CommandHandler("stats", bot.cmd_stats))
 
     application.add_handler(CallbackQueryHandler(bot.on_callback))
     application.add_handler(InlineQueryHandler(bot.on_inline_query))
@@ -112,9 +172,12 @@ def register_handlers(application: Application, bot: PodcastCutterBot) -> None:
     application.add_error_handler(bot.on_error)
 
 
-def build_application(settings: Settings) -> Application:
+def build_application(settings: Settings, store: Store | None = None) -> Application:
     client = PodcastIndexClient(settings)
-    bot = PodcastCutterBot(settings, client)
+    if store is None:
+        store = Store(settings.database_path)
+        store.connect()
+    bot = PodcastCutterBot(settings, client, store)
 
     application = (
         ApplicationBuilder()
@@ -128,6 +191,8 @@ def build_application(settings: Settings) -> Application:
     )
     application.bot_data["api_client"] = client
     application.bot_data["bot"] = bot
+    application.bot_data["store"] = store
+    application.bot_data["settings"] = settings
 
     register_handlers(application, bot)
     return application
@@ -136,7 +201,9 @@ def build_application(settings: Settings) -> Application:
 def run() -> None:
     configure_logging()
     settings = load_settings()
+    add_file_logging(settings)
     ensure_ffmpeg_available()
+    sweep_work_dir(settings)
 
     application = build_application(settings)
     application.run_polling(

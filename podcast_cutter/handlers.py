@@ -36,7 +36,15 @@ from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
 from .errors import PodcastCutterError
 from .screens import View
-from .states import Awaiting, Screen, Session, get_session, reset_session
+from .states import (
+    MAX_RECENTS,
+    Awaiting,
+    Screen,
+    Session,
+    get_session,
+    reset_session,
+)
+from .store import Event, Store
 from .text import (
     esc,
     format_duration,
@@ -120,9 +128,15 @@ class StatusEditor:
 class PodcastCutterBot:
     """Handler collection, holding shared clients and limits."""
 
-    def __init__(self, settings: Settings, client: PodcastIndexClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: PodcastIndexClient,
+        store: Store | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client
+        self.store = store
         self.bot_username = ""
         self._job_slots = asyncio.Semaphore(settings.max_concurrent_jobs)
         #: User ids with a cut in flight — one heavy job per person.
@@ -194,7 +208,9 @@ class PodcastCutterBot:
     # Session plumbing
     # ------------------------------------------------------------------
 
-    def session_for(self, context: ContextTypes.DEFAULT_TYPE) -> Session:
+    async def session_for(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> Session:
         """Fetch the session, starting over if it has gone stale.
 
         Expiring on next use rather than on a timer means the user is never
@@ -204,7 +220,42 @@ class PodcastCutterBot:
         if session.is_stale(self.settings.conversation_timeout):
             session = reset_session(context.user_data)
         session.touch()
+
+        # The recent list is the one thing worth surviving a restart, so it
+        # lives in the database and is pulled in once per session.
+        if not session.recents_loaded:
+            session.recents_loaded = True
+            user_id = self._user_id(update)
+            # Only ever fill an empty list: the database is the cold-start
+            # source, and anything already in memory is newer than it.
+            if self.store is not None and user_id is not None and not session.recents:
+                session.recents = await self.store.recent_episodes(
+                    user_id, MAX_RECENTS
+                )
         return session
+
+    @staticmethod
+    def _user_id(update: Update) -> int | None:
+        user = update.effective_user
+        return user.id if user is not None else None
+
+    async def _log(self, update: Update, action: str, **fields) -> None:
+        """Append to the journal, if one is configured."""
+        if self.store is None:
+            return
+        await self.store.record(
+            Event(action=action, user_id=self._user_id(update), **fields)
+        )
+
+    async def _select_episode(
+        self, update: Update, session: Session, episode: Episode
+    ) -> None:
+        """Open an episode and remember it for the Recent list."""
+        session.select_episode(episode, self.settings.default_clip_seconds)
+        user_id = self._user_id(update)
+        if self.store is not None and user_id is not None:
+            await self.store.remember_recent(user_id, episode)
+            await self.store.trim_recents(user_id, MAX_RECENTS)
 
     # ------------------------------------------------------------------
     # Commands
@@ -227,6 +278,7 @@ class PodcastCutterBot:
         )
         session.go(Screen.MENU)
         await self.render(update, session)
+        await self._log(update, "start")
 
     async def _open_shared_episode(
         self, update: Update, session: Session, episode_id: str
@@ -243,13 +295,14 @@ class PodcastCutterBot:
             await self.render(update, session)
             return
 
-        session.select_episode(episode, self.settings.default_clip_seconds)
+        await self._select_episode(update, session, episode)
         session.awaiting = Awaiting.INTERVAL
         session.go(Screen.INTERVAL)
         await update.effective_message.reply_text(
             "🔗 Opened from a shared link.", reply_markup=kb.main_menu()
         )
         await self.render(update, session)
+        await self._log(update, "deep_link", episode_id=episode.id)
 
     def command(self, action: MenuAction):
         """Adapt a session action into a plain command handler.
@@ -260,7 +313,7 @@ class PodcastCutterBot:
         async def handler(
             update: Update, context: ContextTypes.DEFAULT_TYPE
         ) -> None:
-            session = self.session_for(context)
+            session = await self.session_for(update, context)
             try:
                 await action(update, session)
             except PodcastCutterError as exc:
@@ -278,6 +331,37 @@ class PodcastCutterBot:
             reply_markup=kb.main_menu(),
             link_preview_options={"is_disabled": True},
         )
+
+    async def cmd_stats(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """The operator's panel. Invisible to everyone else.
+
+        Unauthorised callers get the ordinary unknown-command reply rather
+        than "you are not an admin", which would confirm the command exists.
+        The caller's id is logged so the owner can discover their own.
+        """
+        user_id = self._user_id(update)
+        if not self.settings.is_admin(user_id):
+            if user_id is not None:
+                logger.info(
+                    "Ignoring /stats from user %s. Set ADMIN_IDS=%s to allow it.",
+                    user_id,
+                    user_id,
+                )
+            await self.cmd_unknown(update, context)
+            return
+
+        if self.store is None:
+            await update.effective_message.reply_text("No journal configured.")
+            return
+
+        view = screens.stats(
+            await self.store.stats(24),
+            await self.store.stats(24 * 7),
+            await self.store.size_on_disk(),
+        )
+        await update.effective_message.reply_text(view.text, parse_mode="HTML")
 
     async def cmd_unknown(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -315,14 +399,16 @@ class PodcastCutterBot:
         session.awaiting = Awaiting.NOTHING
         session.go(Screen.TRENDING)
         await self.render(update, session)
+        await self._log(update, "trending")
 
     async def act_surprise(self, update: Update, session: Session) -> None:
         await self.show(update, screens.working("🎲 Picking an episode…"))
         episode = await self.client.random_episode()
-        session.select_episode(episode, self.settings.default_clip_seconds)
+        await self._select_episode(update, session, episode)
         session.awaiting = Awaiting.INTERVAL
         session.go(Screen.INTERVAL)
         await self.render(update, session)
+        await self._log(update, "surprise", episode_id=episode.id)
 
     async def act_recent(self, update: Update, session: Session) -> None:
         session.awaiting = Awaiting.NOTHING
@@ -358,6 +444,8 @@ class PodcastCutterBot:
         else:
             session.go(Screen.FEEDS, page)
         await self.render(update, session)
+        if page == 1:
+            await self._log(update, "search", detail=query)
 
     async def _search_people(
         self, update: Update, session: Session, query: str
@@ -369,6 +457,7 @@ class PodcastCutterBot:
         session.awaiting = Awaiting.NOTHING
         session.go(Screen.GLOBAL)
         await self.render(update, session)
+        await self._log(update, "person", detail=query)
 
     async def _load_episodes(self, update: Update, session: Session) -> None:
         if session.feed is None:
@@ -386,7 +475,7 @@ class PodcastCutterBot:
     async def _open_episode(
         self, update: Update, session: Session, episode: Episode
     ) -> None:
-        session.select_episode(episode, self.settings.default_clip_seconds)
+        await self._select_episode(update, session, episode)
         session.awaiting = Awaiting.INTERVAL
         session.go(Screen.INTERVAL)
         await self.render(update, session)
@@ -398,7 +487,7 @@ class PodcastCutterBot:
     async def on_text(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        session = self.session_for(context)
+        session = await self.session_for(update, context)
         text = one_line(update.effective_message.text)
 
         if not text:
@@ -475,7 +564,7 @@ class PodcastCutterBot:
         if data == kb.NAV_NOOP:
             return
 
-        session = self.session_for(context)
+        session = await self.session_for(update, context)
         prefix, value = kb.parse_callback(data)
 
         try:
@@ -693,6 +782,11 @@ class PodcastCutterBot:
                 f"⬇️ Downloading the episode…\n\n{progress_bar(done, total)}"
             )
 
+        started = time.monotonic()
+        outcome = "failed"
+        size_bytes: int | None = None
+        detail: str | None = None
+
         async with self._job_slots:
             workdir = Path(
                 tempfile.mkdtemp(prefix="cut-", dir=self._ensure_work_dir())
@@ -726,23 +820,42 @@ class PodcastCutterBot:
 
                 session.replace(Screen.RESULT)
                 await status.show(screens.result(session, self.bot_username))
+                outcome, size_bytes = "ok", result.size
 
             except PodcastCutterError as exc:
+                outcome = type(exc).__name__
+                detail = exc.user_message
                 await status.show(screens.failure(exc.user_message))
             except TelegramError as exc:
                 logger.exception("Failed to deliver the cut: %s", exc)
+                outcome, detail = "upload_rejected", str(exc)
                 await status.show(
                     screens.failure(
                         "I cut the audio but Telegram refused the upload. "
                         "Try a shorter clip."
                     )
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("Unexpected failure while cutting %s", episode.id)
+                outcome, detail = "crash", f"{type(exc).__name__}: {exc}"
                 await status.show(screens.failure(GENERIC_ERROR))
             finally:
                 # One directory per job, so nothing can survive a crash here.
                 shutil.rmtree(workdir, ignore_errors=True)
+                await self._log(
+                    update,
+                    "cut",
+                    outcome=outcome,
+                    episode_id=episode.id,
+                    feed_title=episode.feed_title,
+                    episode_title=episode.title,
+                    start_s=interval.start,
+                    length_s=interval.duration,
+                    as_voice=session.as_voice,
+                    size_bytes=size_bytes,
+                    ms=int((time.monotonic() - started) * 1000),
+                    detail=detail,
+                )
 
     def _ensure_work_dir(self) -> Path:
         self.settings.work_dir.mkdir(parents=True, exist_ok=True)
@@ -830,6 +943,7 @@ class PodcastCutterBot:
         ]
         with contextlib.suppress(TelegramError):
             await inline.answer(results, cache_time=300, button=open_button)
+        await self._log(update, "inline", detail=query, size_bytes=len(results))
 
     def _inline_result(self, episode: Episode) -> InlineQueryResultArticle:
         link = self.episode_link(episode.id)

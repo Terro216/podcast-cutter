@@ -325,14 +325,36 @@ class TestRecents:
 
         assert [ep.id for ep in session_of(context).recents] == ["10"]
 
-    async def test_the_recent_screen_lists_them(self, bot, context):
-        session = session_of(context)
-        session.remember_recent(make_episode("10"))
+    async def test_the_recent_screen_lists_them(self, bot, context, client):
+        client.feeds = [make_feed("1")]
+        await text(bot, context, "show")
+        await tap(bot, context, f"{kb.EPISODE_PREFIX}:10")
 
         update = await tap(bot, context, "menu:recent")
 
-        assert session.current.screen is Screen.RECENT
+        assert session_of(context).current.screen is Screen.RECENT
         assert f"{kb.EPISODE_PREFIX}:10" in payloads(update.markup)
+
+    async def test_they_survive_a_restart(self, bot, context, client, store):
+        # The one thing worth persisting: a fresh process, same list.
+        client.feeds = [make_feed("1")]
+        await text(bot, context, "show")
+        await tap(bot, context, f"{kb.EPISODE_PREFIX}:10")
+
+        fresh = type(context)()  # a brand-new, empty user_data
+        update = await tap(bot, fresh, "menu:recent")
+
+        assert f"{kb.EPISODE_PREFIX}:10" in payloads(update.markup)
+
+    async def test_an_in_memory_list_is_not_clobbered_by_the_database(
+        self, bot, context
+    ):
+        session = session_of(context)
+        session.remember_recent(make_episode("99"))
+
+        await tap(bot, context, "menu:recent")
+
+        assert [ep.id for ep in session.recents] == ["99"]
 
     async def test_an_empty_recent_screen_still_has_a_way_out(self, bot, context):
         update = await tap(bot, context, "menu:recent")

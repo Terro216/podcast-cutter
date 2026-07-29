@@ -46,9 +46,20 @@ written before the core existed; the items below reflect the current code.
 - Recent-episode list; typing on any list filters it in place.
 - Inline mode (`@bot query` in any chat) and `?start=ep_…` deep links.
 
+**Operations**
+- SQLite journal of what happened: cuts with outcome, timing and size, plus
+  searches and inline use. `/stats` renders it for admins.
+- Rotating log file under a mounted volume, alongside stdout. Container logs
+  are discarded whenever a redeploy recreates the container, so without this
+  there is no history at all.
+- The recent-episode list is persisted, so it survives a restart.
+- Retention: journal rows past `LOG_RETENTION_DAYS` are purged at startup.
+- Leftover job directories from a crash are swept at startup.
+
 **Quality**
-- 341 tests: routers driven through fakes, screens rendered as pure functions,
-  and end-to-end cutting against audio served over a local HTTP server
+- 388 tests: routers driven through fakes, screens rendered as pure functions,
+  the journal and retention exercised against a real SQLite file, and
+  end-to-end cutting against audio served over a local HTTP server
   (redirects, 403, 404, codec fallbacks, oversized ID3 tags).
 - ruff clean; runs as a non-root user in Docker.
 
@@ -56,12 +67,14 @@ written before the core existed; the items below reflect the current code.
 
 - **Mini App.** A web view with a waveform would beat any button-based interval
   picker, but it needs a separate frontend and HTTPS hosting.
-- **Persistence.** Sessions and the recent list are in-memory, so a restart
-  clears them. `PicklePersistence` plus a volume would fix it, at the cost of
-  needing care whenever the `Session` dataclass changes.
 - **Caching.** Identical searches from different users each hit the API.
 - **Cancel during a cut.** Cancel leaves the screen but does not kill a running
   ffmpeg job.
 - **Cover art.** Clips carry title/artist/album tags but no embedded artwork.
 - **Chapter awareness.** Feeds that publish chapters could offer them as
   one-tap clip boundaries.
+- **Session persistence.** Sessions stay in memory on purpose: pickling them
+  would tie on-disk data to the `Session` class layout, so adding a field would
+  break old records at request time, and PTB refuses to start on a corrupt
+  persistence file. A session is a two-minute working set; the recent list is
+  the part worth keeping, and it lives in SQLite with a schema we control.

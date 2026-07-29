@@ -15,7 +15,7 @@ from . import keyboards as kb
 from .api import Episode
 from .config import Settings
 from .states import Screen, Session
-from .text import esc, format_duration, truncate
+from .text import esc, format_duration, human_bytes, truncate
 
 #: Separator used in the breadcrumb line.
 CRUMB = " › "
@@ -271,6 +271,53 @@ def result(session: Session, bot_username: str) -> View:
         "Not quite the right moment? Nudge it below.",
         kb.result_keyboard(truncate(share, 40)),
     )
+
+
+def stats(day, week, db_bytes: int) -> View:
+    """The operator's panel: is the bot actually working, and for whom."""
+    lines = ["📊 <b>Podcast Cutter</b>", ""]
+
+    for label, window in (("Last 24h", day), ("Last 7 days", week)):
+        rate = window.success_rate
+        rate_text = f"{rate * 100:.0f}%" if rate is not None else "—"
+        lines.append(f"<b>{label}</b>")
+        lines.append(
+            f"  clips: {window.cuts_ok} ok · {window.cuts_failed} failed"
+            f"  ({rate_text})"
+        )
+        lines.append(f"  people: {window.unique_users}")
+        if window.median_ms is not None:
+            lines.append(
+                f"  time: {window.median_ms / 1000:.1f}s median · "
+                f"{(window.slowest_ms or 0) / 1000:.1f}s worst"
+            )
+        if window.cuts_ok:
+            lines.append(
+                f"  voice notes: {window.voice_share * 100:.0f}%"
+                f" · sent {human_bytes(window.total_bytes)}"
+            )
+        lines.append("")
+
+    if week.failures:
+        lines.append("<b>Failures this week</b>")
+        lines += [f"  {esc(name)} × {count}" for name, count in week.failures]
+        lines.append("")
+
+    if week.top_podcasts:
+        lines.append("<b>Most cut this week</b>")
+        lines += [
+            f"  {esc(truncate(name, 40))} × {count}"
+            for name, count in week.top_podcasts
+        ]
+        lines.append("")
+
+    if week.actions:
+        summary = " · ".join(f"{esc(name)} {count}" for name, count in week.actions)
+        lines.append(f"<b>Activity</b>\n  {summary}")
+        lines.append("")
+
+    lines.append(f"<i>journal: {human_bytes(db_bytes)}</i>")
+    return View("\n".join(lines).strip())
 
 
 def working(message: str) -> View:

@@ -15,6 +15,7 @@ from podcast_cutter.api import Episode, Feed
 from podcast_cutter.config import Settings
 from podcast_cutter.errors import NotFoundError
 from podcast_cutter.handlers import PodcastCutterBot
+from podcast_cutter.store import Store
 
 
 def make_feed(feed_id: str = "1", title: str | None = None) -> Feed:
@@ -229,8 +230,16 @@ def client() -> FakeClient:
 
 
 @pytest.fixture
-def bot(settings, client) -> PodcastCutterBot:
-    instance = PodcastCutterBot(settings, client)
+def store(tmp_path) -> Store:
+    instance = Store(tmp_path / "test.db")
+    instance.connect()
+    yield instance
+    instance.close()
+
+
+@pytest.fixture
+def bot(settings, client, store) -> PodcastCutterBot:
+    instance = PodcastCutterBot(settings, client, store)
     instance.bot_username = "podcast_cutter_bot"
     return instance
 

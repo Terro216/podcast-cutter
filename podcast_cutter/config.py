@@ -62,11 +62,37 @@ class Settings:
     #: Scratch space for temporary audio. One subdirectory per job.
     work_dir: Path = field(default_factory=lambda: Path("/tmp/podcast-cutter"))
 
+    # --- durable state ----------------------------------------------------
+    #: Database and log files live here. Mount it, or a redeploy takes the
+    #: history with it: recreating a container discards its json log.
+    data_dir: Path = field(default_factory=lambda: Path("data"))
+    #: Journal rows older than this are deleted at startup. 0 keeps everything.
+    log_retention_days: int = 90
+    #: Rotating log file size and count, alongside stdout.
+    log_file_bytes: int = 10 * 1024 * 1024
+    log_file_count: int = 5
+
+    #: Telegram user ids allowed to run /stats. Empty means nobody.
+    admin_ids: frozenset[int] = frozenset()
+
+    @property
+    def database_path(self) -> Path:
+        return self.data_dir / "podcast_cutter.db"
+
+    @property
+    def log_path(self) -> Path:
+        return self.data_dir / "logs" / "bot.log"
+
+    def is_admin(self, user_id: int | None) -> bool:
+        return user_id is not None and user_id in self.admin_ids
+
     def __post_init__(self) -> None:
         if self.max_cut_seconds <= 0:
             raise ConfigError("MAX_CUT_SECONDS must be positive.")
         if self.max_concurrent_jobs < 1:
             raise ConfigError("MAX_CONCURRENT_JOBS must be at least 1.")
+        if self.log_retention_days < 0:
+            raise ConfigError("LOG_RETENTION_DAYS cannot be negative.")
 
 
 def _env(name: str) -> str:
@@ -106,6 +132,37 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _non_negative_int(name: str, default: int) -> int:
+    raw = _env(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer, got {raw!r}.") from exc
+    if value < 0:
+        raise ConfigError(f"{name} cannot be negative, got {value}.")
+    return value
+
+
+def _id_set(name: str) -> frozenset[int]:
+    """Parse a comma- or space-separated list of Telegram user ids."""
+    raw = _env(name)
+    if not raw:
+        return frozenset()
+
+    ids = set()
+    for chunk in raw.replace(",", " ").split():
+        try:
+            ids.add(int(chunk))
+        except ValueError as exc:
+            raise ConfigError(
+                f"{name} must be a comma-separated list of numeric Telegram "
+                f"user ids; {chunk!r} is not one."
+            ) from exc
+    return frozenset(ids)
+
+
 def load_settings() -> Settings:
     """Read the environment (and ``.env``) into a validated :class:`Settings`."""
     load_dotenv()
@@ -129,4 +186,9 @@ def load_settings() -> Settings:
             "MAX_CONCURRENT_JOBS", Settings.max_concurrent_jobs
         ),
         work_dir=Path(_env("WORK_DIR") or "/tmp/podcast-cutter"),
+        data_dir=Path(_env("DATA_DIR") or "data"),
+        log_retention_days=_non_negative_int(
+            "LOG_RETENTION_DAYS", Settings.log_retention_days
+        ),
+        admin_ids=_id_set("ADMIN_IDS"),
     )

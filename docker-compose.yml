@@ -7,8 +7,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    volumes:
+      # Without this, every `docker compose up --build` recreates the container
+      # and takes the log history and the journal with it.
+      - podcast-data:/data
+    environment:
+      DATA_DIR: /data
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  podcast-data:
