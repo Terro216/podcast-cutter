@@ -153,7 +153,7 @@ class TestCutCommand:
             "https://example.com/a.mp3",
             Path("/tmp/out.mp3"),
             Interval(start=10, end=40),
-            **{"transcode": False, **kwargs},
+            **{"encode": None, **kwargs},
         )
 
     def test_drops_the_source_metadata(self):
@@ -178,9 +178,17 @@ class TestCutCommand:
         assert cmd[cmd.index("-ss") + 1] == "10"
         assert cmd[cmd.index("-t") + 1] == "30"
 
-    def test_copies_by_default_and_encodes_when_asked(self):
-        assert "copy" in self._cmd(transcode=False)
-        assert "libmp3lame" in self._cmd(transcode=True)
+    def test_copies_when_no_encoder_is_named(self):
+        assert "copy" in self._cmd(encode=None)
+
+    def test_encodes_mp3_when_asked(self):
+        assert "libmp3lame" in self._cmd(encode="mp3")
+
+    def test_voice_notes_use_opus_in_mono(self):
+        # sendVoice only accepts Opus in Ogg; anything else is rejected.
+        cmd = self._cmd(encode="opus")
+        assert "libopus" in cmd
+        assert cmd[cmd.index("-ac") + 1] == "1"
 
     def test_writes_supplied_tags(self):
         cmd = self._cmd(metadata={"title": "Ep 1", "artist": "Show"})
@@ -198,7 +206,7 @@ class TestCutCommand:
             Path("/tmp/source.mp3"),
             Path("/tmp/out.mp3"),
             Interval(start=0, end=5),
-            transcode=False,
+            encode=None,
         )
         # ffmpeg aborts with "Option user_agent not found" on a local input.
         assert "-user_agent" not in cmd

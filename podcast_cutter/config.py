@@ -40,6 +40,8 @@ class Settings:
 
     # --- limits -----------------------------------------------------------
     max_cut_seconds: int = 15 * 60
+    #: Clip length used when the user names a single moment rather than a range.
+    default_clip_seconds: int = 60
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     #: Refuse to download source files larger than this in the fallback path.
     max_source_bytes: int = 400 * 1024 * 1024

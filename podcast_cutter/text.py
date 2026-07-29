@@ -5,6 +5,7 @@ Kept free of I/O so they are cheap to unit-test.
 
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 
@@ -65,6 +66,40 @@ def safe_filename(*parts: str, ext: str, limit: int = 100) -> str:
     if not stem:
         stem = "podcast_cut"
     return f"{stem}.{ext.lstrip('.')}"
+
+
+def esc(value: str | None, fallback: str = "") -> str:
+    """Single-line and HTML-escaped, ready to drop into a formatted message.
+
+    Feed titles routinely contain ``&`` and angle brackets; unescaped they make
+    Telegram reject the whole message with a parse error.
+    """
+    return html.escape(one_line(value, fallback), quote=False)
+
+
+def human_bytes(count: float) -> str:
+    """Byte count as a short human-readable string."""
+    if count < 1024:
+        return f"{int(count)} B"
+    for unit in ("KB", "MB", "GB"):
+        count /= 1024
+        if count < 1024 or unit == "GB":
+            return f"{count:.1f} {unit}".replace(".0 ", " ")
+    return f"{count:.1f} GB"
+
+
+def progress_bar(done: int, total: int | None, width: int = 10) -> str:
+    """A textual progress bar, degrading gracefully when the size is unknown."""
+    if not total or total <= 0:
+        return f"{human_bytes(done)} so far"
+
+    fraction = min(1.0, max(0.0, done / total))
+    filled = round(fraction * width)
+    bar = "▰" * filled + "▱" * (width - filled)
+    return (
+        f"{bar}  {fraction * 100:.0f}%"
+        f"  ·  {human_bytes(done)} / {human_bytes(total)}"
+    )
 
 
 def format_duration(seconds: int) -> str:

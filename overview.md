@@ -33,23 +33,35 @@ written before the core existed; the items below reflect the current code.
 - Typed errors with user-facing messages, and a global error handler.
 - Config validated at startup, naming any missing variable.
 
+**Interface**
+- Screen stack with `‹ Back` and `☰ Menu` everywhere, plus a breadcrumb line.
+- Pagination shows position and total (`‹ 2/7 ›`) instead of bare arrows.
+- Coloured buttons via Bot API 9.4 `style`, so the primary action is obvious.
+- Clip editor: length presets, `◀ −15s` / `+1m ▶` nudges, and a bare timestamp
+  (`12:30`) meaning "a clip starting here".
+- Live download progress bar, throttled to one edit every few seconds, plus a
+  native upload indicator.
+- Audio file or voice note, chosen with a toggle.
+- Post-cut nudges that re-cut, and one-tap "another clip from this episode".
+- Recent-episode list; typing on any list filters it in place.
+- Inline mode (`@bot query` in any chat) and `?start=ep_…` deep links.
+
 **Quality**
-- 180 tests, including end-to-end cutting against audio served over a local HTTP
-  server (redirects, 403, 404, codec fallbacks).
+- 341 tests: routers driven through fakes, screens rendered as pure functions,
+  and end-to-end cutting against audio served over a local HTTP server
+  (redirects, 403, 404, codec fallbacks, oversized ID3 tags).
 - ruff clean; runs as a non-root user in Docker.
 
 ## Not done
 
-- **Live progress bar.** Status messages are sent ("cutting", "uploading"), but
-  there is no percentage or bar during long downloads.
-- **ID3 tags and cover art.** The upload carries title and performer, but the
-  file itself gets no embedded tags or podcast artwork.
-- **Caching.** Search results live only in the user's session; identical queries
-  from different users each hit the API. Redis or an in-memory TTL cache would
-  cut latency and API load.
-- **Persistence.** Sessions are in-memory, so a restart drops in-flight
-  conversations. `PicklePersistence` would fix that.
-- **Cancel during a cut.** The cancel button leaves the conversation but does not
-  kill a running ffmpeg job.
-- **Episode-length validation before listing.** Episodes whose duration the API
-  does not report are only checked once ffprobe runs.
+- **Mini App.** A web view with a waveform would beat any button-based interval
+  picker, but it needs a separate frontend and HTTPS hosting.
+- **Persistence.** Sessions and the recent list are in-memory, so a restart
+  clears them. `PicklePersistence` plus a volume would fix it, at the cost of
+  needing care whenever the `Session` dataclass changes.
+- **Caching.** Identical searches from different users each hit the API.
+- **Cancel during a cut.** Cancel leaves the screen but does not kill a running
+  ffmpeg job.
+- **Cover art.** Clips carry title/artist/album tags but no embedded artwork.
+- **Chapter awareness.** Feeds that publish chapters could offer them as
+  one-tap clip boundaries.

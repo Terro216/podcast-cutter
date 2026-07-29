@@ -254,6 +254,20 @@ class PodcastIndexClient:
             raise NotFoundError(f"No episodes found for “{one_line(query)}”.")
         return episodes
 
+    async def get_episode(self, episode_id: str) -> Episode:
+        """One episode by id, for deep links and inline-mode hand-offs.
+
+        The caller may not have the episode cached — a shared link can be
+        opened by someone who never searched for it.
+        """
+        payload = await self._get("/episodes/byid", {"id": episode_id})
+
+        raw = payload.get("episode")
+        episode = Episode.from_api(raw) if isinstance(raw, dict) else None
+        if episode is None:
+            raise NotFoundError("That episode is no longer available.")
+        return episode
+
     async def trending_feeds(self, limit: int = 10) -> list[Feed]:
         payload = await self._get("/podcasts/trending", {"max": limit})
 

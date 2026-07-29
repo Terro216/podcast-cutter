@@ -38,6 +38,16 @@ from .text import format_duration
 logger = logging.getLogger(__name__)
 
 StatusCallback = Callable[[str], Awaitable[None]]
+#: Called with (bytes so far, total bytes or None) while downloading.
+ProgressCallback = Callable[[int, "int | None"], Awaitable[None]]
+
+#: Encoder presets. ``None`` means stream-copy — no re-encoding at all.
+#: Voice notes must be Opus in an Ogg container; Telegram rejects anything else
+#: from sendVoice.
+_ENCODERS: dict[str, tuple[list[str], str]] = {
+    "mp3": (["-c:a", "libmp3lame", "-b:a", "96k"], "mp3"),
+    "opus": (["-c:a", "libopus", "-b:a", "48k", "-ac", "1"], "ogg"),
+}
 
 #: Codec -> container that can hold it without re-encoding.
 #:
@@ -142,6 +152,29 @@ def parse_interval(raw: str, max_duration: int) -> Interval:
         )
 
     return Interval(start=start, end=end)
+
+
+def has_range(raw: str) -> bool:
+    """Whether the text names two endpoints rather than a single moment."""
+    parts = _INTERVAL_SEPARATOR.split((raw or "").strip(), maxsplit=1)
+    return len(parts) == 2 and bool(parts[0]) and bool(parts[1])
+
+
+def parse_moment_or_range(
+    raw: str, max_duration: int, default_length: int = 60
+) -> Interval:
+    """Parse either ``12:30`` or ``12:30-14:00``.
+
+    Accepting a bare timestamp removes the most common friction: people paste a
+    moment from show notes or a comment, and having to compute an end time to
+    get a clip is needless arithmetic.
+    """
+    if has_range(raw):
+        return parse_interval(raw, max_duration)
+
+    start = parse_timestamp(raw)
+    length = max(1, min(default_length, max_duration))
+    return Interval(start=start, end=start + length)
 
 
 # --------------------------------------------------------------------------
@@ -284,7 +317,7 @@ def _cut_command(
     output: Path,
     interval: Interval,
     *,
-    transcode: bool,
+    encode: str | None,
     metadata: dict[str, str] | None = None,
 ) -> list[str]:
     cmd = [
@@ -316,10 +349,7 @@ def _cut_command(
     for key, value in (metadata or {}).items():
         if value:
             cmd += ["-metadata", f"{key}={value}"]
-    if transcode:
-        cmd += ["-c:a", "libmp3lame", "-b:a", _TRANSCODE_BITRATE]
-    else:
-        cmd += ["-c:a", "copy"]
+    cmd += _ENCODERS[encode][0] if encode else ["-c:a", "copy"]
     cmd.append(str(output))
     return cmd
 
@@ -329,7 +359,7 @@ async def _try_cut(
     output: Path,
     interval: Interval,
     *,
-    transcode: bool,
+    encode: str | None,
     timeout: float,
     verify_timeout: float = 30.0,
     metadata: dict[str, str] | None = None,
@@ -339,9 +369,7 @@ async def _try_cut(
         output.unlink()
 
     code, stderr = await _run(
-        _cut_command(
-            source, output, interval, transcode=transcode, metadata=metadata
-        ),
+        _cut_command(source, output, interval, encode=encode, metadata=metadata),
         timeout,
     )
 
@@ -365,7 +393,10 @@ async def _try_cut(
 
 
 async def _download(
-    url: str, destination: Path, settings: Settings
+    url: str,
+    destination: Path,
+    settings: Settings,
+    on_progress: ProgressCallback | None = None,
 ) -> None:
     headers = {
         "User-Agent": _BROWSERISH_USER_AGENT,
@@ -393,6 +424,11 @@ async def _download(
             if response.status_code >= 400:
                 raise AudioError(f"The episode host returned {response.status_code}.")
 
+            total: int | None = None
+            # Absent on chunked responses, so a missing header is normal.
+            with contextlib.suppress(TypeError, ValueError):
+                total = int(response.headers.get("content-length"))
+
             with destination.open("wb") as handle:
                 async for chunk in response.aiter_bytes(64 * 1024):
                     written += len(chunk)
@@ -402,6 +438,11 @@ async def _download(
                             "to download it."
                         )
                     handle.write(chunk)
+                    if on_progress is not None:
+                        # The callback decides how often to actually surface
+                        # this; downloads emit thousands of chunks.
+                        with contextlib.suppress(Exception):
+                            await on_progress(written, total)
     except httpx.HTTPError as exc:
         raise AudioError(f"Could not download the episode: {exc}") from exc
 
@@ -431,13 +472,16 @@ async def cut_episode(
     workdir: Path,
     settings: Settings,
     on_status: StatusCallback | None = None,
+    on_progress: ProgressCallback | None = None,
     metadata: dict[str, str] | None = None,
+    voice: bool = False,
 ) -> CutResult:
     """Extract ``interval`` from ``audio_url`` into ``workdir``.
 
     ``workdir`` is expected to be a per-job directory that the caller removes
     afterwards, so no temporary file can outlive the request. ``metadata``
-    replaces the source's tags on the cut (see ``_cut_command``).
+    replaces the source's tags on the cut (see ``_cut_command``). With
+    ``voice`` the result is Opus in Ogg, the only format sendVoice accepts.
     """
 
     async def status(message: str) -> None:
@@ -445,6 +489,24 @@ async def cut_episode(
             with contextlib.suppress(Exception):
                 await on_status(message)
 
+    def plan(codec: str | None) -> list[tuple[Path, str | None]]:
+        """Output candidates, best first.
+
+        A voice note has exactly one option; otherwise prefer a stream copy
+        into whatever container fits the source codec, and keep MP3 as the
+        universal fallback.
+        """
+        if voice:
+            return [(workdir / "cut.ogg", "opus")]
+
+        candidates: list[tuple[Path, str | None]] = []
+        copy_ext = container_for_codec(codec)
+        if copy_ext:
+            candidates.append((workdir / f"cut.{copy_ext}", None))
+        candidates.append((workdir / "cut.mp3", "mp3"))
+        return candidates
+
+    shrink_with = "opus" if voice else "mp3"
     workdir.mkdir(parents=True, exist_ok=True)
 
     resolved_url = await _resolve_url(audio_url, settings.probe_timeout)
@@ -456,39 +518,32 @@ async def cut_episode(
             f"so {format_duration(interval.start)} is past the end."
         )
 
-    copy_ext = container_for_codec(info.codec)
-    attempts: list[tuple[Path, bool]] = []
-    if copy_ext:
-        attempts.append((workdir / f"cut.{copy_ext}", False))
-    attempts.append((workdir / "cut.mp3", True))
-
     # --- attempt 1: work directly off the URL -----------------------------
     await status("✂️ Cutting the segment…")
-    for output, transcode in attempts:
+    for output, encode in plan(info.codec):
         reason = await _try_cut(
             resolved_url,
             output,
             interval,
-            transcode=transcode,
+            encode=encode,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
             metadata=metadata,
         )
         if reason is None:
             return await _finalize(
-                output, transcode, interval, workdir, settings, status, metadata
+                output, encode, interval, workdir, settings, status,
+                metadata, shrink_with,
             )
-        logger.info(
-            "Streaming cut failed (transcode=%s): %s", transcode, reason[:500]
-        )
+        logger.info("Streaming cut failed (encode=%s): %s", encode, reason[:500])
 
     # --- attempt 2: download the episode, then cut locally ----------------
     await status(
-        "⬇️ This host does not allow partial reads — downloading the full "
-        "episode first. This can take a couple of minutes…"
+        "⬇️ This host does not allow partial reads — downloading "
+        "the full episode first. This can take a couple of minutes…"
     )
     local_source = workdir / "source.bin"
-    await _download(resolved_url, local_source, settings)
+    await _download(resolved_url, local_source, settings, on_progress)
 
     local_info = await probe(local_source, settings.probe_timeout)
     if local_info.duration is not None and interval.start >= local_info.duration:
@@ -497,20 +552,14 @@ async def cut_episode(
             f"so {format_duration(interval.start)} is past the end."
         )
 
-    local_copy_ext = container_for_codec(local_info.codec or info.codec)
-    local_attempts: list[tuple[Path, bool]] = []
-    if local_copy_ext:
-        local_attempts.append((workdir / f"cut.{local_copy_ext}", False))
-    local_attempts.append((workdir / "cut.mp3", True))
-
     await status("✂️ Cutting the segment…")
     failures: list[str] = []
-    for output, transcode in local_attempts:
+    for output, encode in plan(local_info.codec or info.codec):
         reason = await _try_cut(
             local_source,
             output,
             interval,
-            transcode=transcode,
+            encode=encode,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
             metadata=metadata,
@@ -518,10 +567,11 @@ async def cut_episode(
         if reason is None:
             local_source.unlink(missing_ok=True)
             return await _finalize(
-                output, transcode, interval, workdir, settings, status, metadata
+                output, encode, interval, workdir, settings, status,
+                metadata, shrink_with,
             )
         failures.append(reason)
-        logger.info("Local cut failed (transcode=%s): %s", transcode, reason[:500])
+        logger.info("Local cut failed (encode=%s): %s", encode, reason[:500])
 
     local_source.unlink(missing_ok=True)
     detail = failures[-1] if failures else "unknown error"
@@ -533,38 +583,41 @@ async def cut_episode(
 
 async def _finalize(
     output: Path,
-    transcoded: bool,
+    encode: str | None,
     interval: Interval,
     workdir: Path,
     settings: Settings,
     status: StatusCallback,
     metadata: dict[str, str] | None = None,
+    shrink_with: str = "mp3",
 ) -> CutResult:
     """Enforce the upload size limit, re-encoding once if that might help."""
     size = output.stat().st_size
 
-    if size > settings.max_upload_bytes and not transcoded:
+    if size > settings.max_upload_bytes and encode is None:
         logger.info(
             "Cut is %d bytes, above the %d limit; re-encoding.",
             size,
             settings.max_upload_bytes,
         )
         await status("🗜 The segment is large — compressing it…")
-        # Deliberately not "cut.mp3": that may be `output` itself, and
-        # `_try_cut` deletes its destination before invoking ffmpeg.
-        compressed = workdir / "compressed.mp3"
+        # Deliberately not reusing the plain "cut.<ext>" name: it may be
+        # `output` itself, and `_try_cut` deletes its destination first.
+        compressed = workdir / f"compressed.{_ENCODERS[shrink_with][1]}"
         reason = await _try_cut(
             output,
             compressed,
             Interval(start=0, end=interval.duration),
-            transcode=True,
+            encode=shrink_with,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
             metadata=metadata,
         )
         if reason is None:
             output.unlink(missing_ok=True)
-            output, transcoded, size = compressed, True, compressed.stat().st_size
+            output = compressed
+            encode = shrink_with
+            size = compressed.stat().st_size
 
     if size > settings.max_upload_bytes:
         raise TooLargeError(
@@ -573,4 +626,4 @@ async def _finalize(
             "Please pick a shorter interval."
         )
 
-    return CutResult(path=output, size=size, transcoded=transcoded)
+    return CutResult(path=output, size=size, transcoded=encode is not None)

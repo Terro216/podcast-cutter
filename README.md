@@ -7,15 +7,24 @@ Telegram bot: https://t.me/podcast_cutter_bot
 
 ## What it does
 
-- **Search a podcast by name**, then browse its episodes (paginated, or filter
-  by typing part of a title).
+- **Search a podcast by name**, then browse its episodes — paginated, with a
+  page counter, or filtered by typing part of a title.
 - **Search by person or keyword** across every episode in the directory.
-- **Trending** podcasts and a **random episode** shortcut.
-- Send a range like `01:20-02:00` and get the cut back, tagged with the podcast
-  and episode name.
+- **Trending** podcasts, a **random episode**, and a **recent** list of what you
+  looked at.
+- **Pick the moment without arithmetic.** Send `12:30` for a clip starting
+  there, or `12:30-14:00` for an exact range, then nudge it with `◀ −15s` /
+  `+1m ▶` buttons until it's right. Length presets are one tap.
+- **Send as an audio file or a voice note** — voice notes play inline in chat,
+  which is what you want for a short quote.
+- **Nudge after the fact.** The result offers `↺ 15s earlier` / `15s later ↻`
+  and re-cuts, so finding the exact line is a couple of taps.
+- **Share from anywhere.** Type `@podcast_cutter_bot some words` in any chat to
+  post an episode with a link that opens the clip editor for whoever taps it.
 
-Accepted time formats: `MM:SS`, `HH:MM:SS`, raw seconds, and compound forms
-(`1h30m`). Ranges may be separated by `-`, `–`, `..` or `to`.
+Every screen has `‹ Back` and `☰ Menu`, and a breadcrumb line shows where you
+are. Accepted time formats: `MM:SS`, `HH:MM:SS`, raw seconds, and compound
+forms (`1h30m`). Ranges may be separated by `-`, `–`, `..` or `to`.
 
 ## Requirements
 
@@ -88,12 +97,29 @@ podcast_cutter/
   errors.py                exception hierarchy with user-facing messages
   api.py                   async Podcast Index client, typed Feed/Episode
   audio.py                 interval parsing, ffprobe, ffmpeg cutting
-  text.py                  title/filename sanitising helpers
-  states.py                conversation states and the per-user session
+  text.py                  escaping, filenames, progress bars
+  states.py                screen stack and the per-user session
+  screens.py               pure state → (text, keyboard) renderers
   keyboards.py             menus, pagination, callback-data vocabulary
-  handlers.py              Telegram handlers
+  handlers.py              the text router, callback router and cut job
   app.py                   handler registration and lifecycle
 ```
+
+### How navigation works
+
+There is no `ConversationHandler`. A screen stack in `Session` says where the
+user is, and an explicit `awaiting` field says what typing means right now.
+Every update reaches one of two routers, so a message can never land in a state
+with no handler — which is exactly how the previous version stranded people.
+
+Paging *replaces* the current screen rather than pushing onto the stack, so
+`‹ Back` leaves a list in one step instead of walking back through every page.
+Sessions expire on next use rather than on a timer, so nobody is interrupted by
+an unprompted "your session ended".
+
+Button colours come from Bot API 9.4 (`style`: `primary` / `success` /
+`danger`) and need `python-telegram-bot` 22.7+. Clients older than February 2026
+ignore them and render the default style, so they are decoration, never meaning.
 
 ### How cutting works
 
