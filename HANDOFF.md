@@ -30,9 +30,12 @@ Configured and working: `ADMIN_IDS=87752988` (so `/stats` works), journal at
 `/data/podcast_cutter.db`, logs at `/data/logs/bot.log`, both on the named
 volume `podcast-data`.
 
-Still needs doing by hand: **inline mode is off.** Enable via @BotFather →
-`/setinline`. The code is ready; until then `@podcast_cutter_bot query` in
-other chats does nothing.
+Inline mode is enabled in @BotFather and answering. Note what it searches:
+`/search/byperson` matches only people credited in a feed, so anything else —
+a topic, a podcast's own name — falls back to a `byterm` podcast search and
+the top match's episodes. Both the empty and the failed branch are journalled
+as `action=inline` with an `outcome`, so a silent inline is diagnosable from
+the journal rather than from guessing.
 
 ---
 

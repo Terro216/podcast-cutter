@@ -34,7 +34,7 @@ from . import screens
 from .api import Episode, PodcastIndexClient
 from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
-from .errors import PodcastCutterError
+from .errors import NotFoundError, PodcastCutterError
 from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
@@ -60,6 +60,17 @@ logger = logging.getLogger(__name__)
 
 #: Prefix used by deep links, e.g. ``t.me/bot?start=ep_12345``.
 DEEP_LINK_EPISODE = "ep_"
+
+#: Telegram accepts at most 50 inline results; fewer keeps the list scannable.
+INLINE_RESULT_LIMIT = 25
+
+#: How long Telegram may reuse an inline answer that found something.
+INLINE_CACHE_SECONDS = 300
+
+#: …and one that found nothing. Kept short on purpose: an inline query is
+#: usually a prefix of a word still being typed, and caching "nothing" for five
+#: minutes keeps answering "nothing" long after the user finished typing it.
+INLINE_EMPTY_CACHE_SECONDS = 5
 
 #: Minimum gap between progress edits. Telegram throttles aggressive editing,
 #: and a bar that moves more often than this is noise, not information.
@@ -940,22 +951,54 @@ class PodcastCutterBot:
 
         if len(query) < 2:
             await inline.answer(
-                [], cache_time=300, is_personal=False, button=open_button
+                [],
+                cache_time=INLINE_CACHE_SECONDS,
+                is_personal=False,
+                button=open_button,
             )
             return
 
         try:
-            episodes = await self.client.search_episodes_by_person(query)
-        except PodcastCutterError:
-            await inline.answer([], cache_time=30, button=open_button)
+            episodes = await self._inline_episodes(query)
+        except PodcastCutterError as exc:
+            # Nothing to show is not an error the user can act on here — the
+            # button stays, so they can still open the bot and search properly.
+            with contextlib.suppress(TelegramError):
+                await inline.answer(
+                    [], cache_time=INLINE_EMPTY_CACHE_SECONDS, button=open_button
+                )
+            await self._log(update, "inline", detail=query, outcome=exc.code)
             return
 
         results = [
-            self._inline_result(episode) for episode in episodes[:25]
+            self._inline_result(episode)
+            for episode in episodes[:INLINE_RESULT_LIMIT]
         ]
         with contextlib.suppress(TelegramError):
-            await inline.answer(results, cache_time=300, button=open_button)
-        await self._log(update, "inline", detail=query, size_bytes=len(results))
+            await inline.answer(
+                results, cache_time=INLINE_CACHE_SECONDS, button=open_button
+            )
+        await self._log(
+            update, "inline", detail=query, outcome="ok", size_bytes=len(results)
+        )
+
+    async def _inline_episodes(self, query: str) -> list[Episode]:
+        """Episodes to offer for an inline query.
+
+        ``/search/byperson`` only matches people credited in a feed, so it
+        answers nothing for a topic or a podcast's own name — which is what
+        most people type. Fall back to searching podcasts by term and offering
+        the top match's episodes, the same two-step the in-chat search does.
+        """
+        try:
+            return await self.client.search_episodes_by_person(query)
+        except NotFoundError:
+            pass
+
+        feeds, _ = await self.client.search_feeds(query)
+        if not feeds:
+            raise NotFoundError(f"No podcasts found for “{one_line(query)}”.")
+        return await self.client.list_episodes(feeds[0].id)
 
     def _inline_result(self, episode: Episode) -> InlineQueryResultArticle:
         link = self.episode_link(episode.id)

@@ -174,6 +174,9 @@ class FakeClient:
         self.random = make_episode("99")
         self.by_id: dict[str, Episode] = {}
         self.fail_with: Exception | None = None
+        #: Raised by :meth:`search_episodes_by_person` alone, so a caller that
+        #: falls back to a feed search can be exercised.
+        self.person_fail: Exception | None = None
         self.calls: list[str] = []
 
     def _check(self, name: str) -> None:
@@ -191,6 +194,8 @@ class FakeClient:
 
     async def search_episodes_by_person(self, query):
         self._check(f"search_episodes_by_person:{query}")
+        if self.person_fail is not None:
+            raise self.person_fail
         return list(self.episodes)
 
     async def trending_feeds(self, limit=10):

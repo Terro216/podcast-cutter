@@ -354,6 +354,46 @@ class TestInlineMode:
         assert update.inline_query.answers
         assert update.inline_query.results == []
 
+    async def test_falls_back_to_a_podcast_search_when_no_person_matches(
+        self, bot, context, client
+    ):
+        from podcast_cutter.errors import NotFoundError
+
+        client.person_fail = NotFoundError("nobody")
+        update = FakeInlineUpdate("Radiolab")
+
+        await bot.on_inline_query(update, context)
+
+        assert update.inline_query.results
+        assert any(call.startswith("search_feeds:") for call in client.calls)
+        assert any(call.startswith("list_episodes:") for call in client.calls)
+
+    async def test_a_query_nothing_matches_answers_empty(
+        self, bot, context, client
+    ):
+        from podcast_cutter.errors import NotFoundError
+
+        client.fail_with = NotFoundError("nothing at all")
+        update = FakeInlineUpdate("zzzzz")
+
+        await bot.on_inline_query(update, context)
+
+        assert update.inline_query.results == []
+        assert update.inline_query.options["button"] is not None
+
+    async def test_an_empty_answer_is_not_cached_for_long(
+        self, bot, context, client
+    ):
+        from podcast_cutter.errors import NotFoundError
+
+        client.fail_with = NotFoundError("nothing at all")
+        update = FakeInlineUpdate("Radio")
+
+        await bot.on_inline_query(update, context)
+
+        # A five-minute cache on "nothing" would outlive the word being typed.
+        assert update.inline_query.options["cache_time"] <= 10
+
     async def test_results_are_capped(self, bot, context, client):
         # Telegram accepts at most 50 inline results.
         client.episodes = [make_episode(str(i)) for i in range(200)]
