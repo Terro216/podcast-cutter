@@ -823,7 +823,9 @@ class PodcastCutterBot:
                 outcome, size_bytes = "ok", result.size
 
             except PodcastCutterError as exc:
-                outcome = type(exc).__name__
+                # The stable code, not the class name: grouping failures in SQL
+                # keeps working across refactors.
+                outcome = exc.code
                 detail = exc.user_message
                 await status.show(screens.failure(exc.user_message))
             except TelegramError as exc:

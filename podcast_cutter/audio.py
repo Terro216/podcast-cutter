@@ -32,7 +32,15 @@ from pathlib import Path
 import httpx
 
 from .config import Settings
-from .errors import AudioError, IntervalError, TooLargeError
+from .errors import (
+    AudioError,
+    BlockedError,
+    IntervalError,
+    ProcessingTimeout,
+    TooLargeError,
+    UnreachableError,
+    UnreadableError,
+)
 from .text import format_duration
 
 logger = logging.getLogger(__name__)
@@ -243,10 +251,7 @@ async def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
         process.kill()
         with contextlib.suppress(ProcessLookupError):
             await process.wait()
-        raise AudioError(
-            "Audio processing took too long and was stopped. "
-            "Try a shorter interval or a different episode."
-        ) from None
+        raise ProcessingTimeout from None
 
     return process.returncode or 0, stderr.decode("utf-8", "replace").strip()
 
@@ -416,13 +421,15 @@ async def _download(
             timeout=httpx.Timeout(settings.download_timeout, connect=30.0),
         )
         async with client, client.stream("GET", url, headers=headers) as response:
-            if response.status_code == 403:
-                raise AudioError(
-                    "The host of this episode refuses downloads from this "
-                    "server. Try a different episode."
-                )
+            # 401 and 403 mean this server is unwelcome, which no amount of
+            # retrying or reshaping the request will change. Worth counting
+            # separately from a host that is merely broken or missing.
+            if response.status_code in (401, 403):
+                raise BlockedError
             if response.status_code >= 400:
-                raise AudioError(f"The episode host returned {response.status_code}.")
+                raise UnreachableError(
+                    f"The episode host returned {response.status_code}."
+                )
 
             total: int | None = None
             # Absent on chunked responses, so a missing header is normal.
@@ -444,10 +451,10 @@ async def _download(
                         with contextlib.suppress(Exception):
                             await on_progress(written, total)
     except httpx.HTTPError as exc:
-        raise AudioError(f"Could not download the episode: {exc}") from exc
+        raise UnreachableError(f"Could not download the episode: {exc}") from exc
 
     if written == 0:
-        raise AudioError("The episode host returned an empty file.")
+        raise UnreachableError("The episode host returned an empty file.")
 
 
 async def _resolve_url(url: str, timeout: float) -> str:
@@ -576,9 +583,7 @@ async def cut_episode(
     local_source.unlink(missing_ok=True)
     detail = failures[-1] if failures else "unknown error"
     logger.error("All cut attempts failed for %s: %s", audio_url, detail[:500])
-    raise AudioError(
-        "Could not cut this episode — the audio file appears to be unreadable."
-    )
+    raise UnreadableError
 
 
 async def _finalize(

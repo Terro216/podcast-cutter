@@ -148,7 +148,7 @@ class TestJournalWiring:
 
         stats = await store.stats(24)
         assert stats.cuts_failed == 1
-        assert ("AudioError", 1) in stats.failures
+        assert ("audio_failed", 1) in stats.failures
 
     async def test_searches_are_journalled(self, bot, context, store):
         await bot.on_text(FakeUpdate(text="radiolab"), context)
