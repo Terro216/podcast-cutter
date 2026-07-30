@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -61,6 +62,14 @@ logger = logging.getLogger(__name__)
 #: Prefix used by deep links, e.g. ``t.me/bot?start=ep_12345``.
 DEEP_LINK_EPISODE = "ep_"
 
+#: Prefix that tags where a newcomer came from, e.g.
+#: ``t.me/bot?start=src_reddit``. Recorded against the ``start`` event, so
+#: ``/stats`` can say which channel actually brought people.
+DEEP_LINK_SOURCE = "src_"
+
+#: Campaign tags are truncated to this; the journal is not a landfill.
+MAX_SOURCE_TAG = 32
+
 #: Telegram accepts at most 50 inline results; fewer keeps the list scannable.
 INLINE_RESULT_LIMIT = 25
 
@@ -77,6 +86,21 @@ INLINE_EMPTY_CACHE_SECONDS = 5
 PROGRESS_INTERVAL = 3.0
 
 GENERIC_ERROR = "Something went wrong on my side. Please try again."
+
+#: The first thing a newcomer reads. The menu that follows says what the
+#: buttons do, so this says the two things the buttons cannot: how a moment is
+#: written, and that the bot works from inside someone else's chat.
+WELCOME_TEXT = (
+    "👋 <b>Welcome!</b>\n\n"
+    "I cut a short piece out of a podcast episode and send it back, so you "
+    "can share the good bit instead of a two-hour link.\n\n"
+    "Once you've picked an episode, tell me when it starts: "
+    "<code>12:30</code> for a clip from there, or <code>12:30-14:00</code> "
+    "for an exact range. The ◀ ▶ buttons nudge it until it's right.\n\n"
+    "In any other chat, type <code>@{username}</code> and a name to hand "
+    "someone an episode without leaving the conversation.\n\n"
+    "Send me a podcast name to start."
+)
 
 HELP_TEXT = (
     "🎙 <b>Podcast Cutter</b>\n\n"
@@ -97,6 +121,19 @@ HELP_TEXT = (
     "Type <code>@{username}</code> in any chat to share an episode "
     "without leaving the conversation."
 )
+
+
+def campaign_source(payload: str) -> str | None:
+    """The tag in a ``t.me/bot?start=src_…`` link, or ``None``.
+
+    Telegram already restricts a start payload to ``A-Za-z0-9_-``, but the
+    value ends up in the journal and in ``/stats``, so it is normalised and
+    bounded here rather than trusted to arrive clean.
+    """
+    if not payload.startswith(DEEP_LINK_SOURCE):
+        return None
+    tag = re.sub(r"[^a-z0-9_-]", "", payload[len(DEEP_LINK_SOURCE) :].lower())
+    return tag[:MAX_SOURCE_TAG] or None
 
 
 class StatusEditor:
@@ -289,11 +326,15 @@ class PodcastCutterBot:
             return
 
         await update.effective_message.reply_text(
-            "👋 Welcome!", reply_markup=kb.main_menu()
+            WELCOME_TEXT.format(
+                username=self.bot_username or "podcast_cutter_bot"
+            ),
+            parse_mode="HTML",
+            reply_markup=kb.main_menu(),
         )
         session.go(Screen.MENU)
         await self.render(update, session)
-        await self._log(update, "start")
+        await self._log(update, "start", detail=campaign_source(payload))
 
     async def _open_shared_episode(
         self, update: Update, session: Session, episode_id: str

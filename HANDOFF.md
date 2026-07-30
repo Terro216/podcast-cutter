@@ -296,7 +296,9 @@ Portability holds for all three: the bot only ever sees `MEDIA_PROXY`.
 
 ## 5. Known gaps, roughly by value
 
-1. **Inline mode still off at BotFather** — one manual step.
+1. **Avatar and inline placeholder** — the last two things only @BotFather can
+   set (`/setuserpic`, `/setinline`); commands and both descriptions are
+   published from `_on_startup` and overwrite anything set there by hand.
 2. Mini App with a waveform picker — needs a frontend and HTTPS hosting.
 3. Caching of directory searches — identical queries each hit the API.
 4. Cancel during a cut leaves ffmpeg running.

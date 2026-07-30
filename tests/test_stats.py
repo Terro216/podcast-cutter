@@ -93,6 +93,15 @@ class TestPanel:
         assert "AudioError × 3" in view.text
         assert "Radiolab × 7" in view.text
 
+    async def test_lists_where_people_came_from(self):
+        week = self._stats(sources=[("reddit", 12)])
+        view = screens.stats(self._stats(), week, 1024)
+        assert "reddit × 12" in view.text
+
+    async def test_says_nothing_about_sources_when_there_are_none(self):
+        view = screens.stats(self._stats(), self._stats(), 1024)
+        assert "came from" not in view.text
+
     async def test_an_empty_journal_renders_without_dividing_by_zero(self):
         empty = Stats(window_hours=24)
         view = screens.stats(empty, empty, 0)

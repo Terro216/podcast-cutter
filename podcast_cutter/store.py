@@ -101,6 +101,9 @@ class Stats:
     top_podcasts: list[tuple[str, int]] = field(default_factory=list)
     failures: list[tuple[str, int]] = field(default_factory=list)
     actions: list[tuple[str, int]] = field(default_factory=list)
+    #: Campaign tags from ``?start=src_…`` links, by how many distinct people
+    #: arrived through each. Empty until such a link is handed out.
+    sources: list[tuple[str, int]] = field(default_factory=list)
 
     @property
     def cuts_total(self) -> int:
@@ -367,6 +370,18 @@ class Store:
             (since,),
         )
         result.actions = [(row["action"], int(row["n"])) for row in actions]
+
+        # People, not visits: the same person opening the link twice says
+        # nothing about whether the channel works.
+        sources = await self._run(
+            """
+            SELECT detail, count(DISTINCT user_id) AS n FROM events
+            WHERE action = 'start' AND detail IS NOT NULL AND at >= ?
+            GROUP BY detail ORDER BY n DESC LIMIT 5
+            """,
+            (since,),
+        )
+        result.sources = [(row["detail"], int(row["n"])) for row in sources]
 
         return result
 

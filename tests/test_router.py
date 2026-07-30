@@ -311,6 +311,39 @@ class TestDeepLinks:
         await bot.cmd_start(FakeUpdate(text="/start"), context)
         assert session_of(context).current.screen is Screen.MENU
 
+    async def test_the_welcome_teaches_the_interval_syntax(self, bot, context):
+        update = FakeUpdate(text="/start")
+
+        await bot.cmd_start(update, context)
+
+        welcome = update.effective_message.replies[0][0]
+        assert "12:30-14:00" in welcome
+        assert "@podcast_cutter_bot" in welcome
+
+    async def test_a_campaign_link_records_where_it_came_from(
+        self, bot, context, store
+    ):
+        context.args = ["src_reddit"]
+
+        await bot.cmd_start(FakeUpdate(text="/start"), context)
+
+        assert (await store.stats(24)).sources == [("reddit", 1)]
+        assert session_of(context).current.screen is Screen.MENU
+
+    async def test_a_plain_start_has_no_source(self, bot, context, store):
+        await bot.cmd_start(FakeUpdate(text="/start"), context)
+
+        assert (await store.stats(24)).sources == []
+
+    async def test_a_campaign_tag_is_normalised_before_it_is_stored(self):
+        from podcast_cutter.handlers import campaign_source
+
+        assert campaign_source("src_Reddit") == "reddit"
+        assert campaign_source("src_" + "x" * 100) == "x" * 32
+        assert campaign_source("src_") is None
+        assert campaign_source("ep_555") is None
+        assert campaign_source("") is None
+
     async def test_links_point_at_this_bot(self, bot):
         assert bot.episode_link("42") == (
             "https://t.me/podcast_cutter_bot?start=ep_42"

@@ -45,6 +45,26 @@ BOT_COMMANDS = [
     ("help", "How this works"),
 ]
 
+#: Shown in the bot's profile and in the preview of a t.me link — the only
+#: words most people read before deciding whether to press Start. Telegram
+#: caps it at 120 characters.
+SHORT_DESCRIPTION = (
+    "Turns a podcast episode into a short clip you can send to someone — "
+    "pick the moment, share just that part."
+)
+
+#: Shown on the empty chat screen, above the Start button, and nowhere else.
+#: Plain text only: Telegram renders no markup here. Capped at 512 characters.
+DESCRIPTION = (
+    "I make shareable clips out of podcasts.\n\n"
+    "Find an episode by the podcast's name or by who is in it, tell me when "
+    "the good part starts — 12:30, or 12:30-14:00 for an exact range — and I "
+    "send that piece back as an audio file or a voice note.\n\n"
+    "Works without opening me, too: type @{username} and a name in any chat "
+    "to hand someone an episode mid-conversation.\n\n"
+    "Press START and send me a podcast name."
+)
+
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 
@@ -166,6 +186,17 @@ async def _on_startup(application: Application) -> None:
     except TelegramError as exc:
         # Cosmetic; never worth refusing to start over.
         logger.warning("Could not publish the command list: %s", exc)
+
+    try:
+        # Owned by the code, not by @BotFather: whatever is set there is
+        # overwritten on the next start. The avatar and the inline placeholder
+        # have no API and remain BotFather's alone.
+        await application.bot.set_my_short_description(SHORT_DESCRIPTION)
+        await application.bot.set_my_description(
+            DESCRIPTION.format(username=bot.bot_username or "podcast_cutter_bot")
+        )
+    except TelegramError as exc:
+        logger.warning("Could not publish the bot's description: %s", exc)
 
     logger.info("Bot started as @%s", bot.bot_username or "unknown")
 

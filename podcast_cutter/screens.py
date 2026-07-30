@@ -311,6 +311,13 @@ def stats(day, week, db_bytes: int) -> View:
         ]
         lines.append("")
 
+    if week.sources:
+        lines.append("<b>Where people came from this week</b>")
+        lines += [
+            f"  {esc(truncate(name, 32))} × {count}" for name, count in week.sources
+        ]
+        lines.append("")
+
     if week.actions:
         summary = " · ".join(f"{esc(name)} {count}" for name, count in week.actions)
         lines.append(f"<b>Activity</b>\n  {summary}")

@@ -161,6 +161,16 @@ class TestStats:
         actions = dict((await store.stats(24)).actions)
         assert actions["search"] == 2 and actions["inline"] == 1
 
+    async def test_counts_campaign_sources_by_person_not_by_visit(self, store):
+        # One enthusiast opening the same link twice is not two arrivals.
+        await store.record(Event(action="start", user_id=1, detail="reddit"))
+        await store.record(Event(action="start", user_id=1, detail="reddit"))
+        await store.record(Event(action="start", user_id=2, detail="reddit"))
+        await store.record(Event(action="start", user_id=3, detail="hn"))
+        await store.record(Event(action="start", user_id=4))
+
+        assert (await store.stats(24)).sources == [("reddit", 2), ("hn", 1)]
+
 
 class TestRetention:
     async def test_purges_rows_past_the_window(self, store):

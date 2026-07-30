@@ -234,5 +234,33 @@ class TestMainMenu:
         assert shown == set(kb.MENU_BUTTONS)
 
 
+class TestBotProfile:
+    """The texts published at startup, against Telegram's own limits.
+
+    Overrunning either is rejected with a BadRequest that startup only logs, so
+    the profile would quietly stay whatever it was.
+    """
+
+    def test_the_short_description_fits(self):
+        from podcast_cutter.app import SHORT_DESCRIPTION
+
+        assert 0 < len(SHORT_DESCRIPTION) <= 120
+
+    def test_the_description_fits_once_the_username_is_filled_in(self):
+        from podcast_cutter.app import DESCRIPTION
+
+        filled = DESCRIPTION.format(username="podcast_cutter_bot")
+        assert 0 < len(filled) <= 512
+        assert "{username}" not in filled
+
+    def test_the_description_carries_no_markup(self):
+        from podcast_cutter.app import DESCRIPTION, SHORT_DESCRIPTION
+
+        # Telegram renders neither HTML nor Markdown here; tags would show up
+        # as literal angle brackets on the empty-chat screen.
+        for text in (DESCRIPTION, SHORT_DESCRIPTION):
+            assert "<" not in text and "</" not in text
+
+
 def markup_rows(markup):
     return markup.keyboard

@@ -78,6 +78,17 @@ not know it, send `/stats` once and the log will tell you:
 Ignoring /stats from user 12345678. Set ADMIN_IDS=12345678 to allow it.
 ```
 
+**Where people come from.** Hand out `https://t.me/<bot>?start=src_<tag>` —
+one tag per place you post it — and `/stats` reports how many distinct people
+arrived through each. Tags are lowercased, stripped to `a-z0-9_-` and cut to 32
+characters before they touch the journal.
+
+**The bot's own profile is set from code**, in `_on_startup`: the command list,
+the short description shown in the profile, and the description on the empty
+chat screen. Editing those in @BotFather works until the next restart, which
+overwrites them. Two things have no API and remain BotFather's alone — the
+avatar (`/setuserpic`) and the inline placeholder (`/setinline`).
+
 The journal itself is plain SQLite, so anything the panel does not answer is a
 query away:
 
