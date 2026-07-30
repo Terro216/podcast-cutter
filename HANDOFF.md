@@ -1,8 +1,11 @@
 # Handoff — podcast-cutter, 2026-07-30
 
 Working notes for whoever picks this up. `README.md` describes the project as
-it is; this file records **where we stopped, what is already proven, and the one
-decision still open**.
+it is; this file records **where we stopped and what is already proven**.
+
+The decision that used to be open — routing audio fetches through a second
+egress — is **done and deployed**. §3 now records what was built and measured
+rather than what was being considered.
 
 ---
 
@@ -66,9 +69,90 @@ Other traps found the hard way:
 
 ---
 
-## 3. The open decision: routing media fetches through a proxy
+## 3. Routing media fetches through a proxy — built, deployed, measured
 
-### The problem, measured
+### What is running now
+
+| where | what |
+| --- | --- |
+| DE | `deploy/media-proxy/` — tinyproxy, `network_mode: host`, `Listen 127.0.0.1:3128`. Started with `ldocker compose -f deploy/media-proxy/docker-compose.yml up -d`. |
+| DE | one line in `~/.ssh/authorized_keys`: `restrict,port-forwarding,permitopen="127.0.0.1:3128",command="/bin/false"` |
+| big-one | sidecar `podcast-cutter-tunnel` (`deploy/tunnel/`), autossh holding `-L 0.0.0.0:3128:127.0.0.1:3128` to DE:44222, behind compose profile `proxy` |
+| big-one | key + pinned host key at `~/.podcast-cutter/tunnel/` (outside the repo) |
+| big-one | `.env`: `MEDIA_PROXY=http://media-proxy:3128`, `MEDIA_PROXY_MODE=fallback`, `COMPOSE_PROFILES=proxy`, `TUNNEL_HOST=178.17.48.243` |
+
+The tunnel is dialled **from** big-one, which is the one thing that differs from
+option A as it was written below: a reverse tunnel lands on big-one's loopback,
+which a bridge-network container cannot reach, and fixing that needs either
+`network_mode: host` for the bot or `GatewayPorts` in production's sshd.
+Dialling out puts the near end inside the compose network, where the bot already
+is, and neither host's configuration changes.
+
+`deploy/README.md` has the full rationale, the setup commands, how to move the
+proxy to another host, and the rollback table.
+
+### Measured after deployment
+
+```
+40 trending episodes, CONCURRENCY=1, from inside the production container:
+  through the proxy:  39/39 reachable (100%)
+  direct:             35/39 reachable  (90%)
+                        3 × ConnectTimeout  traffic.megaphone.fm
+                        1 × 403             anchor.fm
+```
+
+Same failure signature as the pre-work measurement below; the direct rate reads
+better than the earlier 78% only because trending feeds differ run to run. Every
+episode that failed direct succeeded through the proxy.
+
+A real cut, end to end, of an episode big-one cannot fetch: a
+podtrac → pdst.fm → megaphone chain that times out directly came back as a
+30-second `cut.mp3`, 1.2 MB, ffprobe-verified, `route=proxy`.
+
+And the guarantee that mattered most: with the sidecar stopped, the startup
+check reports `ConnectError: Temporary failure in name resolution`, the breaker
+opens, `routes()` collapses to `('direct',)`, and a cut completes in 4.3 s. A
+dead proxy costs the episodes it would have rescued and nothing else.
+
+### What the bot does with it
+
+* `MEDIA_PROXY` empty is the default and means the previous behaviour exactly —
+  `subprocess_env` even returns `None` so children inherit the environment
+  unchanged. `MEDIA_PROXY_MODE=off` keeps the URL and stops using it.
+* `fallback` (default) resolves direct first; the proxy is tried only after a
+  connect failure or a 401/403/451. `always` reverses the order.
+* The route is chosen once per job by `_resolve_url` and is **sticky** —
+  resolving through one route and fetching through another risks a 403 on
+  URLs signed for the client that resolved them.
+* An attempt with another route behind it gets an 8 s connect timeout instead of
+  15 s: megaphone's failure is a silent drop, and the full wait would be most of
+  the delay the user sees.
+* ffmpeg gets `http_proxy` only. It honours that for `https://` sources via
+  CONNECT and ignores `https_proxy` — `test_ffmpeg_itself_honours_http_proxy`
+  now pins this against a real proxy, so it is a test rather than a note here.
+* A transport failure on the proxy marks it down for 60 s for the whole bot.
+* Cuts the detour earned carry `detail='route=proxy'` in the journal; the
+  startup check writes an `action='proxy'` row.
+
+### Traps worth knowing
+
+* `restrict` in `authorized_keys` does **not** prevent command execution — it
+  disables ptys and forwarding. `ssh -i tunnel_key … id` ran fine until
+  `command="/bin/false"` was added. Verified after fixing: no command, no
+  forward except `127.0.0.1:3128`, and that one carries traffic.
+* tinyproxy 1.11 dropped `StartServers`/`MinSpareServers`/`MaxSpareServers` and
+  warns on every start if they are present.
+* `network_mode: host` for the proxy is load-bearing, not tidiness: the
+  megaphone failure is a GeoDNS answer, so a container resolving through
+  Docker's embedded DNS could be handed the same dead address the bot gets.
+* Compose interpolates the whole file regardless of active profiles, so
+  `${TUNNEL_HOST:?...}` would break `up` for a deployment that wants no proxy.
+  The entrypoint checks instead.
+* Not decided by measurement: the proxy carries full-episode downloads too when
+  the streaming path falls back, so DE's bandwidth is in that path. Rare, and
+  the streaming path only pulls bytes around the interval.
+
+### The problem, as measured before the work
 
 `scripts/check_reachability.py`, 40 trending episodes, sequential, with
 failures attributed to the host that actually failed:
@@ -122,13 +206,18 @@ through another host.
   with it. Log it loudly and journal it.
 * Log proxy reachability once at startup so a silently broken proxy is visible.
 
-### Transport — NOT decided
+### Transport — decided: a variant of A
 
-The user declined to choose until convinced it (a) will not conflict with the
-existing VPN/proxy stack, (b) can be moved to another VPN server later, and
-(c) will not break anything. Answering that is the next task.
+Kept below because the reasoning still applies and B and C remain the
+alternatives if the SSH forward ever becomes the wrong shape.
 
-**Inventory of DE, gathered for exactly this question:**
+B was rejected because a public port needs an ACL or a password, and ffmpeg's
+CONNECT path cannot be relied on to send proxy credentials. C was rejected
+because it means editing the AmneziaWG config on a live VPN server with
+clients — the one thing that would actually touch the existing stack.
+
+**Inventory of DE, gathered for exactly this question** (re-verified during the
+work: 3128 free, `ip rule` still empty, sshd on 44222 with password auth off):
 
 ```
 containers (ldocker ps):
@@ -204,13 +293,14 @@ Portability holds for all three: the bot only ever sees `MEDIA_PROXY`.
 
 ## 5. Known gaps, roughly by value
 
-1. **The proxy work above** — recovers ~22% of episodes.
-2. **Inline mode still off at BotFather** — one manual step.
-3. Mini App with a waveform picker — needs a frontend and HTTPS hosting.
-4. Caching of directory searches — identical queries each hit the API.
-5. Cancel during a cut leaves ffmpeg running.
-6. No embedded cover art in clips.
-7. Chapter-aware clip boundaries for feeds that publish them.
+1. **Inline mode still off at BotFather** — one manual step.
+2. Mini App with a waveform picker — needs a frontend and HTTPS hosting.
+3. Caching of directory searches — identical queries each hit the API.
+4. Cancel during a cut leaves ffmpeg running.
+5. No embedded cover art in clips.
+6. Chapter-aware clip boundaries for feeds that publish them.
+7. The audio detour has no monitoring beyond the startup check and the journal.
+   `gatus` already runs on DE and could watch the proxy directly.
 
 ---
 
@@ -227,9 +317,15 @@ docker build -q -t podcast-cutter:test . && \
 # deploy
 docker compose up -d --build && docker compose logs -f
 
-# how much of the directory can production actually fetch
+# how much of the directory can production actually fetch, per route
 docker compose exec -T -e CONCURRENCY=1 podcast-cutter python - 40 \
   < scripts/check_reachability.py
+docker compose exec -T -e CONCURRENCY=1 -e MEDIA_PROXY= podcast-cutter \
+  python - 40 < scripts/check_reachability.py
+
+# the DE half of the detour (ldocker — the local one)
+ldocker compose -f deploy/media-proxy/docker-compose.yml ps
+docker compose logs media-proxy | tail
 
 # the journal
 docker compose exec -T podcast-cutter sqlite3 -header -column \

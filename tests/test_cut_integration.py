@@ -16,9 +16,12 @@ import asyncio
 import shutil
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +29,7 @@ from podcast_cutter import audio as audio_mod
 from podcast_cutter.audio import Interval, cut_episode, probe
 from podcast_cutter.config import Settings
 from podcast_cutter.errors import AudioError
+from podcast_cutter.proxy import DIRECT, PROXY
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -109,6 +113,16 @@ class _AudioHandler(BaseHTTPRequestHandler):
             self.send_error(403, "Forbidden")
             return
 
+        # Serves the same URL differently depending on where the request came
+        # from, which is the entire problem MEDIA_PROXY exists for. Standing in
+        # for the source address: ``X-Egress``, which only the proxy fixture
+        # below adds.
+        if path.startswith("geofenced/"):
+            if self.headers.get("X-Egress") is None:
+                self.send_error(403, "Forbidden")
+                return
+            path = path[len("geofenced/") :]
+
         if path.startswith("redirect/"):
             self.send_response(302)
             self.send_header("Location", "/" + path[len("redirect/") :])
@@ -126,6 +140,75 @@ class _AudioHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+
+class _ProxyHandler(BaseHTTPRequestHandler):
+    """A forward proxy of the kind ffmpeg and httpx expect for ``http://``.
+
+    Both send an absolute-URI ``GET`` to the proxy rather than opening a
+    CONNECT tunnel, which they reserve for ``https://``, so forwarding one
+    request is all this has to do. It stamps ``X-Egress`` on what it forwards —
+    that is how the geofenced route above tells the two egresses apart, the way
+    a different source address does in production.
+
+    Every forwarded request is recorded as ``(url, range header)``. The range
+    is what distinguishes ffmpeg's ranged reads from the single ``bytes=0-1``
+    of redirect resolution, and therefore what proves ffmpeg itself honoured
+    ``http_proxy`` rather than quietly going direct.
+    """
+
+    def __init__(self, *args, seen: list, **kwargs):
+        self._seen = seen
+        super().__init__(*args, **kwargs)
+
+    def log_message(self, *args):  # keep pytest output readable
+        pass
+
+    def do_GET(self):  # noqa: N802 - name mandated by BaseHTTPRequestHandler
+        self._seen.append((self.path, self.headers.get("Range")))
+
+        forwarded = {"X-Egress": "proxy"}
+        for name in ("Range", "User-Agent", "Accept"):
+            value = self.headers.get(name)
+            if value is not None:
+                forwarded[name] = value
+
+        # An opener with an empty ProxyHandler, so an ambient http_proxy in the
+        # environment cannot make this fixture forward to itself.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(
+                urllib.request.Request(self.path, headers=forwarded), timeout=30
+            ) as upstream:
+                status, payload = upstream.status, upstream.read()
+                content_type = upstream.headers.get("Content-Type")
+        except urllib.error.HTTPError as exc:
+            status, payload = exc.code, exc.read()
+            content_type = exc.headers.get("Content-Type")
+
+        self.send_response(status)
+        self.send_header("Content-Type", content_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+@pytest.fixture
+def media_proxy():
+    """A live proxy plus the list of requests that went through it."""
+    seen: list[tuple[str, str | None]] = []
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_ProxyHandler, seen=seen)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        yield SimpleNamespace(url=f"http://{host}:{port}", seen=seen)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.fixture(scope="module")
@@ -361,6 +444,132 @@ class TestFailureMessages:
         message = str(excinfo.value)
         assert "Traceback" not in message
         assert len(message) < 200
+
+
+class TestProxyRouting:
+    """The audio detour, against a real proxy and real ffmpeg.
+
+    Mocks cannot answer the two questions that matter here: whether ffmpeg
+    actually honours ``http_proxy``, and whether a broken proxy costs the
+    episodes that were working.
+    """
+
+    def test_working_hosts_stay_direct(self, audio_server, media_proxy, tmp_path):
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "direct",
+            media_proxy=media_proxy.url,
+        )
+        assert result.route == DIRECT
+        assert media_proxy.seen == [], (
+            "fallback mode must not send the working majority through the proxy"
+        )
+
+    def test_a_refused_host_is_fetched_through_the_proxy(
+        self, audio_server, media_proxy, tmp_path
+    ):
+        result = cut(
+            f"{audio_server}/geofenced/a.mp3",
+            0,
+            5,
+            tmp_path / "detour",
+            media_proxy=media_proxy.url,
+        )
+        assert result.route == PROXY
+        assert result.size > 0
+        assert media_proxy.seen, "the detour should have carried this one"
+
+    def test_ffmpeg_itself_honours_http_proxy(
+        self, audio_server, media_proxy, tmp_path
+    ):
+        """The fact the whole design rests on.
+
+        ffmpeg reads ``http_proxy`` (and ignores ``https_proxy``), so the cut
+        itself — not just the Python-side redirect resolution — goes through the
+        proxy. Ranged reads are ffmpeg's signature: redirect resolution asks for
+        exactly ``bytes=0-1`` and the download fallback asks for no range at all.
+        """
+        cut(
+            f"{audio_server}/geofenced/a.mp3",
+            0,
+            5,
+            tmp_path / "ffmpeg-proxy",
+            media_proxy=media_proxy.url,
+        )
+        ranged = [
+            (url, header)
+            for url, header in media_proxy.seen
+            if header is not None and header != "bytes=0-1"
+        ]
+        assert ranged, (
+            "no ranged request reached the proxy, so ffmpeg went direct: "
+            f"{media_proxy.seen}"
+        )
+
+    def test_always_mode_routes_everything_through_the_proxy(
+        self, audio_server, media_proxy, tmp_path
+    ):
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "always",
+            media_proxy=media_proxy.url,
+            media_proxy_mode="always",
+        )
+        assert result.route == PROXY
+        assert media_proxy.seen
+
+    def test_a_dead_proxy_does_not_break_a_working_episode(
+        self, audio_server, tmp_path
+    ):
+        """The nothing-breaks guarantee, end to end.
+
+        ``always`` mode with a proxy that refuses connections is the worst case
+        the design has to survive: every fetch tries the detour first, finds it
+        dead, and falls back. The user still gets their clip.
+        """
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "dead-proxy",
+            # Port 1 is reserved and nothing listens there.
+            media_proxy="http://127.0.0.1:1",
+            media_proxy_mode="always",
+        )
+        assert result.route == DIRECT
+        assert result.size > 0
+
+    def test_off_mode_ignores_a_configured_proxy(
+        self, audio_server, media_proxy, tmp_path
+    ):
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "off",
+            media_proxy=media_proxy.url,
+            media_proxy_mode="off",
+        )
+        assert result.route == DIRECT
+        assert media_proxy.seen == []
+
+    def test_a_host_refusing_both_routes_still_reports_the_refusal(
+        self, audio_server, media_proxy, tmp_path
+    ):
+        # The proxy adds X-Egress, but /403/ refuses regardless, so both routes
+        # fail and the user must still get the message they got before.
+        with pytest.raises(AudioError, match="refuses downloads"):
+            cut(
+                f"{audio_server}/403/a.mp3",
+                0,
+                5,
+                tmp_path / "both-refused",
+                media_proxy=media_proxy.url,
+            )
 
 
 class TestStatusUpdates:

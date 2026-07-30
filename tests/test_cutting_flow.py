@@ -18,6 +18,7 @@ from podcast_cutter import handlers as handlers_mod
 from podcast_cutter import keyboards as kb
 from podcast_cutter.audio import CutResult
 from podcast_cutter.errors import AudioError, TooLargeError
+from podcast_cutter.proxy import DIRECT, PROXY
 from podcast_cutter.states import Awaiting, Screen, get_session
 
 pytestmark = pytest.mark.asyncio
@@ -34,7 +35,9 @@ def ready(bot, context):
     return session
 
 
-def stub_cut(monkeypatch, *, suffix=".mp3", size=1234, raises=None, record=None):
+def stub_cut(
+    monkeypatch, *, suffix=".mp3", size=1234, raises=None, record=None, route=DIRECT
+):
     async def fake_cut(url, interval, workdir, settings, **kwargs):
         if record is not None:
             record.update(kwargs)
@@ -45,7 +48,7 @@ def stub_cut(monkeypatch, *, suffix=".mp3", size=1234, raises=None, record=None)
         workdir.mkdir(parents=True, exist_ok=True)
         path = workdir / f"cut{suffix}"
         path.write_bytes(b"x" * size)
-        return CutResult(path=path, size=size, transcoded=False)
+        return CutResult(path=path, size=size, transcoded=False, route=route)
 
     monkeypatch.setattr(handlers_mod, "cut_episode", fake_cut)
 
@@ -128,6 +131,31 @@ class TestDelivery:
 
 
 class TestNudging:
+    async def test_the_journal_says_when_the_detour_earned_a_cut(
+        self, bot, context, ready, monkeypatch, store
+    ):
+        """Otherwise there is no way to tell what the proxy is worth."""
+        stub_cut(monkeypatch, route=PROXY)
+
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+        row = store._execute(
+            "SELECT outcome, detail FROM events WHERE action = 'cut'"
+        )[0]
+        assert (row["outcome"], row["detail"]) == ("ok", "route=proxy")
+
+    async def test_a_direct_cut_journals_no_route(
+        self, bot, context, ready, monkeypatch, store
+    ):
+        stub_cut(monkeypatch)
+
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+        row = store._execute(
+            "SELECT outcome, detail FROM events WHERE action = 'cut'"
+        )[0]
+        assert (row["outcome"], row["detail"]) == ("ok", None)
+
     async def test_shifting_moves_the_clip_and_recuts(
         self, bot, context, ready, monkeypatch
     ):

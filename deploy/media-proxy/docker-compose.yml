@@ -1,0 +1,27 @@
+# The dev-box half of the audio detour. Bring it up with the *local* docker:
+#
+#   ldocker compose -f deploy/media-proxy/docker-compose.yml up -d --build
+#
+# Plain `docker` in this project is a shim that forwards to production, which
+# is the one machine this must not run on.
+services:
+  media-proxy:
+    build: .
+    container_name: media-proxy
+    restart: unless-stopped
+    # Shares the host's network namespace on purpose, for two reasons:
+    #
+    # 1. It resolves and connects exactly as the host does. The megaphone
+    #    failure is a GeoDNS answer, so a container resolving through Docker's
+    #    embedded DNS could be handed the same dead address the bot gets, and
+    #    the detour would quietly achieve nothing.
+    # 2. Nothing is published. A bridge-network container publishing a port
+    #    would add NAT rules and expose the proxy to every other container on
+    #    this machine; with `Listen 127.0.0.1` there is no listener anywhere
+    #    but the host's loopback.
+    network_mode: host
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

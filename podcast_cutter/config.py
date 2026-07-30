@@ -22,6 +22,23 @@ DEFAULT_API_BASE_URL = "https://api.podcastindex.org/api/1.0"
 # oversized ID3 header or container overhead cannot push us over the edge.
 DEFAULT_MAX_UPLOAD_BYTES = 45 * 1024 * 1024
 
+#: ``MEDIA_PROXY_MODE`` values.
+#:
+#: ``fallback`` fetches directly and only reaches for the proxy when a fetch
+#: fails the way a blocked egress fails — a connect timeout or a 403 — so the
+#: episodes that already work keep their existing route and their latency.
+#: ``always`` sends audio through the proxy first and keeps direct as the
+#: safety net. ``off`` is the kill switch: the URL stays configured, the
+#: feature stops being used, and a rollback is one variable instead of two.
+PROXY_MODE_FALLBACK = "fallback"
+PROXY_MODE_ALWAYS = "always"
+PROXY_MODE_OFF = "off"
+PROXY_MODES = (PROXY_MODE_FALLBACK, PROXY_MODE_ALWAYS, PROXY_MODE_OFF)
+
+#: Probed through the proxy at startup. Megaphone is the host the detour
+#: exists for, so proving *it* answers is worth more than a generic target.
+DEFAULT_PROXY_PROBE_URL = "https://traffic.megaphone.fm/"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -75,6 +92,33 @@ class Settings:
     #: Telegram user ids allowed to run /stats. Empty means nobody.
     admin_ids: frozenset[int] = frozenset()
 
+    # --- media proxy ------------------------------------------------------
+    #: HTTP proxy for episode audio fetches **only**; the directory API and
+    #: Telegram always go direct. Empty — the default — disables the whole
+    #: feature, so an unconfigured bot behaves exactly as it did before the
+    #: proxy existed. One URL is the entire configuration surface: moving to a
+    #: different egress host is a one-variable change.
+    #:
+    #: Must be ``http://``: ffmpeg only understands a plain HTTP proxy, which
+    #: it uses for ``https://`` sources via CONNECT.
+    media_proxy: str = ""
+    #: See :data:`PROXY_MODES`.
+    media_proxy_mode: str = PROXY_MODE_FALLBACK
+    media_proxy_probe_url: str = DEFAULT_PROXY_PROBE_URL
+    #: How long the proxy is treated as dead after it fails at the transport
+    #: level. Long enough not to retry a down host on every cut, short enough
+    #: that a restarted proxy is picked up without restarting the bot.
+    media_proxy_cooldown: float = 60.0
+    #: Connect timeout for an attempt that still has a route behind it. The
+    #: megaphone failure is a *silent* drop that costs ~9 s of SYN retries, and
+    #: paying that before the detour would be most of the delay the user sees.
+    media_proxy_connect_timeout: float = 8.0
+
+    @property
+    def proxy_enabled(self) -> bool:
+        """Whether audio fetches may use the proxy at all."""
+        return bool(self.media_proxy) and self.media_proxy_mode != PROXY_MODE_OFF
+
     @property
     def database_path(self) -> Path:
         return self.data_dir / "podcast_cutter.db"
@@ -93,6 +137,20 @@ class Settings:
             raise ConfigError("MAX_CONCURRENT_JOBS must be at least 1.")
         if self.log_retention_days < 0:
             raise ConfigError("LOG_RETENTION_DAYS cannot be negative.")
+        if self.media_proxy_mode not in PROXY_MODES:
+            raise ConfigError(
+                f"MEDIA_PROXY_MODE must be one of {', '.join(PROXY_MODES)}, "
+                f"got {self.media_proxy_mode!r}."
+            )
+        if self.media_proxy and not self.media_proxy.startswith("http://"):
+            raise ConfigError(
+                "MEDIA_PROXY must be an http:// URL — ffmpeg understands no "
+                f"other kind of proxy — got {self.media_proxy!r}."
+            )
+        if self.media_proxy_cooldown < 0:
+            raise ConfigError("media_proxy_cooldown cannot be negative.")
+        if self.media_proxy_connect_timeout <= 0:
+            raise ConfigError("media_proxy_connect_timeout must be positive.")
 
 
 def _env(name: str) -> str:
@@ -191,4 +249,11 @@ def load_settings() -> Settings:
             "LOG_RETENTION_DAYS", Settings.log_retention_days
         ),
         admin_ids=_id_set("ADMIN_IDS"),
+        media_proxy=_env("MEDIA_PROXY").rstrip("/"),
+        media_proxy_mode=(
+            _env("MEDIA_PROXY_MODE") or Settings.media_proxy_mode
+        ).lower(),
+        media_proxy_probe_url=(
+            _env("MEDIA_PROXY_PROBE_URL") or DEFAULT_PROXY_PROBE_URL
+        ),
     )

@@ -14,6 +14,14 @@ yours:
 Or locally, which measures your own connection instead:
 
     python scripts/check_reachability.py [sample-size]
+
+If ``MEDIA_PROXY`` is set it measures the proxied route, whatever
+``MEDIA_PROXY_MODE`` says — the point of running this is to see what one route
+can reach, not to watch the bot's fallback logic hide the difference. Override
+with ``-e MEDIA_PROXY=`` to measure direct fetches from the same container:
+
+    docker compose exec -T -e CONCURRENCY=1 -e MEDIA_PROXY= \\
+      podcast-cutter python - 40 < scripts/check_reachability.py
 """
 
 from __future__ import annotations
@@ -93,8 +101,13 @@ async def main(sample: int) -> int:
         print("No episodes to check.", file=sys.stderr)
         return 1
 
+    route = settings.media_proxy or None
+    print(f"Fetching through {route}" if route else "Fetching directly")
+
     limiter = asyncio.Semaphore(CONCURRENCY)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=25.0) as client:
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=25.0, proxy=route
+    ) as client:
         results = await asyncio.gather(
             *(_reach(client, ep.enclosure_url, limiter) for ep in episodes)
         )
@@ -118,7 +131,8 @@ async def main(sample: int) -> int:
         share = blocked / len(results) * 100
         print(
             f"\n{blocked} of {len(results)} ({share:.0f}%) refuse this server's "
-            "IP address outright. Only a different egress route changes that."
+            "IP address outright. Only a different egress route changes that — "
+            "which is what MEDIA_PROXY is for."
         )
 
     return 0

@@ -19,5 +19,45 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # The near end of the forward to the egress proxy. The bot reaches it as
+  # `http://media-proxy:3128` — that string is the whole of MEDIA_PROXY, so
+  # moving the far end to a different host is a change to TUNNEL_HOST and
+  # nothing else. See deploy/README.md.
+  #
+  # Behind a profile, and nothing depends_on it, so this file deploys exactly
+  # the bot it deployed before unless `COMPOSE_PROFILES=proxy` is set. That is
+  # also the rollback: unset it, `docker compose up -d`, and the sidecar is
+  # gone. If it is running but sick, the bot logs that and fetches audio
+  # directly — which is what it did before the detour existed.
+  media-proxy:
+    profiles: ["proxy"]
+    build:
+      context: ./deploy/tunnel
+    container_name: podcast-cutter-tunnel
+    restart: unless-stopped
+    environment:
+      # Empty rather than `:?required`: compose interpolates this file whether
+      # or not the profile is active, so a required variable here would break
+      # `up` for a deployment that wants no proxy at all. The entrypoint
+      # complains instead, where only this container can hear it.
+      TUNNEL_HOST: ${TUNNEL_HOST:-}
+      TUNNEL_PORT: ${TUNNEL_PORT:-44222}
+      TUNNEL_USER: ${TUNNEL_USER:-me}
+      # Where the proxy listens on the far host: its loopback, so the proxy
+      # itself needs no exposed port.
+      TUNNEL_REMOTE: ${TUNNEL_REMOTE:-127.0.0.1:3128}
+      TUNNEL_LISTEN_PORT: ${TUNNEL_LISTEN_PORT:-3128}
+    volumes:
+      # Kept out of the repo and out of the image: a key baked into a layer is
+      # a key you cannot rotate, and one inside the repo is one Mutagen copies
+      # around. Read-only — the container has no business writing here.
+      # An absolute path because compose does not expand `~`.
+      - ${TUNNEL_KEYS_DIR:-/home/me/.podcast-cutter/tunnel}:/keys:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   podcast-data:

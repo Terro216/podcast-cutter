@@ -35,6 +35,7 @@ from .api import Episode, PodcastIndexClient
 from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
 from .errors import PodcastCutterError
+from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
     MAX_RECENTS,
@@ -138,6 +139,9 @@ class PodcastCutterBot:
         self.client = client
         self.store = store
         self.bot_username = ""
+        #: Shared by every cut: the breaker state is the point, so one cut
+        #: discovering a dead proxy spares the rest the same wait.
+        self.media_proxy = MediaProxy(settings)
         self._job_slots = asyncio.Semaphore(settings.max_concurrent_jobs)
         #: User ids with a cut in flight — one heavy job per person.
         self._busy_users: set[int] = set()
@@ -801,6 +805,7 @@ class PodcastCutterBot:
                     on_progress=on_progress,
                     metadata=self._id3_tags(episode, interval),
                     voice=session.as_voice,
+                    proxy=self.media_proxy,
                 )
 
                 await status.set(
@@ -821,6 +826,11 @@ class PodcastCutterBot:
                 session.replace(Screen.RESULT)
                 await status.show(screens.result(session, self.bot_username))
                 outcome, size_bytes = "ok", result.size
+                if result.route == PROXY:
+                    # Recorded on the cut row itself rather than as its own
+                    # event, so "how many episodes is the detour earning?" is
+                    # one query and the action vocabulary stays as it was.
+                    detail = "route=proxy"
 
             except PodcastCutterError as exc:
                 # The stable code, not the class name: grouping failures in SQL

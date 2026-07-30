@@ -49,6 +49,8 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|
 | `LOG_RETENTION_DAYS`  | no       | Journal retention, 0 keeps everything (90)|
 | `ADMIN_IDS`           | no       | Telegram ids allowed to run `/stats`     |
+| `MEDIA_PROXY`         | no       | Proxy for audio fetches; empty = direct  |
+| `MEDIA_PROXY_MODE`    | no       | `fallback` (default), `always` or `off`  |
 
 Missing or malformed values fail at startup with a message naming the variable,
 rather than surfacing later as a confusing runtime error.
@@ -166,6 +168,28 @@ ignore them and render the default style, so they are decoration, never meaning.
 The output container follows the source codec (AAC lands in `.m4a`, not `.mp3`),
 and the result is verified with ffprobe before being sent, because ffmpeg can
 exit successfully having written an unplayable fragment.
+
+### Episodes the server cannot reach
+
+Some hosts refuse or silently drop requests from a given server, and the reason
+is the source address rather than anything about the request: measured against
+40 trending episodes, `traffic.megaphone.fm` — which most analytics prefixes
+redirect to — accounted for a sixth of the directory on its own, and
+Anchor-hosted feeds answer 403.
+
+`MEDIA_PROXY` routes **audio fetches only** through a proxy somewhere the CDNs
+are happier; the directory API and Telegram always go direct. It defaults to
+empty, in which case none of this is active.
+
+With `MEDIA_PROXY_MODE=fallback` — the default — episodes are fetched directly
+and the proxy is consulted only after a fetch fails the way a blocked egress
+fails, so anything that already worked keeps its route and its latency. A proxy
+that stops answering is logged, journalled, and taken out of rotation for a
+minute at a time; fetches carry on directly meanwhile. `off` keeps the URL
+configured but stops using it, which is the one-variable rollback.
+
+`deploy/README.md` covers a working setup — a loopback proxy plus an SSH
+forward — and how to move it elsewhere.
 
 ## Sources
 

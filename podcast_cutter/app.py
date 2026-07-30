@@ -29,7 +29,7 @@ from .audio import ensure_ffmpeg_available
 from .config import Settings, load_settings
 from .handlers import PodcastCutterBot
 from .states import Screen
-from .store import Store
+from .store import Event, Store
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,43 @@ def sweep_work_dir(settings: Settings) -> None:
                     removed, "y" if removed == 1 else "ies")
 
 
+async def _report_media_proxy(
+    bot: PodcastCutterBot, store: Store, settings: Settings
+) -> None:
+    """Say once, at startup, whether the audio detour works.
+
+    A proxy that is quietly broken looks exactly like no proxy at all: the
+    episodes it was added for go back to failing, with the same errors they
+    failed with before, and nothing points at the cause. So the answer goes to
+    the log and to the journal, and either way the bot starts — degrading to
+    direct fetches is the whole design, not an incident.
+    """
+    proxy = bot.media_proxy
+    if not proxy.configured:
+        logger.info(
+            "MEDIA_PROXY is not configured; audio fetches go direct%s.",
+            " (MEDIA_PROXY_MODE=off)" if settings.media_proxy else "",
+        )
+        return
+
+    alive = await proxy.check()
+    if not alive:
+        logger.warning(
+            "Media proxy %s did not answer at startup: %s. Audio fetches will "
+            "go direct until it does.",
+            proxy.url,
+            proxy.down_reason,
+        )
+    await store.record(
+        Event(
+            action="proxy",
+            outcome="up" if alive else "down",
+            detail=f"{proxy.url} mode={settings.media_proxy_mode}"
+            + ("" if alive else f" ({proxy.down_reason})"),
+        )
+    )
+
+
 async def _on_startup(application: Application) -> None:
     bot: PodcastCutterBot = application.bot_data["bot"]
     store: Store = application.bot_data["store"]
@@ -111,6 +148,8 @@ async def _on_startup(application: Application) -> None:
             purged,
             settings.log_retention_days,
         )
+
+    await _report_media_proxy(bot, store, settings)
 
     try:
         me = await application.bot.get_me()

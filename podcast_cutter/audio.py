@@ -41,6 +41,7 @@ from .errors import (
     UnreachableError,
     UnreadableError,
 )
+from .proxy import DIRECT, MediaProxy, is_blocked_status, is_routing_failure
 from .text import format_duration
 
 logger = logging.getLogger(__name__)
@@ -201,6 +202,10 @@ class CutResult:
     path: Path
     size: int
     transcoded: bool
+    #: Which egress route produced this cut. ``DIRECT`` unless the proxy was
+    #: both configured and actually used, so the journal can say how many
+    #: episodes the detour is earning.
+    route: str = DIRECT
 
 
 def ensure_ffmpeg_available() -> None:
@@ -232,11 +237,15 @@ def container_for_codec(codec: str | None) -> str | None:
     return _COPY_CONTAINERS.get(codec.lower())
 
 
-async def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
+async def _run(
+    cmd: list[str], timeout: float, env: dict[str, str] | None = None
+) -> tuple[int, str]:
     """Run a subprocess, returning ``(returncode, stderr)``.
 
     A hung ffmpeg used to be able to block the bot forever; here it is killed
-    once ``timeout`` elapses.
+    once ``timeout`` elapses. ``env`` replaces the child's environment
+    wholesale — see :meth:`~podcast_cutter.proxy.MediaProxy.subprocess_env`;
+    ``None`` inherits ours.
     """
     logger.info("Running: %s", " ".join(cmd))
     process = await asyncio.create_subprocess_exec(
@@ -244,6 +253,7 @@ async def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     try:
         _, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
@@ -256,7 +266,9 @@ async def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
     return process.returncode or 0, stderr.decode("utf-8", "replace").strip()
 
 
-async def probe(source: str | Path, timeout: float) -> SourceInfo:
+async def probe(
+    source: str | Path, timeout: float, env: dict[str, str] | None = None
+) -> SourceInfo:
     """Read codec and duration of the first audio stream.
 
     Never raises: an unprobeable source is not fatal, it just means we fall
@@ -281,6 +293,7 @@ async def probe(source: str | Path, timeout: float) -> SourceInfo:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -368,6 +381,7 @@ async def _try_cut(
     timeout: float,
     verify_timeout: float = 30.0,
     metadata: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> str | None:
     """Attempt one cut. Returns ``None`` on success, else a reason string."""
     with contextlib.suppress(FileNotFoundError):
@@ -376,6 +390,7 @@ async def _try_cut(
     code, stderr = await _run(
         _cut_command(source, output, interval, encode=encode, metadata=metadata),
         timeout,
+        env=env,
     )
 
     if code != 0:
@@ -402,6 +417,7 @@ async def _download(
     destination: Path,
     settings: Settings,
     on_progress: ProgressCallback | None = None,
+    proxy_url: str | None = None,
 ) -> None:
     headers = {
         "User-Agent": _BROWSERISH_USER_AGENT,
@@ -418,6 +434,7 @@ async def _download(
     try:
         client = httpx.AsyncClient(
             follow_redirects=True,
+            proxy=proxy_url,
             timeout=httpx.Timeout(settings.download_timeout, connect=30.0),
         )
         async with client, client.stream("GET", url, headers=headers) as response:
@@ -457,20 +474,74 @@ async def _download(
         raise UnreachableError("The episode host returned an empty file.")
 
 
-async def _resolve_url(url: str, timeout: float) -> str:
-    """Follow redirects in Python; some CDNs confuse ffmpeg's redirect handling."""
+async def _resolve_url(
+    url: str, timeout: float, proxy: MediaProxy
+) -> tuple[str, str]:
+    """Follow redirects in Python and pick the egress route for this episode.
+
+    Some CDNs confuse ffmpeg's redirect handling, which is why the chain is
+    walked here in the first place. That makes this the natural place to choose
+    a route as well: the ranged GET ends at the host that will actually serve
+    the audio, so getting bytes back from it is proof the route works, and
+    getting a connect timeout or a 403 is the exact signal the proxy exists
+    for. Nothing extra is spent finding out — this request already happened.
+
+    Returns ``(resolved_url, route)``. The route is sticky for the rest of the
+    job on purpose: CDN URLs are often signed for the client that resolved
+    them, so resolving through one route and fetching through another is a way
+    to turn a working episode into a 403.
+    """
     headers = {"User-Agent": _BROWSERISH_USER_AGENT, "Accept": "*/*"}
-    try:
-        client = httpx.AsyncClient(
-            follow_redirects=True, timeout=httpx.Timeout(timeout, connect=15.0)
-        )
-        # A ranged GET is cheap and works on hosts that reject HEAD.
-        ranged = client.stream("GET", url, headers={**headers, "Range": "bytes=0-1"})
-        async with client, ranged as response:
-            return str(response.url)
-    except httpx.HTTPError as exc:
-        logger.warning("Could not resolve redirects for %s: %s", url, exc)
-        return url
+    routes = proxy.routes()
+    resolved = url
+
+    for route in routes:
+        try:
+            client = httpx.AsyncClient(
+                follow_redirects=True,
+                proxy=proxy.httpx_proxy(route),
+                timeout=httpx.Timeout(
+                    timeout, connect=proxy.connect_timeout(route, 15.0)
+                ),
+            )
+            # A ranged GET is cheap and works on hosts that reject HEAD.
+            ranged = client.stream(
+                "GET", url, headers={**headers, "Range": "bytes=0-1"}
+            )
+            async with client, ranged as response:
+                resolved = str(response.url)
+                if is_blocked_status(response.status_code) and not proxy.is_last_resort(
+                    route
+                ):
+                    logger.info(
+                        "%s refused the %s route with %d; trying another route.",
+                        httpx.URL(resolved).host,
+                        route,
+                        response.status_code,
+                    )
+                    continue
+                if route != DIRECT:
+                    logger.info("Resolved %s through the proxy.", url)
+                    proxy.mark_up()
+                return resolved, route
+        except httpx.HTTPError as exc:
+            if route != DIRECT and is_routing_failure(exc):
+                # The proxy itself, not the episode host: stop trying it for
+                # everyone rather than making each cut discover it.
+                proxy.mark_down(f"{type(exc).__name__}: {exc}")
+            # The class name matters: a bare ConnectTimeout stringifies to an
+            # empty message, and "could not resolve X:" says nothing.
+            logger.warning(
+                "Could not resolve %s over the %s route: %s",
+                url,
+                route,
+                f"{type(exc).__name__}: {exc}".rstrip(": "),
+            )
+
+    # Every route failed. Hand back what we have and let the fetch that
+    # follows produce a proper, attributable error — which is what happened
+    # before any of this existed.
+    return resolved, routes[0]
 
 
 async def cut_episode(
@@ -482,6 +553,7 @@ async def cut_episode(
     on_progress: ProgressCallback | None = None,
     metadata: dict[str, str] | None = None,
     voice: bool = False,
+    proxy: MediaProxy | None = None,
 ) -> CutResult:
     """Extract ``interval`` from ``audio_url`` into ``workdir``.
 
@@ -489,6 +561,11 @@ async def cut_episode(
     afterwards, so no temporary file can outlive the request. ``metadata``
     replaces the source's tags on the cut (see ``_cut_command``). With
     ``voice`` the result is Opus in Ogg, the only format sendVoice accepts.
+
+    ``proxy`` carries the shared breaker state and should be the bot's single
+    instance. Omitted, one is built from ``settings`` — which is inert unless
+    ``MEDIA_PROXY`` is configured, so a caller that knows nothing about proxies
+    gets exactly the behaviour it got before they existed.
     """
 
     async def status(message: str) -> None:
@@ -515,9 +592,15 @@ async def cut_episode(
 
     shrink_with = "opus" if voice else "mp3"
     workdir.mkdir(parents=True, exist_ok=True)
+    proxy = proxy if proxy is not None else MediaProxy(settings)
 
-    resolved_url = await _resolve_url(audio_url, settings.probe_timeout)
-    info = await probe(resolved_url, settings.probe_timeout)
+    resolved_url, route = await _resolve_url(
+        audio_url, settings.probe_timeout, proxy
+    )
+    # Every remote ffmpeg call in this job follows the route the resolver
+    # settled on. ``None`` when the feature is off, i.e. inherit our env.
+    remote_env = proxy.subprocess_env(route)
+    info = await probe(resolved_url, settings.probe_timeout, env=remote_env)
 
     if info.duration is not None and interval.start >= info.duration:
         raise AudioError(
@@ -536,11 +619,12 @@ async def cut_episode(
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
             metadata=metadata,
+            env=remote_env,
         )
         if reason is None:
             return await _finalize(
                 output, encode, interval, workdir, settings, status,
-                metadata, shrink_with,
+                metadata, shrink_with, route,
             )
         logger.info("Streaming cut failed (encode=%s): %s", encode, reason[:500])
 
@@ -550,7 +634,9 @@ async def cut_episode(
         "the full episode first. This can take a couple of minutes…"
     )
     local_source = workdir / "source.bin"
-    await _download(resolved_url, local_source, settings, on_progress)
+    route = await _download_with_fallback(
+        resolved_url, local_source, settings, proxy, route, on_progress
+    )
 
     local_info = await probe(local_source, settings.probe_timeout)
     if local_info.duration is not None and interval.start >= local_info.duration:
@@ -575,7 +661,7 @@ async def cut_episode(
             local_source.unlink(missing_ok=True)
             return await _finalize(
                 output, encode, interval, workdir, settings, status,
-                metadata, shrink_with,
+                metadata, shrink_with, route,
             )
         failures.append(reason)
         logger.info("Local cut failed (encode=%s): %s", encode, reason[:500])
@@ -584,6 +670,50 @@ async def cut_episode(
     detail = failures[-1] if failures else "unknown error"
     logger.error("All cut attempts failed for %s: %s", audio_url, detail[:500])
     raise UnreadableError
+
+
+async def _download_with_fallback(
+    url: str,
+    destination: Path,
+    settings: Settings,
+    proxy: MediaProxy,
+    route: str,
+    on_progress: ProgressCallback | None = None,
+) -> str:
+    """Download the episode, changing route if the host turns us away.
+
+    The resolver already picked a route that answered, so this almost always
+    downloads on the first try. It can still fail — a signed URL expiring, a
+    host that serves two bytes to a range request and refuses the whole file —
+    and when it does, the other route is worth one attempt. Only refusals and
+    unreachability are retried: a file that is too large, or a timeout while
+    processing, means nothing about where the request came from.
+
+    Returns the route that succeeded, so the caller can report it.
+    """
+    last_error: AudioError | None = None
+    for attempt in (route, *proxy.alternatives(route)):
+        try:
+            await _download(
+                url,
+                destination,
+                settings,
+                on_progress,
+                proxy_url=proxy.httpx_proxy(attempt),
+            )
+        except (BlockedError, UnreachableError) as exc:
+            last_error = exc
+            logger.info(
+                "Downloading %s over the %s route failed: %s", url, attempt, exc
+            )
+            continue
+        if attempt != route:
+            logger.info("Downloaded %s over the %s route instead.", url, attempt)
+        return attempt
+
+    # Both routes refused. Report the failure the last attempt produced, which
+    # keeps the error taxonomy — and so the journal — meaningful.
+    raise last_error if last_error is not None else UnreachableError
 
 
 async def _finalize(
@@ -595,6 +725,7 @@ async def _finalize(
     status: StatusCallback,
     metadata: dict[str, str] | None = None,
     shrink_with: str = "mp3",
+    route: str = DIRECT,
 ) -> CutResult:
     """Enforce the upload size limit, re-encoding once if that might help."""
     size = output.stat().st_size
@@ -631,4 +762,6 @@ async def _finalize(
             "Please pick a shorter interval."
         )
 
-    return CutResult(path=output, size=size, transcoded=encode is not None)
+    return CutResult(
+        path=output, size=size, transcoded=encode is not None, route=route
+    )
