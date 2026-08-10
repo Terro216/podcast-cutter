@@ -12,6 +12,10 @@ Telegram bot: https://t.me/podcast_cutter_bot
 - **Search by person or keyword** across every episode in the directory.
 - **Trending** podcasts, a **random episode**, and a **recent** list of what you
   looked at.
+- **Find the moment by what was said.** Don't know the timestamp? Ask for a
+  word or a phrase and the bot listens to the episode, finds where it comes
+  up, and opens the clip editor there. The first search on an episode takes a
+  few minutes; every one after it is instant.
 - **Pick the moment without arithmetic.** Send `12:30` for a clip starting
   there, or `12:30-14:00` for an exact range, then nudge it with `◀ −15s` /
   `+1m ▶` buttons until it's right. Length presets are one tap.
@@ -184,6 +188,45 @@ ignore them and render the default style, so they are decoration, never meaning.
 The output container follows the source codec (AAC lands in `.m4a`, not `.mp3`),
 and the result is verified with ffprobe before being sent, because ffmpeg can
 exit successfully having written an unplayable fragment.
+
+### How searching inside an episode works
+
+An episode is transcribed once, on the first search anyone makes against it,
+and the result is stored. What is stored is keyed on the **SHA-256 of the audio
+that was actually fetched**, not on the episode id: feeds insert advertisements
+dynamically, so the same episode can serve different bytes next month, and
+timestamps taken against the old ones would cut an advert.
+
+Recognition is `faster-whisper` on the CPU. `base` was measured on this host at
+RTF 0.07–0.09 — a 50-minute episode in under five minutes — against `small`'s
+0.23, for a difference that rarely changes which moment a search lands on. The
+transcript exists to *locate* a moment; what comes back is the audio itself.
+
+Whisper invents text on silence and music, usually as repetition, and an
+invention is indistinguishable from speech once it is in an index. Each
+recognised span therefore carries its own metrics, one suspicious signal
+demotes it and two independent ones drop it from the index, and nothing is
+deleted — a quarantine decision has to be reviewable.
+
+Search runs over 30-second windows at a 15-second stride, so a phrase spanning
+two spoken sentences still lands whole inside one window; overlapping hits are
+collapsed before three answers are shown, or the three would be one moment
+listed three times. The clip opens on the matched word's own timestamp, padded
+back two seconds, because word timings are not editing-grade.
+
+**Russian needs lemmatisation, and this is not theoretical.** On a real episode
+about neural networks the recogniser wrote «нейросетей» and never once the
+exact form «нейросети», and FTS5 matches a token literally — so searching the
+episode's own subject returned nothing. Windows are therefore indexed twice,
+as surface forms and as `pymorphy3` lemmas, and a query tries the lemmas first.
+The surface index stays behind it because pymorphy3 *guesses* at words it does
+not know rather than leaving them alone, and an exact phrase should not depend
+on a dictionary agreeing with it.
+
+Transcription is minutes of CPU where a cut is seconds. `ASR_ENABLED=false`
+switches it off without stopping the bot, `cpuset` in `docker-compose.yml` pins
+it to physical cores of one socket, and everyone asking about the same episode
+shares one job rather than starting another.
 
 ### Where an episode URL is allowed to point
 

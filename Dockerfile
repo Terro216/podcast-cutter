@@ -39,7 +39,17 @@ COPY main.py ./
 # the ownership of its mount point when it is first created, and without this
 # the unprivileged user cannot write to it.
 ENV WORK_DIR=/var/tmp/podcast-cutter \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    # Recognition models live on the volume, not in a layer: they are an order
+    # of magnitude larger than everything else here, and baking them in means
+    # re-shipping them for every one-line change. HF_HOME points the download
+    # cache at the same place so a redeploy does not refetch them either.
+    HF_HOME=/data/models \
+    # These libraries size their thread pools from the host's core count, which
+    # on a 32-thread shared machine means two transcriptions can oversubscribe
+    # it between them. cpu_threads in the recogniser is the real control; this
+    # stops the layers underneath from disagreeing with it.
+    OMP_NUM_THREADS=8
 RUN useradd --create-home --uid 10001 bot \
     && mkdir -p "$WORK_DIR" "$DATA_DIR/logs" \
     && chown -R bot:bot "$WORK_DIR" "$DATA_DIR" /app

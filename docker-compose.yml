@@ -13,6 +13,15 @@ services:
       - podcast-data:/data
     environment:
       DATA_DIR: /data
+    # Transcription is the only thing here that can take a machine. This host
+    # is shared and dual-socket, and `--cpus`-style quotas let threads wander
+    # between sockets and onto SMT siblings of cores already in use; pinning to
+    # physical cores of one socket keeps the work local to one memory node and
+    # leaves the rest of the machine alone. Adjust to the host: `lscpu -e` says
+    # which CPUs are which, and these must be *physical* cores, not siblings.
+    # Checked on big-one: 0-7 are cores 0-7 of socket 0 on node 0, and their
+    # siblings are 16-23. Keep ASR_THREADS equal to the width of this set.
+    cpuset: "0-7"
     logging:
       driver: "json-file"
       options:

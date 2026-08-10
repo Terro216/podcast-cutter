@@ -36,6 +36,7 @@ from .api import Episode, PodcastIndexClient
 from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
 from .errors import NotFoundError, PodcastCutterError
+from .indexer import Indexer, TranscriptionDisabled
 from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
@@ -84,6 +85,19 @@ INLINE_EMPTY_CACHE_SECONDS = 5
 #: Minimum gap between progress edits. Telegram throttles aggressive editing,
 #: and a bar that moves more often than this is noise, not information.
 PROGRESS_INTERVAL = 3.0
+
+#: What each stage of a first-time transcription is called for the person
+#: waiting on it. Three edits over several minutes, so each one has to say
+#: something that was not already obvious — "still working" is not progress.
+_LISTENING_STAGES = {
+    "download": "⬇️ Fetching the episode…",
+    "decode": "🔧 Preparing the audio…",
+    "transcribe": (
+        "🎧 Listening to the episode…\n\n"
+        "<i>This is the slow part, and it happens once per episode — "
+        "every later search on it is instant.</i>"
+    ),
+}
 
 GENERIC_ERROR = "Something went wrong on my side. Please try again."
 
@@ -182,10 +196,14 @@ class PodcastCutterBot:
         settings: Settings,
         client: PodcastIndexClient,
         store: Store | None = None,
+        indexer: Indexer | None = None,
     ) -> None:
         self.settings = settings
         self.client = client
         self.store = store
+        #: Absent when transcription is switched off or unavailable, in which
+        #: case the bot behaves exactly as it did before searching existed.
+        self.indexer = indexer
         self.bot_username = ""
         #: Shared by every cut: the breaker state is the point, so one cut
         #: discovering a dead proxy spares the rest the same wait.
@@ -242,6 +260,10 @@ class PodcastCutterBot:
             return screens.trending(session, self.settings)
         if screen is Screen.RECENT:
             return screens.recent(session, self.settings)
+        if screen is Screen.ASK_PHRASE:
+            return screens.ask_phrase(session, session.episode_transcribed)
+        if screen is Screen.MOMENTS:
+            return screens.moments(session)
         if screen is Screen.INTERVAL:
             return screens.interval(session, self.settings)
         if screen is Screen.RESULT:
@@ -537,6 +559,119 @@ class PodcastCutterBot:
         await self.render(update, session)
 
     # ------------------------------------------------------------------
+    # Searching inside an episode
+    # ------------------------------------------------------------------
+
+    async def act_ask_phrase(self, update: Update, session: Session) -> None:
+        """Open the search screen, having found out what it may promise."""
+        if self.indexer is None:
+            raise TranscriptionDisabled
+        if session.episode is None:
+            await self._stale(update, session)
+            return
+
+        transcript = await self.indexer.store.transcript_for_episode(
+            session.episode.id
+        )
+        session.episode_transcribed = transcript is not None
+        session.awaiting = Awaiting.PHRASE
+        session.go(Screen.ASK_PHRASE)
+        await self.render(update, session)
+
+    async def _search_phrase(
+        self, update: Update, session: Session, phrase: str
+    ) -> None:
+        """Transcribe if necessary, then answer.
+
+        The first search on an episode is minutes of work, so it runs under the
+        same one-heavy-job-per-user rule as cutting, reports progress, and — if
+        someone else is already listening to this episode — joins their job
+        rather than starting a second one.
+        """
+        if self.indexer is None or session.episode is None:
+            await self._stale(update, session)
+            return
+
+        session.phrase = phrase
+        user_id = update.effective_user.id if update.effective_user else 0
+        episode = session.episode
+
+        if user_id in self._busy_users:
+            await self._show_failure(
+                update,
+                session,
+                "One job at a time, please — this one is still running.",
+            )
+            return
+
+        progress = StatusEditor(
+            await update.effective_message.reply_text(
+                "🎧 Getting ready to listen…", parse_mode="HTML"
+            )
+        )
+
+        async def on_progress(stage) -> None:
+            await progress.set(
+                _LISTENING_STAGES.get(stage.stage, "🎧 Working…"), force=True
+            )
+
+        started = time.monotonic()
+        outcome = "ok"
+        self._busy_users.add(user_id)
+        job_dir = self.settings.work_dir / f"asr-{episode.id}"
+        try:
+            async with self._job_slots:
+                transcript = await self.indexer.transcript_id(
+                    episode.id,
+                    episode.enclosure_url,
+                    job_dir,
+                    on_progress,
+                    meta={
+                        "episode_title": episode.title,
+                        "feed_title": episode.feed_title,
+                    },
+                )
+            session.moments = await self.indexer.search(transcript, phrase)
+            if not session.moments:
+                outcome = "empty"
+        except PodcastCutterError as exc:
+            outcome = getattr(exc, "code", "error")
+            with contextlib.suppress(TelegramError):
+                await progress.message.delete()
+            await self._show_failure(update, session, exc.user_message)
+            return
+        finally:
+            self._busy_users.discard(user_id)
+            shutil.rmtree(job_dir, ignore_errors=True)
+            await self._log(
+                update,
+                "search_audio",
+                outcome=outcome,
+                episode_id=episode.id,
+                feed_title=episode.feed_title,
+                episode_title=episode.title,
+                detail=phrase[:100],
+                ms=int((time.monotonic() - started) * 1000),
+            )
+
+        session.awaiting = Awaiting.NOTHING
+        session.go(Screen.MOMENTS)
+        await progress.show(self.view_for(session))
+
+    async def _open_moment(
+        self, update: Update, session: Session, start: int
+    ) -> None:
+        """A found moment becomes an ordinary clip, in the ordinary editor."""
+        if session.episode is None:
+            await self._stale(update, session)
+            return
+        session.set_clip(start, session.clip_length)
+        session.clamp()
+        session.awaiting = Awaiting.INTERVAL
+        session.go(Screen.INTERVAL)
+        await self.render(update, session)
+
+    # ------------------------------------------------------------------
     # Text router
     # ------------------------------------------------------------------
 
@@ -560,6 +695,10 @@ class PodcastCutterBot:
 
             if session.awaiting is Awaiting.PERSON:
                 await self._search_people(update, session, text)
+                return
+
+            if session.awaiting is Awaiting.PHRASE:
+                await self._search_phrase(update, session, text)
                 return
 
             screen = session.current.screen if session.current else Screen.MENU
@@ -713,6 +852,16 @@ class PodcastCutterBot:
                 session.move_clip(int(value))
             await self._start_cut(update, session)
             return
+
+        # --- searching inside the episode ---------------------------------
+        if data == kb.ACTION_FIND:
+            await self.act_ask_phrase(update, session)
+            return
+
+        if prefix == kb.MOMENT_PREFIX:
+            with contextlib.suppress(ValueError):
+                await self._open_moment(update, session, int(value))
+                return
 
         if data == kb.ACTION_NEW_CLIP:
             if session.episode is None:

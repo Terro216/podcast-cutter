@@ -11,11 +11,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from podcast_cutter import indexer as indexer_mod
 from podcast_cutter.api import Episode, Feed
 from podcast_cutter.config import Settings
 from podcast_cutter.errors import NotFoundError
 from podcast_cutter.handlers import PodcastCutterBot
+from podcast_cutter.indexer import Indexer
 from podcast_cutter.store import Store
+from podcast_cutter.transcripts import Utterance, Word
 
 
 def make_feed(feed_id: str = "1", title: str | None = None) -> Feed:
@@ -43,12 +46,19 @@ class FakeMessage:
         self.text = text
         self.replies: list[tuple[str, dict]] = []
         self.edits: list[tuple[str, dict]] = []
+        #: Messages sent in reply to this one, in order.
+        self.children: list[FakeMessage] = []
         self.sent_audio: dict | None = None
         self.sent_voice: dict | None = None
 
     async def reply_text(self, text, **kwargs):
         self.replies.append((text, kwargs))
-        return FakeMessage(text)
+        # Kept, not discarded: a progress message is a *new* message that the
+        # bot then edits in place, so anything a job finally shows the user
+        # lands here rather than on the message that started it.
+        child = FakeMessage(text)
+        self.children.append(child)
+        return child
 
     async def edit_text(self, text, **kwargs):
         self.edits.append((text, kwargs))
@@ -242,9 +252,60 @@ def store(tmp_path) -> Store:
     instance.close()
 
 
+class FakeRecognizer:
+    """Returns fixed speech, so routing can be tested without a model."""
+
+    backend = "fake"
+    model = "test"
+
+    def __init__(self, utterances=None):
+        self.utterances = utterances if utterances is not None else [
+            Utterance(
+                start=120,
+                end=130,
+                text="и вот тут мы говорим про фолдинг белков",
+                words=(Word(start=122.0, end=122.8, text="фолдинг"),),
+            )
+        ]
+        self.calls = 0
+
+    async def transcribe(self, path, language=None):
+        self.calls += 1
+        return list(self.utterances), "ru"
+
+
 @pytest.fixture
-def bot(settings, client, store) -> PodcastCutterBot:
-    instance = PodcastCutterBot(settings, client, store)
+def indexer(settings, store, monkeypatch, tmp_path) -> Indexer:
+    """A real Indexer with the network, ffmpeg and the model replaced.
+
+    Real, rather than a stub, because the routing tests are worth little if
+    they exercise a different object than production does.
+    """
+    async def fake_resolve(url, timeout, proxy, allow_private=False):
+        return url, "direct"
+
+    async def fake_download(url, destination, settings, proxy, route,
+                            on_progress=None):
+        destination.write_bytes(b"pretend audio")
+        return route
+
+    async def fake_probe(source, timeout, env=None):
+        return SimpleNamespace(codec="mp3", duration=3600)
+
+    async def fake_decode(source, output, timeout):
+        output.write_bytes(b"wav")
+
+    monkeypatch.setattr(indexer_mod, "_resolve_url", fake_resolve)
+    monkeypatch.setattr(indexer_mod, "_download_with_fallback", fake_download)
+    monkeypatch.setattr(indexer_mod, "probe", fake_probe)
+    monkeypatch.setattr(indexer_mod, "_decode_for_asr", fake_decode)
+
+    return Indexer(settings, store, FakeRecognizer())
+
+
+@pytest.fixture
+def bot(settings, client, store, indexer) -> PodcastCutterBot:
+    instance = PodcastCutterBot(settings, client, store, indexer)
     instance.bot_username = "podcast_cutter_bot"
     return instance
 

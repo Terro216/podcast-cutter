@@ -48,7 +48,8 @@ def breadcrumb(session: Session) -> str:
         parts.append("🔥 Trending")
     elif screen is Screen.RECENT:
         parts.append("🕘 Recent")
-    elif screen in (Screen.INTERVAL, Screen.RESULT):
+    elif screen in (Screen.INTERVAL, Screen.RESULT, Screen.ASK_PHRASE,
+                    Screen.MOMENTS):
         # Show where the episode came from, so the trail stays meaningful
         # after a deep link too.
         if session.feed:
@@ -254,7 +255,68 @@ def interval(session: Session, settings: Settings) -> View:
             session.clip_length,
             max_length=settings.max_cut_seconds,
             as_voice=session.as_voice,
+            can_search=settings.asr_enabled,
         ),
+    )
+
+
+def ask_phrase(session: Session, transcribed: bool) -> View:
+    """Asking what to look for inside this episode.
+
+    Whether the episode has been listened to already changes what is honest to
+    promise, so it changes the text: the first search on an episode costs
+    minutes, and a user who is not told that will assume the bot has hung.
+    """
+    episode = session.episode
+    heading = f"{_episode_heading(episode)}\n\n" if episode else ""
+
+    if transcribed:
+        promise = "This episode is already transcribed, so this is instant."
+    else:
+        promise = (
+            "⏳ Nobody has searched this episode yet, so I'll listen to it "
+            "first. That takes a few minutes — you'll see progress, and it "
+            "only happens once per episode."
+        )
+
+    return View(
+        breadcrumb(session)
+        + heading
+        + "🔎 <b>What was said?</b>\n\n"
+        "Send a word or a phrase and I'll find where it comes up.\n\n"
+        + promise,
+        kb.cancel_keyboard(),
+    )
+
+
+def moments(session: Session) -> View:
+    """What a search found, or a clear statement that it found nothing."""
+    episode = session.episode
+    heading = f"{_episode_heading(episode)}\n\n" if episode else ""
+    asked = esc(truncate(session.phrase, 60))
+
+    if not session.moments:
+        # Said plainly and without a suggestion to try synonyms, because the
+        # usual cause is that the words really were not spoken — and the second
+        # most usual is that they were spoken and misheard, which no rephrasing
+        # of the same query will fix either.
+        return View(
+            breadcrumb(session)
+            + heading
+            + f"🔎 <b>“{asked}”</b>\n\n"
+            "Nothing in this episode matches that.\n\n"
+            "It may not have been said — or it was said and misheard: "
+            "transcription is imperfect on names and jargon.",
+            kb.moments_keyboard([], session.phrase),
+        )
+
+    return View(
+        breadcrumb(session)
+        + heading
+        + f"🔎 <b>“{asked}”</b> — {len(session.moments)} "
+        f"{'moment' if len(session.moments) == 1 else 'moments'}\n\n"
+        "Tap one to open the clip editor there.",
+        kb.moments_keyboard(session.moments, session.phrase),
     )
 
 

@@ -589,13 +589,42 @@ Two things worth keeping in mind, both learned rather than assumed:
   entity recall the baskets need to measure — the answer is a metric, not a
   bigger model chosen blind.
 
+### Wired into the bot
+
+Two screens: one asking what to look for, one showing what was found. The
+clip editor grew a `🔎 Find a moment by what was said` button, hidden entirely
+when `ASR_ENABLED` is off, and a found moment opens that same editor at its
+timestamp — so everything already built for adjusting and cutting applies
+without a second path through the code.
+
+Decisions that were not obvious:
+
+- **The waiting screen tells the truth about which case it is in.** A first
+  search costs minutes and every later one is instant, so the screen checks
+  before promising, and the progress message names the stage rather than
+  repeating "still working". A user not told that the first search is slow
+  assumes the bot has hung, and taps again.
+- **A moment button carries its timestamp, not a list index.** Buttons outlive
+  sessions; an index into a list that no longer exists is a wrong answer, where
+  a timestamp is still correct on a message scrolled past days ago.
+- **An empty answer is a screen, not an error.** It says the words may not have
+  been spoken *or* may have been misheard, and it still offers a way on. It is
+  also journalled as `empty` rather than `ok`, or the panel could not tell a
+  working search from a useless one.
+- **No recogniser is not a stopped bot.** If the library is missing or fails to
+  load, the indexer is simply absent and everything that worked before still
+  works.
+
+Deployment: `HF_HOME` puts model downloads on the `/data` volume so a redeploy
+does not refetch them, and `cpuset: "0-7"` pins the container to physical cores
+of one socket — verified against `lscpu -e` on big-one, where 0–7 are cores 0–7
+of socket 0 and their siblings are 16–23.
+
 ### Still to do in this step
 
-- Wire it into the bot: a "find the moment" screen, progress while a first
-  transcription runs, and results that open the existing clip editor.
-- `faster-whisper` and `pymorphy3` into the image; model on the `/data` volume,
-  and `cpuset` pinning in compose.
 - English morphology. `unicode61` finds `protein` but does not connect it to
   `proteins`, and pymorphy3 is a Russian dictionary. FTS5 has `porter`, but a
   tokenizer is per table, so this is another column or another table. Left
   until the baskets say how much it actually costs.
+- Deploy, which means a much larger image: faster-whisper pulls ctranslate2,
+  onnxruntime, av, tokenizers and numpy.

@@ -25,9 +25,11 @@ from telegram.ext import (
 )
 
 from .api import PodcastIndexClient
+from .asr import build_recognizer
 from .audio import ensure_ffmpeg_available
 from .config import Settings, load_settings
 from .handlers import PodcastCutterBot
+from .indexer import Indexer
 from .states import Screen
 from .store import Event, Store
 
@@ -242,12 +244,38 @@ def register_handlers(application: Application, bot: PodcastCutterBot) -> None:
     application.add_error_handler(bot.on_error)
 
 
+def build_indexer(settings: Settings, store: Store) -> Indexer | None:
+    """The transcription pipeline, or ``None`` if it cannot run here.
+
+    A missing recognition library must not stop the bot: everything the bot did
+    before searching existed still works, and the alternative — refusing to
+    start — turns an optional feature into a single point of failure.
+    """
+    if not settings.asr_enabled:
+        logger.info("Transcription is disabled (ASR_ENABLED); search is off.")
+        return None
+    try:
+        recognizer = build_recognizer(settings)
+    except Exception:
+        logger.exception("Could not set up speech recognition; search is off.")
+        return None
+
+    settings.asr_model_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Transcription ready: %s/%s, models in %s",
+        settings.asr_backend,
+        settings.asr_model,
+        settings.asr_model_dir,
+    )
+    return Indexer(settings, store, recognizer)
+
+
 def build_application(settings: Settings, store: Store | None = None) -> Application:
     client = PodcastIndexClient(settings)
     if store is None:
         store = Store(settings.database_path)
         store.connect()
-    bot = PodcastCutterBot(settings, client, store)
+    bot = PodcastCutterBot(settings, client, store, build_indexer(settings, store))
 
     application = (
         ApplicationBuilder()

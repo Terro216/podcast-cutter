@@ -45,6 +45,8 @@ class Screen(Enum):
     RECENT = auto()
     INTERVAL = auto()
     RESULT = auto()
+    ASK_PHRASE = auto()
+    MOMENTS = auto()
 
 
 class Awaiting(Enum):
@@ -54,6 +56,7 @@ class Awaiting(Enum):
     PODCAST_NAME = auto()
     PERSON = auto()
     INTERVAL = auto()
+    PHRASE = auto()
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,19 @@ class Session:
     clip_start: int = 0
     clip_length: int = 60
     as_voice: bool = False
+
+    # -- searching inside an episode ---------------------------------------
+    #: The phrase last looked for, kept so the results screen can say what it
+    #: answered and so a failed search can be retried without retyping.
+    phrase: str = ""
+    #: Moments from the last search. Not persisted: they are derived from a
+    #: transcript that outlives the session, so a stale one costs a re-search
+    #: rather than a re-transcription.
+    moments: list = field(default_factory=list)
+    #: Whether this episode has already been listened to. Read once, when the
+    #: search screen opens, because the screen has to promise either "instant"
+    #: or "a few minutes" and rendering is not the place to query a database.
+    episode_transcribed: bool = False
 
     # ------------------------------------------------------------------
     # Navigation

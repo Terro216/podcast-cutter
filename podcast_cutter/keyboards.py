@@ -88,6 +88,12 @@ ACTION_CUT = "act:cut"
 ACTION_RETRY = "act:retry"
 ACTION_TOGGLE_VOICE = "act:voice"
 ACTION_NEW_CLIP = "act:new"
+ACTION_FIND = "act:find"
+
+#: A found moment, carried as its start in seconds rather than an index into a
+#: list: the list lives in a session, and a button on a scrolled-past message
+#: outlives it.
+MOMENT_PREFIX = "at"
 
 
 def parse_callback(data: str | None) -> tuple[str, str]:
@@ -211,7 +217,7 @@ def _move_label(delta: int) -> str:
 
 
 def interval_keyboard(
-    length: int, *, max_length: int, as_voice: bool
+    length: int, *, max_length: int, as_voice: bool, can_search: bool = False
 ) -> InlineKeyboardMarkup:
     """The clip editor: pick a length, slide the window, then cut."""
     presets = [
@@ -241,6 +247,32 @@ def interval_keyboard(
         ]
     )
     rows.append([_button("✂️ Cut it", ACTION_CUT, STYLE_PRIMARY)])
+    if can_search:
+        rows.append([_button("🔎 Find a moment by what was said", ACTION_FIND)])
+    rows.append(footer_row())
+    return InlineKeyboardMarkup(rows)
+
+
+def moments_keyboard(moments: Sequence, phrase: str) -> InlineKeyboardMarkup:
+    """The answers to a search, each opening the clip editor where it starts.
+
+    Labelled by timestamp *and* a fragment of what was said there, because
+    three bare timestamps ask the user to guess which one they meant.
+    """
+    rows = [
+        [
+            _button(
+                button_label(
+                    format_duration(int(moment.clip_start)),
+                    moment.text,
+                    limit=56,
+                ),
+                f"{MOMENT_PREFIX}:{int(moment.clip_start)}",
+            )
+        ]
+        for moment in moments
+    ]
+    rows.append([_button("🔎 Search again", ACTION_FIND)])
     rows.append(footer_row())
     return InlineKeyboardMarkup(rows)
 
