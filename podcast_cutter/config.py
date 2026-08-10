@@ -39,6 +39,12 @@ PROXY_MODES = (PROXY_MODE_FALLBACK, PROXY_MODE_ALWAYS, PROXY_MODE_OFF)
 #: exists for, so proving *it* answers is worth more than a generic target.
 DEFAULT_PROXY_PROBE_URL = "https://traffic.megaphone.fm/"
 
+#: ``ASR_BACKEND`` values. Only the local one exists so far; the name is
+#: validated at startup anyway, because a typo should stop the bot rather than
+#: surface as a failure on somebody's first search.
+ASR_BACKEND_LOCAL = "local"
+ASR_BACKENDS = (ASR_BACKEND_LOCAL,)
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -84,6 +90,21 @@ class Settings:
     # --- concurrency ------------------------------------------------------
     #: Simultaneous cutting jobs across the whole bot. ffmpeg is the bottleneck.
     max_concurrent_jobs: int = 2
+
+    # --- speech recognition -----------------------------------------------
+    #: The kill switch. Transcription is minutes of CPU where a cut is seconds,
+    #: so it must be possible to stop it without stopping the bot.
+    asr_enabled: bool = True
+    asr_backend: str = "local"
+    #: ``base`` measured at RTF 0.07 on this host against ``small``'s 0.23, for
+    #: a difference that rarely changes which moment a search lands on.
+    asr_model: str = "base"
+    #: Scaling past this is poor on the production host — 4 to 8 threads bought
+    #: only ~1.5x — so the default buys most of it without taking the machine.
+    asr_threads: int = 8
+    #: Whole episodes are decoded, so this is generous by necessity: six hours
+    #: of audio at RTF 0.07 is roughly half an hour of work.
+    transcribe_timeout: float = 3600.0
 
     #: Scratch space for temporary audio. One subdirectory per job.
     work_dir: Path = field(default_factory=lambda: Path("/tmp/podcast-cutter"))
@@ -136,6 +157,16 @@ class Settings:
     def log_path(self) -> Path:
         return self.data_dir / "logs" / "bot.log"
 
+    @property
+    def asr_model_dir(self) -> Path:
+        """Where recognition models live.
+
+        On the mounted volume rather than in the image: the weights are an
+        order of magnitude larger than everything else in the build, and baking
+        them in means re-shipping them on every redeploy of a one-line change.
+        """
+        return self.data_dir / "models"
+
     def is_admin(self, user_id: int | None) -> bool:
         return user_id is not None and user_id in self.admin_ids
 
@@ -153,6 +184,13 @@ class Settings:
             raise ConfigError("MAX_CONCURRENT_JOBS must be at least 1.")
         if self.log_retention_days < 0:
             raise ConfigError("LOG_RETENTION_DAYS cannot be negative.")
+        if self.asr_backend not in ASR_BACKENDS:
+            raise ConfigError(
+                f"ASR_BACKEND must be one of {', '.join(ASR_BACKENDS)}, "
+                f"got {self.asr_backend!r}."
+            )
+        if self.asr_threads < 1:
+            raise ConfigError("ASR_THREADS must be at least 1.")
         if self.media_proxy_mode not in PROXY_MODES:
             raise ConfigError(
                 f"MEDIA_PROXY_MODE must be one of {', '.join(PROXY_MODES)}, "
@@ -219,6 +257,20 @@ def _non_negative_int(name: str, default: int) -> int:
     return value
 
 
+def _flag(name: str, default: bool) -> bool:
+    """Parse a boolean the way people actually write them in a ``.env``."""
+    raw = _env(name).lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(
+        f"{name} must be true or false, got {raw!r}."
+    )
+
+
 def _id_set(name: str) -> frozenset[int]:
     """Parse a comma- or space-separated list of Telegram user ids."""
     raw = _env(name)
@@ -268,6 +320,10 @@ def load_settings() -> Settings:
             "LOG_RETENTION_DAYS", Settings.log_retention_days
         ),
         admin_ids=_id_set("ADMIN_IDS"),
+        asr_enabled=_flag("ASR_ENABLED", Settings.asr_enabled),
+        asr_backend=(_env("ASR_BACKEND") or Settings.asr_backend).lower(),
+        asr_model=_env("ASR_MODEL") or Settings.asr_model,
+        asr_threads=_positive_int("ASR_THREADS", Settings.asr_threads),
         media_proxy=_env("MEDIA_PROXY").rstrip("/"),
         media_proxy_mode=(
             _env("MEDIA_PROXY_MODE") or Settings.media_proxy_mode

@@ -45,6 +45,10 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `PODCAST_API_BASEURL` | no       | Defaults to the public Podcast Index API |
 | `MAX_CUT_SECONDS`     | no       | Longest interval a user may request (900)|
 | `MAX_SOURCE_SECONDS`  | no       | Longest episode opened at all (21600)    |
+| `ASR_ENABLED`         | no       | Kill switch for transcription (true)     |
+| `ASR_BACKEND`         | no       | Recognition backend (`local`)            |
+| `ASR_MODEL`           | no       | Whisper model size (`base`)              |
+| `ASR_THREADS`         | no       | CPU threads for recognition (8)          |
 | `MAX_CONCURRENT_JOBS` | no       | Simultaneous ffmpeg jobs (2)             |
 | `WORK_DIR`            | no       | Scratch space for in-flight cuts         |
 | `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|

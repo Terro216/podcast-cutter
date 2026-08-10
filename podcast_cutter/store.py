@@ -19,6 +19,8 @@ their clip, so failures are logged and swallowed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import sqlite3
 import threading
@@ -28,11 +30,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .api import Episode
+from .transcripts import (
+    NORMALIZER_VERSION,
+    Moment,
+    TranscriptBuild,
+    Utterance,
+    Word,
+    is_indexable,
+    lemmatize,
+    normalize,
+)
 
 logger = logging.getLogger(__name__)
 
 #: Bumped when the schema changes; see ``_migrate``.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -65,7 +77,143 @@ CREATE TABLE IF NOT EXISTS recents (
     PRIMARY KEY (user_id, episode_id)
 );
 CREATE INDEX IF NOT EXISTS recents_user_at ON recents (user_id, at DESC);
+
+-- Transcripts.
+--
+-- Keyed on the SHA-256 of the bytes actually fetched, not on the episode id.
+-- Podcasts insert advertisements dynamically, so the same episode can serve
+-- different audio next month while keeping its id; timestamps taken against
+-- the old bytes would then cut an advert or the middle of a sentence. When the
+-- hash does not match, the transcript is not stale, it is wrong.
+--
+-- The recognising model and the chunker are part of the key for the same
+-- reason: two rows produced by different rules are not interchangeable, and
+-- keeping both is what makes a re-index a comparison rather than a leap.
+CREATE TABLE IF NOT EXISTS transcripts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id      TEXT    NOT NULL,
+    episode_title   TEXT,
+    feed_title      TEXT,
+    source_url      TEXT    NOT NULL,
+    source_sha256   TEXT    NOT NULL,
+    source_bytes    INTEGER,
+    duration_s      INTEGER,
+    language        TEXT,
+    asr_backend     TEXT    NOT NULL,
+    asr_model       TEXT    NOT NULL,
+    chunker_version INTEGER NOT NULL,
+    normalizer_version INTEGER NOT NULL,
+    quarantined     INTEGER NOT NULL DEFAULT 0,
+    ms              INTEGER,
+    at              REAL    NOT NULL,
+    UNIQUE (source_sha256, asr_backend, asr_model, chunker_version)
+);
+CREATE INDEX IF NOT EXISTS transcripts_episode ON transcripts (episode_id, at DESC);
+
+-- What the recogniser actually said, with word timings kept as JSON so a clip
+-- can start on the word that matched rather than on a window boundary. This is
+-- the source of truth; windows below are derived and disposable.
+CREATE TABLE IF NOT EXISTS utterances (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL REFERENCES transcripts (id) ON DELETE CASCADE,
+    start_ms      INTEGER NOT NULL,
+    end_ms        INTEGER NOT NULL,
+    text          TEXT    NOT NULL,
+    words_json    TEXT,
+    avg_logprob   REAL,
+    no_speech_prob REAL,
+    compression_ratio REAL,
+    signals       TEXT,
+    indexable     INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS utterances_transcript
+    ON utterances (transcript_id, start_ms);
+
+-- The search units: overlapping windows of about thirty seconds.
+CREATE TABLE IF NOT EXISTS windows (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL REFERENCES transcripts (id) ON DELETE CASCADE,
+    start_ms      INTEGER NOT NULL,
+    end_ms        INTEGER NOT NULL,
+    text          TEXT    NOT NULL,
+    text_normalized TEXT  NOT NULL,
+    text_lemmas   TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS windows_transcript ON windows (transcript_id, start_ms);
+
+-- Two indexed columns because they answer different questions. `unicode61`
+-- matches a token literally and none of the built-in tokenizers know Russian,
+-- so the surface form alone cannot find «нейросетей» from «нейросети» — the
+-- lemma column exists for exactly that, and it is not theoretical: on a real
+-- episode the recogniser wrote «нейросетей» four times and «нейросети» never.
+-- The surface column stays because lemmatisation guesses, and an exact phrase
+-- should not depend on a dictionary agreeing with it.
+CREATE VIRTUAL TABLE IF NOT EXISTS windows_fts USING fts5 (
+    text_normalized,
+    text_lemmas,
+    content='windows',
+    content_rowid='id',
+    tokenize='unicode61'
+);
+
+-- External content means FTS5 holds no copy of the text, so it has to be told
+-- about every change or queries silently return rows that no longer exist.
+CREATE TRIGGER IF NOT EXISTS windows_ai AFTER INSERT ON windows BEGIN
+    INSERT INTO windows_fts (rowid, text_normalized, text_lemmas)
+    VALUES (new.id, new.text_normalized, new.text_lemmas);
+END;
+CREATE TRIGGER IF NOT EXISTS windows_ad AFTER DELETE ON windows BEGIN
+    INSERT INTO windows_fts (windows_fts, rowid, text_normalized, text_lemmas)
+    VALUES ('delete', old.id, old.text_normalized, old.text_lemmas);
+END;
+CREATE TRIGGER IF NOT EXISTS windows_au AFTER UPDATE ON windows BEGIN
+    INSERT INTO windows_fts (windows_fts, rowid, text_normalized, text_lemmas)
+    VALUES ('delete', old.id, old.text_normalized, old.text_lemmas);
+    INSERT INTO windows_fts (rowid, text_normalized, text_lemmas)
+    VALUES (new.id, new.text_normalized, new.text_lemmas);
+END;
 """
+
+#: Tables that only ever held derived data, and are therefore safe to rebuild
+#: rather than migrate. Ordered so a drop never leaves a dangling reference.
+_DERIVED_TABLES = ("windows_fts", "windows", "utterances", "transcripts")
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptKey:
+    """What makes two transcripts the same transcript.
+
+    The episode id is carried for lookup but is not part of the identity: the
+    bytes are. An episode that re-serves itself with a different advertisement
+    is different audio, and timestamps from the old one point at the wrong
+    words.
+    """
+
+    episode_id: str
+    source_sha256: str
+    asr_backend: str
+    asr_model: str
+    chunker_version: int
+
+
+def _fts_query(raw: str, column: str) -> str:
+    """Turn what a person typed into something FTS5 will accept.
+
+    Users type apostrophes, quotes and stray punctuation, all of which are
+    operators to FTS5 — an unescaped one is a syntax error rather than a
+    search. Each word becomes its own quoted term, so the query means "these
+    words", and nothing a user can type is an operator.
+
+    Scoped to one column, because the two indexed columns hold different
+    renderings of the same text and matching a surface form against lemmas
+    would be luck rather than search.
+    """
+    prepared = lemmatize(raw) if column == "text_lemmas" else normalize(raw)
+    words = prepared.split()
+    if not words:
+        return ""
+    terms = " ".join(f'"{word}"' for word in words)
+    return f"{column} : ({terms})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +288,9 @@ class Store:
         # WAL survives an unclean shutdown and lets reads proceed during writes.
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
+        # Off by default in SQLite, and without it the ON DELETE CASCADE that
+        # ties utterances and windows to their transcript does nothing at all.
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.executescript(_SCHEMA)
         self._migrate(connection)
         connection.commit()
@@ -150,8 +301,13 @@ class Store:
     def _migrate(connection: sqlite3.Connection) -> None:
         """Bring an existing file up to :data:`SCHEMA_VERSION`.
 
-        Nothing to do yet — the tables are created ``IF NOT EXISTS``. The hook
-        exists so the first real migration has an obvious home.
+        The journal and the recent list are migrated properly if they ever
+        change shape, because they hold the only things here that cannot be
+        recreated. Transcripts are different: every row in them is derived from
+        audio we can fetch again, so a shape change rebuilds them rather than
+        rewriting them. That is the cheaper *and* the safer choice — a
+        half-converted index answers questions wrongly, where a missing one
+        just transcribes again.
         """
         current = connection.execute("PRAGMA user_version").fetchone()[0]
         if current == SCHEMA_VERSION:
@@ -163,6 +319,15 @@ class Store:
                 SCHEMA_VERSION,
             )
             return
+
+        if 0 < current < 3:
+            # Version 3 gave windows a lemma column, without which Russian
+            # searches only match the exact form that was spoken.
+            logger.info("Rebuilding transcript tables for schema %s", SCHEMA_VERSION)
+            for table in _DERIVED_TABLES:
+                connection.execute(f"DROP TABLE IF EXISTS {table}")
+            connection.executescript(_SCHEMA)
+
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -242,6 +407,228 @@ class Store:
             await self._run("DELETE FROM events WHERE at < ?", (cutoff,))
             return int(counted[0]["n"])
         return len(rows)
+
+    # ------------------------------------------------------------------
+    # Transcripts
+    # ------------------------------------------------------------------
+
+    async def find_transcript(self, key: TranscriptKey) -> int | None:
+        """The id of a usable transcript for exactly these bytes and rules.
+
+        Deliberately strict. A transcript made from different audio, by a
+        different model, or under a different windowing rule is not a cache
+        hit — it is a different answer that happens to concern the same
+        episode.
+        """
+        rows = await self._run(
+            """
+            SELECT id FROM transcripts
+            WHERE source_sha256 = ? AND asr_backend = ? AND asr_model = ?
+              AND chunker_version = ?
+            """,
+            (key.source_sha256, key.asr_backend, key.asr_model, key.chunker_version),
+        )
+        return int(rows[0]["id"]) if rows else None
+
+    async def transcript_for_episode(self, episode_id: str) -> int | None:
+        """The newest transcript of an episode, whatever produced it.
+
+        Used to answer "is this episode searchable yet" without downloading it
+        to find out what its bytes hash to.
+        """
+        rows = await self._run(
+            "SELECT id FROM transcripts WHERE episode_id = ? ORDER BY at DESC LIMIT 1",
+            (episode_id,),
+        )
+        return int(rows[0]["id"]) if rows else None
+
+    def _save_transcript(
+        self, key: TranscriptKey, meta: dict, build: TranscriptBuild
+    ) -> int:
+        """Write a transcript and everything derived from it, in one go.
+
+        A single transaction on purpose: a transcript row with no windows would
+        look like a searchable episode that silently answers nothing, and that
+        is precisely the state a crash between two commits would leave behind.
+        """
+        if self._connection is None:
+            raise RuntimeError("Store is not connected")
+
+        with self._lock:
+            connection = self._connection
+            with connection:  # commits, or rolls the whole thing back
+                cursor = connection.execute(
+                    """
+                    INSERT INTO transcripts (
+                        episode_id, episode_title, feed_title, source_url,
+                        source_sha256, source_bytes, duration_s, language,
+                        asr_backend, asr_model, chunker_version,
+                        normalizer_version, quarantined, ms, at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        key.episode_id,
+                        _clip(meta.get("episode_title")),
+                        _clip(meta.get("feed_title")),
+                        meta.get("source_url", ""),
+                        key.source_sha256,
+                        meta.get("source_bytes"),
+                        meta.get("duration_s"),
+                        meta.get("language"),
+                        key.asr_backend,
+                        key.asr_model,
+                        key.chunker_version,
+                        NORMALIZER_VERSION,
+                        build.quarantined,
+                        meta.get("ms"),
+                        time.time(),
+                    ),
+                )
+                transcript_id = int(cursor.lastrowid or 0)
+
+                connection.executemany(
+                    """
+                    INSERT INTO utterances (
+                        transcript_id, start_ms, end_ms, text, words_json,
+                        avg_logprob, no_speech_prob, compression_ratio,
+                        signals, indexable
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    [
+                        (
+                            transcript_id,
+                            int(utterance.start * 1000),
+                            int(utterance.end * 1000),
+                            utterance.text,
+                            json.dumps(
+                                [
+                                    [word.start, word.end, word.text]
+                                    for word in utterance.words
+                                ],
+                                ensure_ascii=False,
+                            )
+                            if utterance.words
+                            else None,
+                            utterance.avg_logprob,
+                            utterance.no_speech_prob,
+                            utterance.compression_ratio,
+                            ",".join(signals) or None,
+                            int(is_indexable(signals)),
+                        )
+                        for utterance, signals in zip(
+                            build.utterances, build.signals, strict=True
+                        )
+                    ],
+                )
+
+                connection.executemany(
+                    """
+                    INSERT INTO windows (
+                        transcript_id, start_ms, end_ms, text,
+                        text_normalized, text_lemmas
+                    ) VALUES (?,?,?,?,?,?)
+                    """,
+                    [
+                        (
+                            transcript_id,
+                            int(window.start * 1000),
+                            int(window.end * 1000),
+                            window.text,
+                            normalize(window.text),
+                            lemmatize(window.text),
+                        )
+                        for window in build.windows
+                    ],
+                )
+
+        return transcript_id
+
+    async def save_transcript(
+        self, key: TranscriptKey, meta: dict, build: TranscriptBuild
+    ) -> int:
+        return await asyncio.to_thread(self._save_transcript, key, meta, build)
+
+    async def search_windows(
+        self, transcript_id: int, query: str, limit: int = 20
+    ) -> list[Moment]:
+        """Lexical hits inside one transcript, best first and unclustered.
+
+        BM25 in SQLite is a *lower is better* score, so it is negated: callers
+        and :func:`~podcast_cutter.transcripts.cluster` both want "higher wins"
+        and should not each have to remember which way round this one is.
+        """
+        # Lemmas first, surface forms second. The lemma index is what makes
+        # Russian work at all, and the surface index is the check on it: when
+        # the dictionary mangles a word — names and jargon especially — the
+        # exact form still finds itself.
+        for column in ("text_lemmas", "text_normalized"):
+            match = _fts_query(query, column)
+            if not match:
+                continue
+
+            try:
+                rows = await self._run(
+                    """
+                    SELECT w.start_ms, w.end_ms, w.text,
+                           bm25(windows_fts) AS rank
+                    FROM windows_fts
+                    JOIN windows w ON w.id = windows_fts.rowid
+                    WHERE windows_fts MATCH ? AND w.transcript_id = ?
+                    ORDER BY rank
+                    LIMIT ?
+                    """,
+                    (match, transcript_id, limit),
+                )
+            except sqlite3.OperationalError:
+                # A query FTS5 cannot parse is a user typing, not a bug.
+                logger.info("Unparseable search query: %r", query)
+                return []
+
+            if rows:
+                return [
+                    Moment(
+                        start=row["start_ms"] / 1000,
+                        end=row["end_ms"] / 1000,
+                        text=row["text"],
+                        score=-float(row["rank"]),
+                    )
+                    for row in rows
+                ]
+
+        return []
+
+    async def utterances_for(self, transcript_id: int) -> list[Utterance]:
+        """Every utterance of a transcript, in order, with word timings."""
+        rows = await self._run(
+            """
+            SELECT start_ms, end_ms, text, words_json, avg_logprob,
+                   no_speech_prob, compression_ratio
+            FROM utterances WHERE transcript_id = ? ORDER BY start_ms
+            """,
+            (transcript_id,),
+        )
+
+        result = []
+        for row in rows:
+            words = ()
+            if row["words_json"]:
+                with contextlib.suppress(ValueError, TypeError):
+                    words = tuple(
+                        Word(start=item[0], end=item[1], text=item[2])
+                        for item in json.loads(row["words_json"])
+                    )
+            result.append(
+                Utterance(
+                    start=row["start_ms"] / 1000,
+                    end=row["end_ms"] / 1000,
+                    text=row["text"],
+                    words=words,
+                    avg_logprob=row["avg_logprob"],
+                    no_speech_prob=row["no_speech_prob"],
+                    compression_ratio=row["compression_ratio"],
+                )
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Recent episodes

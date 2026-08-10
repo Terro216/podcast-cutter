@@ -21,6 +21,17 @@ python-telegram-bot = { extras = [
 # directly for the Podcast Index client and episode downloads.
 httpx = ">=0.27,<1.0"
 python-dotenv = "^1.0.1"
+# Speech recognition, for finding a moment by what was said rather than by
+# timestamp. CTranslate2 underneath, CPU-only here: the production host has no
+# GPU and no AVX2, where `base` measured at RTF 0.07 and `small` at 0.23.
+# The model weights are *not* vendored — they land on the /data volume at first
+# use, because baking ~150 MB into a layer means re-shipping it on every deploy.
+faster-whisper = "^1.2"
+# Russian morphology for the lexical index. Measured need: an episode about
+# neural networks had «нейросетей» four times and «нейросети» never, so a
+# literal-token index could not find its own subject. Optional at import, so a
+# machine without it still runs — it just stops matching inflections.
+pymorphy3 = "^2.0.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

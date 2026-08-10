@@ -310,6 +310,7 @@ internet fails more often than anyone plans for.
 0. ~~Scheme validation, `-protocol_whitelist`, redirect checking and a source
    duration ceiling.~~ **Done** — see §14.
 1. Transcription on `base`, cache in SQLite, FTS5 — minimal working search.
+   **In progress** — §15.
 2. RU/EN baskets and the pytest runner. **Before** tuning.
 3. Embeddings on top, negatives, LLM judge.
 4. SpeechKit as the second backend, and the comparison table.
@@ -509,3 +510,92 @@ against it. It is now refused before anything opens it.
 `MAX_CUT_SECONDS` is still 900. Shortening the default clip is §13.4's call and
 a product decision, not a security fix, so it is deliberately left for the step
 that also adds attribution to the message.
+
+---
+
+## 15. In progress: transcription and lexical search
+
+Step 1 of §11. The engine exists and is tested; it is not yet reachable from a
+chat, which is the next piece.
+
+**`transcripts.py`** holds everything that happens to recognised speech before
+it becomes an answer, deliberately apart from any recogniser so it runs in
+milliseconds without a model:
+
+- *Quarantine.* Whisper invents text on silence and music, and an invention is
+  indistinguishable from speech to an index — it becomes a confident wrong
+  answer. Signals are collected (repetition, a decoding loop, low confidence
+  agreeing with high no-speech probability, more words than the span can hold);
+  one demotes, two independent ones exclude. Nothing is deleted: every metric
+  stays on the row, because a quarantine decision has to be reviewable.
+- *Windowing.* 30 s windows at a 15 s stride, so a phrase spanning two
+  utterances lands whole inside some window.
+- *Clustering.* At 50% overlap, neighbours say nearly the same thing, so hits
+  are collapsed before the answer is cut to three — otherwise the top three are
+  one moment shown three times while the retriever is working perfectly.
+- *Placement.* `locate_phrase` finds the matched word's own timestamp and pads
+  back 2 s, because word timings are not editing-grade.
+
+**Schema v2** adds `transcripts`, `utterances`, `windows` and an
+external-content FTS5 index with the triggers that keep it in step. A
+transcript's identity is `(source_sha256, backend, model, chunker_version)` —
+the bytes, not the episode id, for the dynamic-ad reason in §13.2. Everything
+is written in one transaction: a transcript row without windows is an episode
+that looks searchable and answers nothing, which is exactly what a crash
+between two commits would leave.
+
+**`asr.py`** is a one-method interface with faster-whisper behind it, so the
+SpeechKit backend and the evaluation baskets both plug in without the pipeline
+knowing. Sequential decoding and `temperature=0.0`, for the reasons in §13.2.
+
+**`indexer.py`** is the pipeline: guarded fetch → hash → decode to 16 kHz mono
+→ recognise → judge → window → store, then search. Concurrent askers for one
+episode share a single job, so a crowd from one chat is one transcription and
+many waiters. `ASR_ENABLED` is the kill switch.
+
+**Tests: 635 passing**, of which about 90 are new. The recogniser is faked
+throughout — what a fake cannot answer is whether a person's phrasing finds the
+moment somebody actually said, and that question belongs to the baskets.
+`scripts/check_transcribe.py` runs the real thing against a real episode.
+
+### What a real episode showed
+
+Run against «Запуск завтра», 53:13 of Russian audio, `base`, 8 cores:
+**282 s, RTF 0.09**, language detected as `ru`, 212 windows, nothing
+quarantined.
+
+The negative case was genuinely negative — «квантовая телепортация» is absent
+from the transcript and came back empty — and «белки» and «лекарства» found
+real moments. But **«нейросети» found nothing in an episode about neural
+networks.** The diagnostic printed what the recogniser had actually written:
+«нейросетей» at 1:34 and 14:15, and the exact form «нейросети» not once. FTS5
+matches a token literally, so the search for the episode's own subject was
+empty.
+
+Fixed with `pymorphy3` lemmatisation into a second indexed column. Verified on
+the same episode: «нейросети» now returns 13:59, 49:58 and 1:12, and
+«лекарство» in the singular finds «лекарств», «лекарство» and «лекарства».
+
+Two things worth keeping in mind, both learned rather than assumed:
+
+* **pymorphy3 guesses at words it does not know** rather than passing them
+  through — «нейросеиц» becomes «нейросеица». Harmless, because the same guess
+  applies to the query, and the surface-form index sits behind it for when the
+  two guesses differ. A test says so, because the opposite is the intuitive
+  assumption.
+* **`base` mangles domain terms**: «нейросеиц», «оминокислого», «голки в 100
+  гисены» for "иголки в стоге сена". Common words are fine. Searching for the
+  garbled phrase correctly finds nothing, which is honest but is exactly the
+  entity recall the baskets need to measure — the answer is a metric, not a
+  bigger model chosen blind.
+
+### Still to do in this step
+
+- Wire it into the bot: a "find the moment" screen, progress while a first
+  transcription runs, and results that open the existing clip editor.
+- `faster-whisper` and `pymorphy3` into the image; model on the `/data` volume,
+  and `cpuset` pinning in compose.
+- English morphology. `unicode61` finds `protein` but does not connect it to
+  `proteins`, and pymorphy3 is a Russian dictionary. FTS5 has `porter`, but a
+  tokenizer is per table, so this is another column or another table. Left
+  until the baskets say how much it actually costs.
