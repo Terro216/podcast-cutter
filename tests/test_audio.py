@@ -213,3 +213,33 @@ class TestCutCommand:
 
     def test_http_options_are_present_for_urls(self):
         assert "-user_agent" in self._cmd()
+
+    def test_a_remote_input_may_not_reach_for_local_files(self):
+        """A URL answering with a playlist can name further URLs to open.
+
+        Current ffmpeg already refuses the obvious ``file:`` case on its own,
+        so this is a second lock rather than the only one — but it is the lock
+        we control.
+        """
+        cmd = self._cmd()
+        whitelist = cmd[cmd.index("-protocol_whitelist") + 1]
+        assert "file" not in whitelist.split(",")
+        # http is built out of these; dropping them would break every fetch.
+        assert set(whitelist.split(",")) >= {"http", "https", "tcp", "tls"}
+
+    def test_the_whitelist_constrains_the_input_not_the_output(self):
+        # Verified against ffmpeg 8.1.2: placed before -i it applies to the
+        # demuxer, and the output is still written through the file protocol.
+        cmd = self._cmd()
+        assert cmd.index("-protocol_whitelist") < cmd.index("-i")
+
+    def test_a_local_input_is_confined_to_the_file_protocol(self):
+        from pathlib import Path
+
+        cmd = _cut_command(
+            Path("/tmp/source.mp3"),
+            Path("/tmp/out.mp3"),
+            Interval(start=0, end=5),
+            encode=None,
+        )
+        assert cmd[cmd.index("-protocol_whitelist") + 1] == "file"

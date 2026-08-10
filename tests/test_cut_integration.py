@@ -28,7 +28,7 @@ import pytest
 from podcast_cutter import audio as audio_mod
 from podcast_cutter.audio import Interval, cut_episode, probe
 from podcast_cutter.config import Settings
-from podcast_cutter.errors import AudioError
+from podcast_cutter.errors import AudioError, UnsafeSourceError
 from podcast_cutter.proxy import DIRECT, PROXY
 
 pytestmark = pytest.mark.skipif(
@@ -40,8 +40,15 @@ SOURCE_SECONDS = 30
 
 
 def _settings(**overrides) -> Settings:
+    # ``allow_private_sources`` because the whole point of these tests is that
+    # audio travels over a real HTTP server, and that server is on 127.0.0.1.
     return Settings(
-        bot_token="t", api_key="k", api_secret="s", ffmpeg_timeout=120, **overrides
+        bot_token="t",
+        api_key="k",
+        api_secret="s",
+        ffmpeg_timeout=120,
+        allow_private_sources=True,
+        **overrides,
     )
 
 
@@ -435,8 +442,38 @@ class TestFailureMessages:
             cut(f"{audio_server}/403/a.mp3", 0, 5, tmp_path / "forbidden")
 
     def test_non_http_source(self, tmp_path):
-        with pytest.raises(AudioError, match="no usable audio link"):
+        """Refused before anything opens it, not after a fetch fails.
+
+        This used to be caught inside the downloader, which meant a probe and
+        a streaming cut had already been attempted against the path.
+        """
+        with pytest.raises(UnsafeSourceError, match="not an ordinary web download"):
             cut("file:///etc/passwd", 0, 5, tmp_path / "local")
+
+    def test_a_source_longer_than_the_ceiling_is_refused(
+        self, audio_server, tmp_path
+    ):
+        """The byte limit bounds the download; this bounds the work."""
+        with pytest.raises(AudioError, match="past the"):
+            cut(
+                f"{audio_server}/a.mp3",
+                0,
+                5,
+                tmp_path / "too-long",
+                max_cut_seconds=5,
+                max_source_seconds=10,
+            )
+
+    def test_a_source_inside_the_ceiling_still_cuts(self, audio_server, tmp_path):
+        result = cut(
+            f"{audio_server}/a.mp3",
+            0,
+            5,
+            tmp_path / "short-enough",
+            max_cut_seconds=5,
+            max_source_seconds=60,
+        )
+        assert result.path.exists()
 
     def test_messages_carry_no_raw_tracebacks(self, audio_server, tmp_path):
         with pytest.raises(AudioError) as excinfo:

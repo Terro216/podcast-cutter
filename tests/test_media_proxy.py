@@ -29,6 +29,9 @@ PROXY_URL = "http://proxy.internal:3128"
 
 
 def _settings(**overrides) -> Settings:
+    # These tests fake the transport entirely; ``allow_private_sources`` keeps
+    # them from doing a real DNS lookup on the invented hostnames.
+    overrides.setdefault("allow_private_sources", True)
     return Settings(bot_token="t", api_key="k", api_secret="s", **overrides)
 
 
@@ -358,7 +361,7 @@ class TestCutEpisodeIsInertWithoutAProxy:
         """The parity test: unset MEDIA_PROXY must change nothing at all."""
         seen: dict[str, object] = {}
 
-        async def fake_resolve(url, timeout, proxy):
+        async def fake_resolve(url, timeout, proxy, allow_private=False):
             seen["routes"] = proxy.routes()
             return url, DIRECT
 

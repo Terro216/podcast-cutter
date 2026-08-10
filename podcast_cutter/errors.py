@@ -70,6 +70,22 @@ class BlockedError(AudioError):
     code = "host_blocked"
 
 
+class UnsafeSourceError(AudioError):
+    """The episode's audio URL is not something we are willing to open.
+
+    Separate from a generic audio failure because it is not a failure at all:
+    nothing was attempted. Enclosure URLs come from feeds anyone can submit, so
+    a link with an unexpected scheme, or one resolving into this server's own
+    network, is refused before ffmpeg or httpx sees it. Counted on its own so
+    the journal can show whether this ever fires in the wild.
+    """
+
+    default_message = (
+        "This episode's audio link was refused for security reasons."
+    )
+    code = "unsafe_source"
+
+
 class UnreachableError(AudioError):
     """The episode's audio could not be fetched at all."""
 

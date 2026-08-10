@@ -44,6 +44,7 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `PODCAST_API_SECRET`  | yes      | Podcast Index secret                     |
 | `PODCAST_API_BASEURL` | no       | Defaults to the public Podcast Index API |
 | `MAX_CUT_SECONDS`     | no       | Longest interval a user may request (900)|
+| `MAX_SOURCE_SECONDS`  | no       | Longest episode opened at all (21600)    |
 | `MAX_CONCURRENT_JOBS` | no       | Simultaneous ffmpeg jobs (2)             |
 | `WORK_DIR`            | no       | Scratch space for in-flight cuts         |
 | `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|
@@ -179,6 +180,32 @@ ignore them and render the default style, so they are decoration, never meaning.
 The output container follows the source codec (AAC lands in `.m4a`, not `.mp3`),
 and the result is verified with ffprobe before being sent, because ffmpeg can
 exit successfully having written an unplayable fragment.
+
+### Where an episode URL is allowed to point
+
+An enclosure URL is third-party input. Anyone may submit a feed to the
+directory, so a URL coming back from the API is worth exactly as much as one a
+stranger typed, and it is checked before anything opens it:
+
+- the scheme must be `http` or `https`, so `file:`, `concat:` and the rest of
+  what ffmpeg speaks are refused outright;
+- the hostname must not resolve into this server's own network — loopback,
+  private ranges, and the link-local address cloud metadata lives on;
+- **every hop of a redirect chain is checked**, because the interesting hop is
+  rarely the first one: an ordinary CDN hostname can redirect inward;
+- ffmpeg runs with `-protocol_whitelist`, so an input that answers with a
+  playlist cannot name a local file as its next source. Current ffmpeg already
+  refuses that, which makes this a second lock rather than the only one.
+
+A name that does not resolve is allowed through on purpose: the fetch that
+follows fails a moment later with a message that says what happened, whereas
+refusing here would turn a DNS hiccup into an unexplainable permanent verdict.
+Refusals are journalled as `unsafe_source`, so `/stats` shows whether this ever
+fires in the wild.
+
+`MAX_SOURCE_SECONDS` bounds the other direction: `MAX_SOURCE_BYTES` limits what
+gets downloaded, but seeking and re-encoding scale with the source, and a feed
+can advertise a file of any length.
 
 ### Episodes the server cannot reach
 

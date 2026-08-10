@@ -62,6 +62,15 @@ class Settings:
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     #: Refuse to download source files larger than this in the fallback path.
     max_source_bytes: int = 400 * 1024 * 1024
+    #: Refuse episodes longer than this outright. The byte ceiling above bounds
+    #: the download, but not the work: seeking and re-encoding scale with the
+    #: source, and a feed can advertise an arbitrarily long file. Six hours
+    #: clears the longest real podcasts with room to spare.
+    max_source_seconds: int = 6 * 3600
+    #: Allow episode URLs that resolve into private address space. Off in
+    #: production; the integration tests turn it on because they serve audio
+    #: from a real HTTP server on 127.0.0.1, which is the point of them.
+    allow_private_sources: bool = False
 
     # --- timeouts (seconds) -----------------------------------------------
     api_timeout: float = 15.0
@@ -133,6 +142,13 @@ class Settings:
     def __post_init__(self) -> None:
         if self.max_cut_seconds <= 0:
             raise ConfigError("MAX_CUT_SECONDS must be positive.")
+        if self.max_source_seconds <= 0:
+            raise ConfigError("MAX_SOURCE_SECONDS must be positive.")
+        if self.max_source_seconds < self.max_cut_seconds:
+            raise ConfigError(
+                "MAX_SOURCE_SECONDS must be at least MAX_CUT_SECONDS, "
+                f"got {self.max_source_seconds} < {self.max_cut_seconds}."
+            )
         if self.max_concurrent_jobs < 1:
             raise ConfigError("MAX_CONCURRENT_JOBS must be at least 1.")
         if self.log_retention_days < 0:
@@ -240,6 +256,9 @@ def load_settings() -> Settings:
         api_secret=_required("PODCAST_API_SECRET"),
         api_base_url=base_url,
         max_cut_seconds=_positive_int("MAX_CUT_SECONDS", Settings.max_cut_seconds),
+        max_source_seconds=_positive_int(
+            "MAX_SOURCE_SECONDS", Settings.max_source_seconds
+        ),
         max_concurrent_jobs=_positive_int(
             "MAX_CONCURRENT_JOBS", Settings.max_concurrent_jobs
         ),

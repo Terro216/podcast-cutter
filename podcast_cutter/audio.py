@@ -43,6 +43,7 @@ from .errors import (
 )
 from .proxy import DIRECT, MediaProxy, is_blocked_status, is_routing_failure
 from .text import format_duration
+from .urls import ensure_safe_source, redirect_guard
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,14 @@ _BROWSERISH_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+
+#: What an ffmpeg input is allowed to open. ``tcp``, ``tls`` and ``crypto``
+#: are what ``http`` and ``https`` are built out of, so omitting them would
+#: break ordinary fetches.
+_REMOTE_PROTOCOLS = "http,https,tcp,tls,crypto"
+#: Our own downloaded files and intermediate cuts. Nothing nested, so nothing
+#: else needs to be reachable.
+_LOCAL_PROTOCOLS = "file"
 
 _INTERVAL_SEPARATOR = re.compile(r"\s*(?:--|[-–—]|\.\.|\bto\b)\s*")
 _COMPOUND_TIME = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?")
@@ -219,15 +228,28 @@ def ensure_ffmpeg_available() -> None:
 
 
 def _protocol_args(source: str | Path) -> list[str]:
-    """HTTP-only ffmpeg options, omitted for local paths.
+    """Protocol options for one input, which differ for remote and local sources.
 
     ``-user_agent`` belongs to ffmpeg's http protocol. Passing it alongside a
     local file makes ffmpeg abort with "Option user_agent not found" — which
     silently broke the entire download-then-cut fallback.
+
+    ``-protocol_whitelist`` bounds what an *input* may go on to open by itself.
+    A URL that answers with a playlist rather than audio can name further URLs,
+    and ffmpeg will follow them; current versions already refuse the obvious
+    ``file:`` case, so this is a second lock on a door that is mostly shut
+    rather than a fix for an open one. Placed before ``-i``, it constrains the
+    input only: the output is still written through the file protocol, which
+    was verified rather than assumed.
     """
     if str(source).startswith(("http://", "https://")):
-        return ["-user_agent", _BROWSERISH_USER_AGENT]
-    return []
+        return [
+            "-user_agent",
+            _BROWSERISH_USER_AGENT,
+            "-protocol_whitelist",
+            _REMOTE_PROTOCOLS,
+        ]
+    return ["-protocol_whitelist", _LOCAL_PROTOCOLS]
 
 
 def container_for_codec(codec: str | None) -> str | None:
@@ -436,6 +458,9 @@ async def _download(
             follow_redirects=True,
             proxy=proxy_url,
             timeout=httpx.Timeout(settings.download_timeout, connect=30.0),
+            event_hooks={
+                "response": [redirect_guard(settings.allow_private_sources)]
+            },
         )
         async with client, client.stream("GET", url, headers=headers) as response:
             # 401 and 403 mean this server is unwelcome, which no amount of
@@ -475,7 +500,7 @@ async def _download(
 
 
 async def _resolve_url(
-    url: str, timeout: float, proxy: MediaProxy
+    url: str, timeout: float, proxy: MediaProxy, allow_private: bool = False
 ) -> tuple[str, str]:
     """Follow redirects in Python and pick the egress route for this episode.
 
@@ -503,6 +528,7 @@ async def _resolve_url(
                 timeout=httpx.Timeout(
                     timeout, connect=proxy.connect_timeout(route, 15.0)
                 ),
+                event_hooks={"response": [redirect_guard(allow_private)]},
             )
             # A ranged GET is cheap and works on hosts that reject HEAD.
             ranged = client.stream(
@@ -590,18 +616,49 @@ async def cut_episode(
         candidates.append((workdir / "cut.mp3", "mp3"))
         return candidates
 
+    def check_length(duration: int | None) -> None:
+        """Refuse an episode too long to be worth the work it would cost.
+
+        The byte ceiling bounds the download but not the processing: seeking
+        and re-encoding scale with the source, and a feed can advertise a file
+        of any length at all.
+        """
+        if duration is not None and duration > settings.max_source_seconds:
+            raise AudioError(
+                f"This episode is {format_duration(duration)} long, past the "
+                f"{format_duration(settings.max_source_seconds)} this bot will "
+                "open. Try a shorter episode."
+            )
+
     shrink_with = "opus" if voice else "mp3"
     workdir.mkdir(parents=True, exist_ok=True)
     proxy = proxy if proxy is not None else MediaProxy(settings)
 
-    resolved_url, route = await _resolve_url(
-        audio_url, settings.probe_timeout, proxy
+    # Before anything opens it. The URL came from a feed, and feeds are not
+    # ours; see :mod:`podcast_cutter.urls`.
+    await ensure_safe_source(
+        audio_url, allow_private=settings.allow_private_sources
     )
+
+    resolved_url, route = await _resolve_url(
+        audio_url,
+        settings.probe_timeout,
+        proxy,
+        allow_private=settings.allow_private_sources,
+    )
+    # The resolver walks redirects, and the guard on each hop only fires while
+    # a chain is being followed. Where it ended up is checked here, because a
+    # route that failed altogether hands back whatever it last saw.
+    await ensure_safe_source(
+        resolved_url, allow_private=settings.allow_private_sources
+    )
+
     # Every remote ffmpeg call in this job follows the route the resolver
     # settled on. ``None`` when the feature is off, i.e. inherit our env.
     remote_env = proxy.subprocess_env(route)
     info = await probe(resolved_url, settings.probe_timeout, env=remote_env)
 
+    check_length(info.duration)
     if info.duration is not None and interval.start >= info.duration:
         raise AudioError(
             f"This episode is only {format_duration(info.duration)} long, "
@@ -639,6 +696,10 @@ async def cut_episode(
     )
 
     local_info = await probe(local_source, settings.probe_timeout)
+    # The remote probe can come back with nothing at all — a host that refuses
+    # ffprobe still downloads fine — so this is the first length we see for
+    # some episodes, not a repeat of the check above.
+    check_length(local_info.duration)
     if local_info.duration is not None and interval.start >= local_info.duration:
         raise AudioError(
             f"This episode is only {format_duration(local_info.duration)} long, "

@@ -18,6 +18,7 @@ def clean_env(monkeypatch):
         *REQUIRED,
         "PODCAST_API_BASEURL",
         "MAX_CUT_SECONDS",
+        "MAX_SOURCE_SECONDS",
         "MAX_CONCURRENT_JOBS",
         "WORK_DIR",
     ):
@@ -113,6 +114,36 @@ class TestNumericOverrides:
     def test_blank_falls_back_to_the_default(self, monkeypatch):
         with_env(monkeypatch, MAX_CUT_SECONDS="")
         assert load_settings().max_cut_seconds == Settings.max_cut_seconds
+
+
+class TestSourceCeiling:
+    """The byte limit bounds the download; this one bounds the work."""
+
+    def test_read_from_the_environment(self, monkeypatch):
+        with_env(monkeypatch, MAX_SOURCE_SECONDS="7200")
+        assert load_settings().max_source_seconds == 7200
+
+    def test_refuses_a_ceiling_below_the_cut_limit(self):
+        # Otherwise every episode long enough to cut from is also too long
+        # to open, and no interval can ever be served.
+        with pytest.raises(ConfigError, match="MAX_SOURCE_SECONDS"):
+            Settings(
+                bot_token="t",
+                api_key="k",
+                api_secret="s",
+                max_cut_seconds=900,
+                max_source_seconds=600,
+            )
+
+    def test_default_clears_the_longest_real_episodes(self):
+        assert Settings(
+            bot_token="t", api_key="k", api_secret="s"
+        ).max_source_seconds >= 4 * 3600
+
+    def test_private_sources_are_refused_by_default(self):
+        assert not Settings(
+            bot_token="t", api_key="k", api_secret="s"
+        ).allow_private_sources
 
 
 class TestInvariants:
