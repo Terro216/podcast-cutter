@@ -18,6 +18,7 @@ from podcast_cutter.transcripts import (
     build,
     build_windows,
     cluster,
+    excerpt,
     is_indexable,
     lemma,
     lemmatize,
@@ -233,6 +234,51 @@ class TestWindows:
         assert all("продолжение" not in window.text for window in result.windows)
 
 
+class TestExcerpt:
+    """What the answer quotes back.
+
+    Previously it showed the opening of a thirty-second window, which starts
+    wherever the clock said — so three results read as three unrelated
+    fragments, none of which contained the phrase asked for.
+    """
+
+    def test_centres_on_the_match(self):
+        text = " ".join(["слово"] * 40 + ["фолдинг"] + ["другое"] * 40)
+        before, match, after = excerpt(text, "фолдинг")
+        assert match == "фолдинг"
+        assert "слово" in before and "другое" in after
+
+    def test_marks_that_it_was_cut(self):
+        text = " ".join(["слово"] * 40 + ["фолдинг"] + ["другое"] * 40)
+        before, _, after = excerpt(text, "фолдинг")
+        assert before.startswith("…") and after.rstrip().endswith("…")
+
+    def test_no_ellipsis_when_nothing_was_cut(self):
+        before, match, after = excerpt("вот и фолдинг тут", "фолдинг")
+        assert "…" not in before and "…" not in after
+        assert match == "фолдинг"
+
+    def test_finds_an_inflected_form(self):
+        pytest.importorskip("pymorphy3")
+        _, match, _ = excerpt("и я поступил в Вышку в тот год", "Вышка")
+        assert match == "Вышку"
+
+    def test_never_splits_a_word(self):
+        text = " ".join(["длинноесловоцелое"] * 30 + ["фолдинг"])
+        before, match, _ = excerpt(text, "фолдинг", width=40)
+        assert "длинноесловоцел " not in before
+        assert match == "фолдинг"
+
+    def test_falls_back_to_the_opening_when_nothing_matches(self):
+        """The window matched on something; if the exact word cannot be found
+        the fragment is still better than nothing."""
+        before, match, after = excerpt("совершенно другой текст", "фолдинг")
+        assert before and not match and not after
+
+    def test_empty_text_is_survivable(self):
+        assert excerpt("", "фолдинг") == ("", "", "")
+
+
 class TestCluster:
     def test_overlapping_hits_become_one_moment(self):
         """The failure this exists to prevent: three results, one moment."""
@@ -300,6 +346,26 @@ class TestLocatePhrase:
     def test_returns_none_without_word_timings(self):
         speech = [Utterance(start=100, end=110, text="говорим про фолдинг")]
         assert locate_phrase(speech, "фолдинг", within=(95, 130)) is None
+
+    def test_finds_a_word_spoken_in_another_form(self):
+        """Found in production: a search for «Вышка» landed on a window where
+        «Вышку» was said, then placed the clip at the top of the window twenty
+        seconds early, because the window was found on lemmas and the word was
+        matched on its surface form."""
+        pytest.importorskip("pymorphy3")
+        speech = [
+            Utterance(
+                start=885,
+                end=905,
+                text="и я поступил в Вышку в тот год",
+                words=(
+                    Word(start=890.0, end=890.4, text="и"),
+                    Word(start=905.0, end=905.6, text="Вышку"),
+                ),
+            )
+        ]
+        found = locate_phrase(speech, "Вышка", within=(885, 915))
+        assert found == pytest.approx(903.0)
 
     def test_ignores_matches_outside_the_window(self):
         speech = [

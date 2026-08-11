@@ -16,6 +16,7 @@ from .api import Episode
 from .config import Settings
 from .states import Screen, Session
 from .text import esc, format_duration, human_bytes, truncate
+from .transcripts import excerpt
 
 #: Separator used in the breadcrumb line.
 CRUMB = " › "
@@ -310,12 +311,25 @@ def moments(session: Session) -> View:
             kb.moments_keyboard([], session.phrase),
         )
 
+    # The context goes in the message, not on the buttons. A button is one
+    # short line, so three of them truncated mid-sentence read as three
+    # unrelated fragments — which is exactly how this looked before.
+    lines = []
+    for index, moment in enumerate(session.moments, start=1):
+        before, match, after = excerpt(moment.text, session.phrase)
+        quoted = esc(before) + (f"<b>{esc(match)}</b>" if match else "") + esc(after)
+        lines.append(
+            f"<b>{index}.</b> <code>{format_duration(int(moment.clip_start))}</code>"
+            f"\n{quoted}"
+        )
+
     return View(
         breadcrumb(session)
         + heading
         + f"🔎 <b>“{asked}”</b> — {len(session.moments)} "
         f"{'moment' if len(session.moments) == 1 else 'moments'}\n\n"
-        "Tap one to open the clip editor there.",
+        + "\n\n".join(lines)
+        + "\n\nTap a number to open the clip editor there.",
         kb.moments_keyboard(session.moments, session.phrase),
     )
 

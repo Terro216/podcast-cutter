@@ -256,22 +256,20 @@ def interval_keyboard(
 def moments_keyboard(moments: Sequence, phrase: str) -> InlineKeyboardMarkup:
     """The answers to a search, each opening the clip editor where it starts.
 
-    Labelled by timestamp *and* a fragment of what was said there, because
-    three bare timestamps ask the user to guess which one they meant.
+    Numbered and stamped, nothing more: a button is a single short line, and a
+    sentence squeezed into one is cut mid-word, so the quotations live in the
+    message above and these only have to say *which* one. Side by side, so
+    three answers cost one row instead of three.
     """
-    rows = [
-        [
-            _button(
-                button_label(
-                    format_duration(int(moment.clip_start)),
-                    moment.text,
-                    limit=56,
-                ),
-                f"{MOMENT_PREFIX}:{int(moment.clip_start)}",
-            )
-        ]
-        for moment in moments
+    picks = [
+        _button(
+            f"{index} · {format_duration(int(moment.clip_start))}",
+            f"{MOMENT_PREFIX}:{int(moment.clip_start)}",
+        )
+        for index, moment in enumerate(moments, start=1)
     ]
+
+    rows = [picks] if picks else []
     rows.append([_button("🔎 Search again", ACTION_FIND)])
     rows.append(footer_row())
     return InlineKeyboardMarkup(rows)

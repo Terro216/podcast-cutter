@@ -281,6 +281,68 @@ class TestSearching:
         assert indexer.recognizer.calls == 1
 
 
+class TestHowAnswersRead:
+    """Reported from real use: three buttons cut mid-sentence, none of which
+    contained the phrase that was searched for."""
+
+    def _view(self, phrase="фолдинг"):
+        from podcast_cutter.transcripts import Moment
+
+        session = Session()
+        session.episode = make_episode()
+        session.phrase = phrase
+        session.go(Screen.MOMENTS)
+        session.moments = [
+            Moment(
+                start=880,
+                end=910,
+                text="начало окна где-то далеко отсюда и только потом "
+                "мы говорим про фолдинг белков и что это значит",
+                score=5.0,
+                clip_start=903,
+            )
+        ]
+        return screens.moments(session)
+
+    async def test_the_quotation_contains_the_phrase(self):
+        assert "фолдинг" in self._view().text
+
+    async def test_the_phrase_is_emphasised(self):
+        assert "<b>фолдинг</b>" in self._view().text
+
+    async def test_the_buttons_only_number_and_stamp(self):
+        """A button is one short line; a sentence squeezed into one is cut
+        mid-word, so the text belongs in the message."""
+        view = self._view()
+        labels = [
+            b.text
+            for row in view.keyboard.inline_keyboard
+            for b in row
+            if b.callback_data.startswith(kb.MOMENT_PREFIX)
+        ]
+        assert labels == ["1 · 15:03"]
+
+    async def test_answers_share_one_row(self):
+        from podcast_cutter.transcripts import Moment
+
+        session = Session()
+        session.episode = make_episode()
+        session.phrase = "фолдинг"
+        session.go(Screen.MOMENTS)
+        session.moments = [
+            Moment(start=t, end=t + 30, text="фолдинг белков", score=1.0, clip_start=t)
+            for t in (100, 500, 900)
+        ]
+        rows = screens.moments(session).keyboard.inline_keyboard
+        picks = [r for r in rows if r[0].callback_data.startswith(kb.MOMENT_PREFIX)]
+        assert len(picks) == 1 and len(picks[0]) == 3
+
+    async def test_markup_in_the_transcript_cannot_break_the_message(self):
+        """Recognised text is arbitrary, and it is rendered as HTML."""
+        view = self._view(phrase="<b>")
+        assert "<b>&lt;" in view.text or "&lt;b&gt;" in view.text
+
+
 class TestOpeningAMoment:
     async def test_a_moment_opens_the_ordinary_clip_editor(self, bot, context):
         session, _ = await at_the_editor(bot, context)

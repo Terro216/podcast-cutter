@@ -33,6 +33,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from .text import truncate
+
 logger = logging.getLogger(__name__)
 
 #: Bumped whenever windowing changes shape. Stored per transcript so a rebuilt
@@ -323,11 +325,18 @@ def locate_phrase(
 ) -> float | None:
     """Where inside ``within`` the query's words actually start.
 
+    Matched on lemmas, because the window was found on lemmas: searching for
+    «Вышка» lands on a window where «Вышку» was said, and comparing surface
+    forms here would fail to find the very word that produced the hit. It did,
+    in production — the clip opened at the top of the window instead, twenty
+    seconds early, which reads as the search being wrong rather than the
+    placement being wrong.
+
     Word timings are not editing-grade — the boundary of a consonant moves —
-    so the answer is padded backwards. Returns ``None`` when the recogniser
-    gave no timings, leaving the caller to fall back on the window start.
+    so the answer is padded backwards. ``None`` when the recogniser gave no
+    timings, leaving the caller to fall back on the window start.
     """
-    wanted = set(normalize(query).split())
+    wanted = {lemma(word) for word in normalize(query).split()}
     if not wanted:
         return None
 
@@ -336,10 +345,69 @@ def locate_phrase(
         if utterance.end < start or utterance.start > end:
             continue
         for word in utterance.words:
-            if normalize(word.text) in wanted:
+            surface = normalize(word.text)
+            if surface and (surface in wanted or lemma(surface) in wanted):
                 return max(0.0, word.start - padding)
 
     return None
+
+
+def excerpt(text: str, query: str, width: int = 120) -> tuple[str, str, str]:
+    """Split ``text`` around the first place the query is spoken.
+
+    Returns ``(before, match, after)`` so the caller can emphasise the middle
+    without having to find it again — and, more to the point, without having to
+    escape a string it has already marked up.
+
+    Existing behaviour showed the first characters of a thirty-second window,
+    which begins wherever the clock said and so is usually nowhere near the
+    words that matched. Three results looked like three unrelated fragments.
+    """
+    words = text.split()
+    if not words:
+        return "", "", ""
+
+    wanted = {lemma(word) for word in normalize(query).split()}
+    hit = None
+    for index, word in enumerate(words):
+        surface = normalize(word)
+        if surface and (surface in wanted or lemma(surface) in wanted):
+            hit = index
+            break
+
+    if hit is None:
+        return truncate(" ".join(words), width), "", ""
+
+    # Roughly centred on the match, in words rather than characters so the
+    # fragment never begins or ends mid-word. Positions are tracked rather
+    # than compared by value: speech repeats itself — «и», «ну», «это» — and
+    # asking whether the first kept word *equals* the first word of the window
+    # answers the wrong question.
+    before_budget = width // 2
+    first_kept = hit
+    for index in range(hit - 1, -1, -1):
+        if len(" ".join(words[index:hit])) > before_budget:
+            break
+        first_kept = index
+
+    last_kept = hit
+    for index in range(hit + 1, len(words)):
+        if len(" ".join(words[hit + 1 : index + 1])) > width - before_budget:
+            break
+        last_kept = index
+
+    before = " ".join(words[first_kept:hit])
+    after = " ".join(words[hit + 1 : last_kept + 1])
+    if first_kept > 0:
+        before = "…" + before
+    if last_kept < len(words) - 1:
+        after = after + "…"
+
+    return (
+        (before + " ") if before else "",
+        words[hit],
+        (" " + after) if after else "",
+    )
 
 
 @dataclass
