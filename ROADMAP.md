@@ -309,8 +309,8 @@ internet fails more often than anyone plans for.
 
 0. ~~Scheme validation, `-protocol_whitelist`, redirect checking and a source
    duration ceiling.~~ **Done** — see §14.
-1. Transcription on `base`, cache in SQLite, FTS5 — minimal working search.
-   **In progress** — §15.
+1. ~~Transcription on `base`, cache in SQLite, FTS5 — minimal working search.~~
+   **Done and deployed** — §15.
 2. RU/EN baskets and the pytest runner. **Before** tuning.
 3. Embeddings on top, negatives, LLM judge.
 4. SpeechKit as the second backend, and the comparison table.
@@ -620,11 +620,41 @@ does not refetch them, and `cpuset: "0-7"` pins the container to physical cores
 of one socket — verified against `lscpu -e` on big-one, where 0–7 are cores 0–7
 of socket 0 and their siblings are 16–23.
 
+### Deployed, and what using it found
+
+Live on big-one since 2026-08-11. The image went from 930 MB to 1.51 GB;
+weights live on the volume, not in a layer. One episode is warmed into the
+production index under its real id.
+
+Three defects surfaced within an hour of real use, and every one of them was
+invisible to a test suite that had never heard a real voice:
+
+1. **«нейросети» found nothing in an episode about neural networks.** Fixed
+   with lemmatisation — §15 above.
+2. **The clip opened twenty seconds early.** The window was found on lemmas,
+   but the word-level placement compared surface forms, so it could not find
+   the very word that produced the hit and fell back to the window's start. The
+   same bug as (1), one layer down.
+3. **Answers quoted the wrong text.** Buttons showed the opening of a
+   thirty-second window — which begins wherever the clock said — so three
+   results read as three unrelated fragments, none containing the phrase.
+   Quotations moved into the message; buttons only number and stamp.
+
+Then, from a second round of use: a 30-minute episode looked hung, because a
+first transcription is minutes behind one unchanging line. faster-whisper
+yields segments as it decodes and each knows where it ends in the audio, so
+the bar now measures real work, the remaining time is derived from work done
+rather than the opening estimate, and the estimate itself comes from the
+median of this host's own past runs.
+
+**The lesson for the next step:** every one of these was found by a person
+noticing something odd. That is not a method, and it does not scale to the
+question the baskets exist to answer — how *often* is a search wrong, and in
+which of the several possible ways.
+
 ### Still to do in this step
 
 - English morphology. `unicode61` finds `protein` but does not connect it to
   `proteins`, and pymorphy3 is a Russian dictionary. FTS5 has `porter`, but a
   tokenizer is per table, so this is another column or another table. Left
   until the baskets say how much it actually costs.
-- Deploy, which means a much larger image: faster-whisper pulls ctranslate2,
-  onnxruntime, av, tokenizers and numpy.

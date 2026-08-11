@@ -1,30 +1,42 @@
-# Handoff — podcast-cutter, 2026-07-30
+# Handoff — podcast-cutter, 2026-08-11
 
 Working notes for whoever picks this up. `README.md` describes the project as
-it is; this file records **where we stopped and what is already proven**.
+it is, `ROADMAP.md` where it is going and why; this file records **where we
+stopped and what is already proven**.
 
-The decision that used to be open — routing audio fetches through a second
-egress — is **done and deployed**. §3 now records what was built and measured
-rather than what was being considered.
+Both decisions that used to be open are closed. Routing audio through a second
+egress is done and deployed (§3). Searching an episode by what was said is
+built, deployed and warmed (§3a).
 
 ---
 
 ## 1. State right now
 
 Deployed and running: **@podcast_cutter_bot** on big-one, container
-`podcast-cutter`, healthy, no errors in the log.
+`podcast-cutter`, healthy, 0 restarts, no errors in the log.
 
-Git tree is clean. Recent history, newest first:
+Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
-| `d9a85b1` | error taxonomy (Blocked/Unreachable/Unreadable/Timeout) + `scripts/check_reachability.py` |
-| `cd52f08` | SQLite journal, rotating logs on a volume, `/stats`, retention |
-| `967ce12` | interface rebuilt around a screen stack; PTB 21.1.1 → 22.8 |
-| `18499e0` | strip source ID3 tags; tolerate quoted env values |
-| `7f92218` | the big refactor out of `main.py` + `utils/` |
+| `299b2e2` | place the clip on the spoken word; quote the match back |
+| `4652af5` | real progress, estimate and rotating notes while transcribing |
+| `8360846` | `TELEGRAM_PROXY` — this host can no longer reach Telegram |
+| `ce3987d` | the search UI: ask a phrase, get moments, open the editor |
+| `ca1e13e` | the engine: transcribe, judge, window, index, search |
+| `dccbf01` | `ROADMAP.md` |
+| `b94c57c` | bound where an episode URL may point |
 
-**448 tests pass, ruff clean.** Verify with the command in §6.
+**695 tests pass, ruff clean.** Verify with the command in §6.
+
+Two things about the deployment that were not true a week ago:
+
+- The image is **1.51 GB**, up from 930 MB: faster-whisper pulls ctranslate2,
+  onnxruntime, av, tokenizers and numpy. Model weights are *not* in it — they
+  live on the volume at `/data/models` (142 MB) and survive redeploys.
+- The container is pinned with `cpuset: "0-7"`. Checked against `lscpu -e` on
+  big-one: those are cores 0–7 of socket 0, node 0, and their SMT siblings are
+  16–23. Keep `ASR_THREADS` equal to the width of that set.
 
 Configured and working: `ADMIN_IDS=87752988` (so `/stats` works), journal at
 `/data/podcast_cutter.db`, logs at `/data/logs/bot.log`, both on the named
@@ -263,6 +275,52 @@ Portability holds for all three: the bot only ever sees `MEDIA_PROXY`.
 
 ---
 
+## 3a. Searching an episode by what was said — built, deployed, warmed
+
+The full design and the reasoning are in `ROADMAP.md` §15; this is what a
+maintainer needs in front of them.
+
+**Shape.** `asr.py` is a one-method recogniser interface with faster-whisper
+behind it. `transcripts.py` is everything between recognised speech and an
+answer — quarantine, 30 s windows at a 15 s stride, clustering, placement —
+and holds no model, so it runs in milliseconds. `indexer.py` is the pipeline
+and the search. `store.py` gained schema 3.
+
+**A transcript belongs to the audio, not the episode.** Its identity is
+`(source_sha256, backend, model, chunker_version)`. Feeds insert
+advertisements dynamically, so an episode can serve different bytes next month
+and timestamps taken against the old ones would cut an advert.
+
+**Measured on the production host**, `base`, 8 pinned cores, a 53-minute
+Russian episode: **291 s, RTF 0.09**, 212 windows, nothing quarantined. That
+episode is already in the production database under its real id
+(`57684857183`), so a first user opening it gets an instant search.
+
+**Three defects found by using it, all worth not reintroducing:**
+
+1. Searching «нейросети» found nothing in an episode about neural networks. The
+   recogniser had written «нейросетей» and never the exact form; FTS5 matches a
+   token literally. Hence the lemma column — and note pymorphy3 *guesses* at
+   words it does not know rather than passing them through, which is why the
+   surface-form index sits behind it.
+2. The clip opened twenty seconds early: the window was found on lemmas, but
+   `locate_phrase` compared surface forms and so could not find the very word
+   that produced the hit. Both match lemmas now.
+3. Answers quoted the opening of a window rather than the text around the
+   match, and buttons cut it mid-word. Quotations live in the message; buttons
+   only number and stamp.
+
+**Traps.** `esc()` runs `one_line()`, which strips and collapses whitespace —
+a separator carried inside a fragment is eaten, and the parts arrive glued
+("ту жевышкуна"). Join outside the escaping. And an edit throttle that swallows
+a *stage change* looks like a hang: throttle within a stage, force on change.
+
+**Off switch.** `ASR_ENABLED=false` stops transcription without stopping the
+bot; a missing recognition library does the same by itself, since
+`build_indexer` returns `None` rather than raising.
+
+---
+
 ## 4. Deliberate decisions worth not re-litigating
 
 * **No `ConversationHandler`.** A screen stack in `Session` plus an explicit
@@ -296,16 +354,31 @@ Portability holds for all three: the bot only ever sees `MEDIA_PROXY`.
 
 ## 5. Known gaps, roughly by value
 
-1. **Avatar and inline placeholder** — the last two things only @BotFather can
+1. **No evaluation baskets.** Every search defect so far was found by a person
+   using the bot and noticing. That does not scale and it is the next step in
+   `ROADMAP.md` §11. Two things are already known to need measuring: recall of
+   rare entities, where `base` visibly mangles terms and names («нейросеиц»,
+   «оминокислого», «голки в 100 гисены» for "иголки в стоге сена"), and
+   false-hit rate on phrases that were never spoken.
+2. **English morphology.** `unicode61` finds `protein` and does not connect it
+   to `proteins`; pymorphy3 is a Russian dictionary. FTS5 ships `porter`, but a
+   tokenizer is per table, so this is another column or another table.
+3. **Queues and abuse limits.** One heavy job per user exists; a per-user token
+   bucket on input, a bounded queue with a visible position, and a ceiling on
+   inline use do not. Handing out `src_` links before that is asking for it.
+4. **Backups.** Nothing is backed up. The transcripts are now the expensive
+   artifact — `sqlite3 .backup`, not `cp`, because WAL is on.
+5. **Avatar and inline placeholder** — the last two things only @BotFather can
    set (`/setuserpic`, `/setinline`); commands and both descriptions are
    published from `_on_startup` and overwrite anything set there by hand.
-2. Mini App with a waveform picker — needs a frontend and HTTPS hosting.
-3. Caching of directory searches — identical queries each hit the API.
-4. Cancel during a cut leaves ffmpeg running.
-5. No embedded cover art in clips.
-6. Chapter-aware clip boundaries for feeds that publish them.
-7. The audio detour has no monitoring beyond the startup check and the journal.
-   `gatus` already runs on DE and could watch the proxy directly.
+6. `MAX_CUT_SECONDS` is still 900. A fifteen-minute extract is hard to call a
+   citation; see `ROADMAP.md` §13.4.
+7. Caching of directory searches — identical queries each hit the API.
+8. Cancel during a cut leaves ffmpeg running.
+9. Chapter-aware clip boundaries; embedded cover art in clips.
+10. The audio detour has no monitoring beyond the startup check and the
+    journal. `gatus` already runs on DE and could watch the proxy directly —
+    and it now matters more, because Telegram goes through the same tunnel.
 
 ---
 
@@ -339,6 +412,27 @@ docker compose exec -T podcast-cutter sqlite3 -header -column \
 
 # live API credentials check
 docker compose exec -T podcast-cutter python - "Lex Fridman" < scripts/check_api.py
+
+# transcription end to end against a real episode, with diagnostics saying
+# whether a miss is the recogniser's or the index's. WORK_DIR makes it cheap
+# to re-run: the transcript is keyed on the audio hash, so a second run only
+# re-asks the questions.
+docker run --rm -v /home/me/server/projects/podcast-cutter:/app -w /app \
+  -v podcast-asr-check:/work -e WORK_DIR=/work --cpus 8 python:3.12-slim sh -c \
+  'apt-get update -qq && apt-get install -y -qq ffmpeg && \
+   pip install -q "python-telegram-bot[job-queue,rate-limiter]>=22.8" httpx \
+     python-dotenv faster-whisper pymorphy3 && \
+   python scripts/check_transcribe.py <url> нейросети "фраза которой нет"'
+
+# what has been transcribed, and how fast this host actually is
+docker compose exec -T podcast-cutter sqlite3 -header -column \
+  /data/podcast_cutter.db \
+  "SELECT id, episode_title, duration_s, ms, language FROM transcripts"
+
+# is Telegram reachable from here at all? (it was not, on 2026-08-10)
+docker run --rm alpine sh -c \
+  'apk add -q curl; curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" \
+   --max-time 15 https://api.telegram.org/'
 ```
 
 A real end-to-end cut (mp3 + voice note) can be exercised the way the last
