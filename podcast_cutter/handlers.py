@@ -86,18 +86,38 @@ INLINE_EMPTY_CACHE_SECONDS = 5
 #: and a bar that moves more often than this is noise, not information.
 PROGRESS_INTERVAL = 3.0
 
-#: What each stage of a first-time transcription is called for the person
-#: waiting on it. Three edits over several minutes, so each one has to say
-#: something that was not already obvious — "still working" is not progress.
+#: Headline per stage. The bar and the estimate carry the detail.
 _LISTENING_STAGES = {
     "download": "⬇️ Fetching the episode…",
     "decode": "🔧 Preparing the audio…",
-    "transcribe": (
-        "🎧 Listening to the episode…\n\n"
-        "<i>This is the slow part, and it happens once per episode — "
-        "every later search on it is instant.</i>"
-    ),
+    "transcribe": "🎧 Listening to the episode…",
 }
+
+#: Rotated under the bar while recognition runs, one every few edits.
+#:
+#: Each says something true about what is happening or why it is worth the
+#: wait. That is the whole test for adding one: filler that could appear over
+#: any wait at all makes the screen less trustworthy, not friendlier — a person
+#: reading the same cheerful nothing twice concludes it is a spinner, which is
+#: the impression this exists to remove.
+_WAITING_NOTES = (
+    "This happens once per episode — every later search on it is instant.",
+    "The whole episode is being transcribed, not just the part you asked about.",
+    "Timestamps come from the words themselves, so a clip opens where the "
+    "phrase actually starts.",
+    "Silence and music are skipped, which is why the bar sometimes jumps.",
+    "Names and jargon are the hard part; common words come out fine.",
+    "Once this is done you can search this episode as many times as you like.",
+)
+
+#: How long a first transcription takes per second of audio, before this
+#: deployment has measured its own. Measured on the production host with
+#: `base` on eight cores; the store replaces it with the median of real runs
+#: as soon as there is one.
+DEFAULT_RTF = 0.09
+
+#: How long each waiting note stays on screen.
+NOTE_SECONDS = 20
 
 GENERIC_ERROR = "Something went wrong on my side. Please try again."
 
@@ -186,6 +206,45 @@ class StatusEditor:
             await self._message.edit_text(
                 view.text, parse_mode="HTML", reply_markup=view.keyboard
             )
+
+
+def _listening_text(stage, started: float, estimate: int) -> str:
+    """What the waiting screen says right now.
+
+    Three things, in the order they answer "has this hung?": which stage, how
+    far through it, and how much longer. The remaining time is derived from the
+    work actually done so far rather than from the opening estimate, so it
+    stops being a promise the moment reality disagrees with it.
+    """
+    lines = [_LISTENING_STAGES.get(stage.stage, "🎧 Working…")]
+
+    fraction = stage.fraction
+    if fraction is not None:
+        lines.append("")
+        lines.append(progress_bar(int(stage.done), int(stage.total)))
+
+    if stage.stage == "transcribe":
+        elapsed = time.monotonic() - started
+        remaining = None
+        # Only once enough is done for the rate to mean anything: extrapolating
+        # from the first few seconds produces a number that swings wildly and
+        # is worse than saying nothing.
+        if fraction and fraction > 0.05:
+            remaining = int(elapsed / fraction - elapsed)
+        elif estimate >= 30:
+            remaining = max(0, estimate - int(elapsed))
+
+        if remaining and remaining >= 10:
+            lines.append(f"<i>about {format_duration(remaining)} left</i>")
+
+        # Rotated on the clock, not on how often this happens to be called:
+        # edits are throttled, so counting calls would change the line without
+        # anyone seeing it.
+        note = _WAITING_NOTES[int(elapsed // NOTE_SECONDS) % len(_WAITING_NOTES)]
+        lines.append("")
+        lines.append(f"<i>{note}</i>")
+
+    return "\n".join(lines)
 
 
 class PodcastCutterBot:
@@ -604,18 +663,32 @@ class PodcastCutterBot:
             )
             return
 
-        progress = StatusEditor(
-            await update.effective_message.reply_text(
-                "🎧 Getting ready to listen…", parse_mode="HTML"
+        rtf = await self.store.measured_rtf() if self.store else None
+        estimate = int((episode.duration or 0) * (rtf or DEFAULT_RTF))
+        opening = "🎧 Getting ready to listen…"
+        if estimate >= 30:
+            opening += (
+                f"\n\n<i>About {format_duration(estimate)} for this one — "
+                "it only happens once per episode.</i>"
             )
+
+        progress = StatusEditor(
+            await update.effective_message.reply_text(opening, parse_mode="HTML")
         )
+        started = time.monotonic()
+        shown_stage = {"name": ""}
 
         async def on_progress(stage) -> None:
+            # Throttled within a stage — a bar redrawn faster than this is
+            # noise — but a change of stage is information, and must not be
+            # swallowed by the same limiter.
+            changed = stage.stage != shown_stage["name"]
+            shown_stage["name"] = stage.stage
             await progress.set(
-                _LISTENING_STAGES.get(stage.stage, "🎧 Working…"), force=True
+                _listening_text(stage, started, estimate), force=changed
             )
 
-        started = time.monotonic()
+
         outcome = "ok"
         self._busy_users.add(user_id)
         job_dir = self.settings.work_dir / f"asr-{episode.id}"

@@ -53,6 +53,10 @@ RESULTS = 3
 #: Padding added around a located phrase, so the clip does not open mid-word.
 CLIP_LEAD_IN = 2.0
 
+#: How often progress is recomputed while recognising. The renderer throttles
+#: its own edits; this only decides how fresh the number it reads is.
+PROGRESS_TICK = 2.0
+
 
 class TranscriptionDisabled(PodcastCutterError):
     """The kill switch is on."""
@@ -66,10 +70,24 @@ class TranscriptionDisabled(PodcastCutterError):
 
 @dataclass
 class Progress:
-    """What a waiting user is told, in the order it happens."""
+    """What a waiting user is told, in the order it happens.
+
+    ``done`` and ``total`` are in seconds of audio for the transcribing stage
+    and in bytes while downloading — the caller renders them, and in both cases
+    they are measured rather than guessed. ``total`` is ``None`` when the size
+    is genuinely unknown, which is a thing to say rather than to fake.
+    """
 
     stage: str
     detail: str = ""
+    done: float = 0.0
+    total: float | None = None
+
+    @property
+    def fraction(self) -> float | None:
+        if not self.total or self.total <= 0:
+            return None
+        return min(1.0, max(0.0, self.done / self.total))
 
 
 def _sha256(path: Path) -> str:
@@ -183,10 +201,14 @@ class Indexer:
         on_progress=None,
         meta: dict | None = None,
     ) -> int:
-        async def say(stage: str, detail: str = "") -> None:
+        async def say(
+            stage: str, detail: str = "", done: float = 0.0, total: float | None = None
+        ) -> None:
             if on_progress is not None:
                 with contextlib.suppress(Exception):
-                    await on_progress(Progress(stage=stage, detail=detail))
+                    await on_progress(
+                        Progress(stage=stage, detail=detail, done=done, total=total)
+                    )
 
         started = time.monotonic()
         workdir.mkdir(parents=True, exist_ok=True)
@@ -207,8 +229,12 @@ class Indexer:
         )
 
         await say("download", "Fetching the episode")
+
+        async def downloaded(done: int, total: int | None) -> None:
+            await say("download", done=done, total=total)
+
         await _download_with_fallback(
-            resolved, source, self.settings, self.proxy, route
+            resolved, source, self.settings, self.proxy, route, downloaded
         )
 
         digest = await asyncio.to_thread(_sha256, source)
@@ -241,11 +267,33 @@ class Indexer:
         await _decode_for_asr(source, decoded, self.settings.ffmpeg_timeout)
         source.unlink(missing_ok=True)
 
-        await say("transcribe", "Listening to the episode")
-        utterances, language = await asyncio.wait_for(
-            self.recognizer.transcribe(decoded),
-            timeout=self.settings.transcribe_timeout,
-        )
+        # Recognition runs in a worker thread, so its callback cannot await
+        # anything. It records a number; a ticker on the event loop reads it
+        # and reports. The GIL makes a bare float assignment safe, and a lost
+        # update would only mean one stale tick.
+        heard = {"seconds": 0.0}
+        total_seconds = float(info.duration or 0)
+
+        async def tick() -> None:
+            while True:
+                await asyncio.sleep(PROGRESS_TICK)
+                await say(
+                    "transcribe", done=heard["seconds"], total=total_seconds or None
+                )
+
+        await say("transcribe", done=0.0, total=total_seconds or None)
+        ticker = asyncio.create_task(tick())
+        try:
+            utterances, language = await asyncio.wait_for(
+                self.recognizer.transcribe(
+                    decoded, on_segment=lambda end: heard.__setitem__("seconds", end)
+                ),
+                timeout=self.settings.transcribe_timeout,
+            )
+        finally:
+            ticker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticker
         decoded.unlink(missing_ok=True)
 
         result = build(utterances)

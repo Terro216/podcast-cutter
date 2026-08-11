@@ -217,6 +217,41 @@ class TestWriting:
         assert store._execute("SELECT count(*) FROM utterances")[0][0] == 0
 
 
+class TestMeasuredRtf:
+    """How long recognition takes *here*, so the waiting screen can say."""
+
+    async def test_none_until_something_has_been_transcribed(self, store):
+        assert await store.measured_rtf() is None
+
+    async def test_derived_from_real_runs(self, store):
+        transcript = await save(store)
+        store._execute(
+            "UPDATE transcripts SET ms = ?, duration_s = ? WHERE id = ?",
+            (90_000, 1000, transcript),
+        )
+        assert await store.measured_rtf() == pytest.approx(0.09)
+
+    async def test_the_median_ignores_one_freak_run(self, store):
+        """The host is shared, so an evening under load must not become the
+        number every future estimate is built on."""
+        for index, (ms, seconds) in enumerate(
+            [(90_000, 1000), (95_000, 1000), (900_000, 1000)]
+        ):
+            transcript = await save(store, sha=f"s{index}", episode=f"e{index}")
+            store._execute(
+                "UPDATE transcripts SET ms = ?, duration_s = ? WHERE id = ?",
+                (ms, seconds, transcript),
+            )
+        assert await store.measured_rtf() == pytest.approx(0.095)
+
+    async def test_rows_without_timings_are_skipped(self, store):
+        transcript = await save(store)
+        store._execute(
+            "UPDATE transcripts SET ms = NULL WHERE id = ?", (transcript,)
+        )
+        assert await store.measured_rtf() is None
+
+
 class TestSearch:
     async def test_finds_a_word(self, store):
         transcript = await save(store)

@@ -7,6 +7,7 @@ including when the answer is "nothing".
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
 import pytest
@@ -153,7 +154,81 @@ class TestSearching:
         assert "Listening" not in outcome(update).last
         assert payloads(outcome(update).last_markup)
 
-    async def test_progress_is_shown_while_listening(self, bot, context):
+    async def test_the_wait_shows_real_progress_not_a_spinner(self, bot, context):
+        """A 30-minute episode sat on one unchanging line for minutes and read
+        as a hang. faster-whisper yields segments as it goes, and each knows
+        where in the audio it ends, so the bar measures work rather than
+        decorating a wait."""
+        from podcast_cutter.handlers import _listening_text
+        from podcast_cutter.indexer import Progress
+
+        text_now = _listening_text(
+            Progress(stage="transcribe", done=450, total=1800),
+            started=time.monotonic() - 40,
+            estimate=160,
+        )
+        assert "25%" in text_now
+        assert "▰" in text_now
+
+    async def test_the_estimate_comes_from_work_done_not_the_opening_guess(self):
+        """So it stops being a promise the moment reality disagrees."""
+        from podcast_cutter.handlers import _listening_text
+        from podcast_cutter.indexer import Progress
+
+        # A quarter done after 100 s means ~300 s left, whatever was promised.
+        shown = _listening_text(
+            Progress(stage="transcribe", done=450, total=1800),
+            started=time.monotonic() - 100,
+            estimate=10,
+        )
+        assert "5 min" in shown or "300" in shown or "4:" in shown or "5:" in shown
+
+    async def test_no_estimate_is_offered_before_it_would_mean_anything(self):
+        """Extrapolating from the first seconds swings wildly; saying nothing
+        beats saying something wrong."""
+        from podcast_cutter.handlers import _listening_text
+        from podcast_cutter.indexer import Progress
+
+        shown = _listening_text(
+            Progress(stage="transcribe", done=1, total=1800),
+            started=time.monotonic() - 1,
+            estimate=0,
+        )
+        assert "left" not in shown
+
+    async def test_the_note_changes_as_the_wait_goes_on(self):
+        """Reading the same cheerful line twice is how a screen becomes a
+        spinner in the reader's mind."""
+        from podcast_cutter.handlers import NOTE_SECONDS, _listening_text
+        from podcast_cutter.indexer import Progress
+
+        def note_at(seconds):
+            return _listening_text(
+                Progress(stage="transcribe", done=450, total=1800),
+                started=time.monotonic() - seconds,
+                estimate=160,
+            ).splitlines()[-1]
+
+        assert note_at(1) != note_at(NOTE_SECONDS + 1)
+
+    async def test_an_unknown_length_still_renders(self):
+        """A feed that reports no duration must not break the screen."""
+        from podcast_cutter.handlers import _listening_text
+        from podcast_cutter.indexer import Progress
+
+        shown = _listening_text(
+            Progress(stage="transcribe", done=0, total=None),
+            started=time.monotonic(),
+            estimate=0,
+        )
+        assert "Listening" in shown
+
+    async def test_every_stage_is_shown_even_when_edits_are_throttled(
+        self, bot, context
+    ):
+        """Redrawing a bar faster than the throttle is noise, but a change of
+        stage is information — and must not be swallowed by the same limiter.
+        Caught by this test: with fast fakes, "listening" never appeared."""
         await self._ready(bot, context)
         update = await text(bot, context, "фолдинг")
 
@@ -161,6 +236,7 @@ class TestSearching:
             [t for t, _ in outcome(update).edits]
             + [t for t, _ in update.effective_message.replies]
         )
+        assert "Fetching" in said
         assert "Listening" in said
 
     async def test_one_heavy_job_per_person(self, bot, context):

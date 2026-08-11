@@ -269,8 +269,11 @@ class FakeRecognizer:
         ]
         self.calls = 0
 
-    async def transcribe(self, path, language=None):
+    async def transcribe(self, path, language=None, on_segment=None):
         self.calls += 1
+        for utterance in self.utterances:
+            if on_segment is not None:
+                on_segment(utterance.end)
         return list(self.utterances), "ru"
 
 

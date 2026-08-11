@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -49,9 +50,17 @@ class Recognizer(Protocol):
     model: str
 
     async def transcribe(
-        self, path: Path, language: str | None = None
+        self,
+        path: Path,
+        language: str | None = None,
+        on_segment: Callable[[float], None] | None = None,
     ) -> tuple[list[Utterance], str | None]:
-        """Return the utterances and the language actually detected."""
+        """Return the utterances and the language actually detected.
+
+        ``on_segment`` is called with how many seconds of audio have been
+        recognised so far. It may be called from a worker thread, so it must
+        not touch an event loop — record a number and let the loop read it.
+        """
         ...
 
 
@@ -102,7 +111,7 @@ class LocalWhisper:
             download_root=str(self._download_root) if self._download_root else None,
         )
 
-    def _transcribe(self, path: Path, language: str | None):
+    def _transcribe(self, path: Path, language: str | None, on_segment=None):
         if self._loaded is None:
             self._loaded = self._load()
 
@@ -122,35 +131,48 @@ class LocalWhisper:
             temperature=0.0,
         )
 
-        utterances = [
-            Utterance(
-                start=segment.start,
-                end=segment.end,
-                text=segment.text.strip(),
-                words=tuple(
-                    Word(
-                        start=word.start,
-                        end=word.end,
-                        text=word.word.strip(),
-                        probability=getattr(word, "probability", None),
-                    )
-                    for word in (segment.words or ())
-                ),
-                avg_logprob=segment.avg_logprob,
-                no_speech_prob=segment.no_speech_prob,
-                compression_ratio=segment.compression_ratio,
+        # `segments` is a generator: nothing is decoded until it is consumed,
+        # and each item carries the point in the audio it ends at. Iterating
+        # rather than list()-ing it is what turns "please wait" into a real
+        # measure of how far along the work is.
+        utterances = []
+        for segment in segments:
+            utterances.append(
+                Utterance(
+                    start=segment.start,
+                    end=segment.end,
+                    text=segment.text.strip(),
+                    words=tuple(
+                        Word(
+                            start=word.start,
+                            end=word.end,
+                            text=word.word.strip(),
+                            probability=getattr(word, "probability", None),
+                        )
+                        for word in (segment.words or ())
+                    ),
+                    avg_logprob=segment.avg_logprob,
+                    no_speech_prob=segment.no_speech_prob,
+                    compression_ratio=segment.compression_ratio,
+                )
             )
-            for segment in segments
-        ]
+            if on_segment is not None:
+                on_segment(segment.end)
+
         return utterances, getattr(info, "language", None)
 
     async def transcribe(
-        self, path: Path, language: str | None = None
+        self,
+        path: Path,
+        language: str | None = None,
+        on_segment: Callable[[float], None] | None = None,
     ) -> tuple[list[Utterance], str | None]:
         async with self._lock:
             # to_thread because this pins a core for minutes, and the bot has
             # to keep answering buttons while it does.
-            return await asyncio.to_thread(self._transcribe, path, language)
+            return await asyncio.to_thread(
+                self._transcribe, path, language, on_segment
+            )
 
 
 def build_recognizer(settings) -> Recognizer:

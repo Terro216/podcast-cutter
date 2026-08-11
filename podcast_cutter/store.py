@@ -597,6 +597,33 @@ class Store:
 
         return []
 
+    async def measured_rtf(self, limit: int = 20) -> float | None:
+        """How long recognition actually takes here, per second of audio.
+
+        The median of recent runs rather than a constant, because the honest
+        answer depends on the machine, the model and what else it is doing —
+        and because this host is shared, so a figure measured on a quiet
+        afternoon would mislead every evening.
+
+        ``None`` until something has been transcribed, which is exactly when a
+        caller should fall back to a documented default rather than invent one.
+        """
+        rows = await self._run(
+            """
+            SELECT ms, duration_s FROM transcripts
+            WHERE ms > 0 AND duration_s > 0
+            ORDER BY at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+        ratios = sorted(row["ms"] / 1000 / row["duration_s"] for row in rows)
+        if not ratios:
+            return None
+        middle = len(ratios) // 2
+        if len(ratios) % 2:
+            return ratios[middle]
+        return (ratios[middle - 1] + ratios[middle]) / 2
+
     async def utterances_for(self, transcript_id: int) -> list[Utterance]:
         """Every utterance of a transcript, in order, with word timings."""
         rows = await self._run(

@@ -52,10 +52,15 @@ class FakeRecognizer:
         self.calls = 0
         self.delay = delay
 
-    async def transcribe(self, path, language=None):
+    async def transcribe(self, path, language=None, on_segment=None):
         self.calls += 1
         if self.delay:
             await asyncio.sleep(self.delay)
+        # Reported the way the real one does — as each span is decoded — so the
+        # progress path is exercised rather than merely tolerated.
+        for utterance in self.utterances:
+            if on_segment is not None:
+                on_segment(utterance.end)
         return list(self.utterances), "ru"
 
 
@@ -201,7 +206,54 @@ class TestIndexing:
             "e1", "https://cdn.example.com/a.mp3", tmp_path / "job", on_progress
         )
 
-        assert stages == ["download", "decode", "transcribe"]
+        # Deduplicated: download reports repeatedly as bytes arrive.
+        assert [s for i, s in enumerate(stages) if i == 0 or stages[i - 1] != s] == [
+            "download",
+            "decode",
+            "transcribe",
+        ]
+
+    async def test_progress_carries_a_measurable_fraction(
+        self, store, stub_fetch, tmp_path
+    ):
+        """The point of the whole change: a bar that measures work, rather
+        than a line that sits still while a 30-minute episode decodes."""
+        seen = []
+
+        async def on_progress(progress):
+            if progress.stage == "transcribe":
+                seen.append(progress)
+
+        indexer = Indexer(settings(), store, FakeRecognizer())
+        await indexer.transcript_id(
+            "e1", "https://cdn.example.com/a.mp3", tmp_path / "job", on_progress
+        )
+
+        assert seen, "the transcribing stage must report at least once"
+        assert seen[0].total == 600, "episode length, from the probe"
+        assert seen[0].fraction is not None
+
+    async def test_an_unknown_episode_length_reports_no_fraction(
+        self, store, stub_fetch, tmp_path, monkeypatch
+    ):
+        """A feed reporting no duration must yield no bar, not a fake one."""
+
+        async def no_duration(source, timeout, env=None):
+            return _SourceInfo(None)
+
+        monkeypatch.setattr(indexer_mod, "probe", no_duration)
+        seen = []
+
+        async def on_progress(progress):
+            if progress.stage == "transcribe":
+                seen.append(progress)
+
+        indexer = Indexer(settings(), store, FakeRecognizer())
+        await indexer.transcript_id(
+            "e1", "https://cdn.example.com/a.mp3", tmp_path / "job", on_progress
+        )
+
+        assert seen and all(p.fraction is None for p in seen)
 
     async def test_a_failure_does_not_wedge_the_episode(
         self, store, stub_fetch, tmp_path, monkeypatch
