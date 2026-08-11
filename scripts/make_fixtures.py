@@ -137,6 +137,40 @@ async def _audio_for(
     return decoded, digest
 
 
+def _reporter(started: float, total: float):
+    """A callback that says how far into the audio the recogniser has got.
+
+    An hour of silence looks identical to a hang, and this script had exactly
+    that shape: nothing between "fetching" and a finished episode. The bot
+    learned this lesson already — §15, where a 30-minute episode looked hung
+    behind one unchanging line — and `Recognizer.transcribe` has carried the
+    hook for it since. Not using it here was an oversight, not a decision.
+
+    The remaining time is derived from work actually done rather than from an
+    estimate made before starting, which is the same choice the bot makes and
+    the only one that survives a machine being slower than expected.
+
+    Called from a worker thread, so it only formats and prints.
+    """
+    state = {"last": 0.0}
+
+    def report(end: float) -> None:
+        # Per recognised segment is far too often for a terminal; once per
+        # thirty seconds of audio is about one line every few seconds.
+        if end - state["last"] < 30.0:
+            return
+        state["last"] = end
+        spent = time.monotonic() - started
+        rtf = spent / end if end else 0.0
+        line = f"   {format_duration(int(end))} recognised, RTF {rtf:.2f}"
+        if total:
+            remaining = max(0.0, total - end) * rtf
+            line += f", {end / total:.0%}, ~{remaining / 60:.0f} min left"
+        print(f"{line:<78}", end="\r", flush=True)
+
+    return report
+
+
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baskets", nargs="+", type=Path)
@@ -220,8 +254,12 @@ async def main(argv: list[str]) -> int:
             )
 
         started = time.monotonic()
-        utterances, language = await recognizer.transcribe(decoded)
+        utterances, language = await recognizer.transcribe(
+            decoded, on_segment=_reporter(started, episode.duration_s)
+        )
         elapsed = time.monotonic() - started
+        # Leave the progress line behind rather than on top of the result.
+        print(" " * 78, end="\r")
         spoken = max((u.end for u in utterances), default=0.0)
 
         dump_utterances(
