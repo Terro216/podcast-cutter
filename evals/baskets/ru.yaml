@@ -1,0 +1,100 @@
+# Russian evaluation basket — see ROADMAP.md §5 and podcast_cutter/evals.py.
+#
+# Four shows rather than one, deliberately spanning how they were recorded. A
+# single average over mixed conditions hides which one the search is bad at,
+# and "bad at unedited multi-speaker audio" is a different fix from "bad at
+# Russian morphology".
+#
+# Fixtures are produced by scripts/make_fixtures.py and committed, so both runs
+# are offline:
+#   reference — large-v3, then hand-checked (see `annotation` below)
+#   asr       — base, exactly what production ships
+language: ru
+
+episodes:
+  zapusk-neuro:
+    title: Как нейросети помогают ученым искать новые лекарства и делать открытия
+    podcast: Запуск завтра
+    # The episode every known search defect was found on: «нейросети» finding
+    # nothing, the clip opening twenty seconds early, the answers quoting the
+    # wrong text. It is in the basket so those three cannot come back unnoticed.
+    episode_id: "57684857183"
+    duration_s: 3175
+    condition: studio
+    audio_url: https://media.transistor.fm/18d189ee/9dfda6e5.mp3
+    transcripts:
+      reference: zapusk-neuro.reference.json.gz
+      asr: zapusk-neuro.asr.json.gz
+
+  obrecheny-startup:
+    title: Вот уволюсь и сделаю свой стартап — вся правда про мечту айтишников
+    podcast: Мы обречены
+    # Multi-host IT talk, dense with the kind of token that lexical search is
+    # for and dense retrieval is worst at: library names, company names, job
+    # titles, English words spoken inside Russian sentences.
+    episode_id: "57891563128"
+    duration_s: 3781
+    condition: remote
+    audio_url: https://api.mave.digital/storage/podcasts/0705c765-d0dc-48f8-86a3-f2ba85c0c81e/episodes/7d51686f-9335-4f8e-93c7-131b5b1e1a7e.mp3
+    transcripts:
+      reference: obrecheny-startup.reference.json.gz
+      asr: obrecheny-startup.asr.json.gz
+
+  lora-spies:
+    title: Шпионы. В гостях — Маша Богданова
+    podcast: Дневники Лоры Палны
+    # Narrative documentary with a guest: proper names, places and dates, which
+    # is the recall question §15 flagged and could not answer.
+    episode_id: "57885878016"
+    duration_s: 3534
+    condition: studio
+    audio_url: https://api.mave.digital/storage/podcasts/2046ad65-96d8-46b7-a5c4-560321281001/episodes/ec8b4b80-1891-452b-b306-1f59a563a0ba.mp3
+    transcripts:
+      reference: lora-spies.reference.json.gz
+      asr: lora-spies.asr.json.gz
+
+  zavarili-rituals:
+    title: Магические ритуалы, полицейские мотоциклы и квартира, которая только в воображении
+    podcast: "Заварили бизнес"
+    # The hard one, and chosen for it: this episode is published «без редактуры
+    # и монтажа» — unedited and unmixed. Crosstalk, room noise, uneven levels.
+    # If the numbers only hold up on studio audio, that is worth knowing before
+    # anyone points a real podcast at the bot.
+    episode_id: "57041411895"
+    duration_s: 1683
+    condition: field
+    audio_url: https://api.mave.digital/storage/podcasts/4b827f6a-13fe-4513-b5fa-cb7e329c6bd9/episodes/fa00a9c5-61bd-49c1-a89f-478466723785.mp3
+    transcripts:
+      reference: zavarili-rituals.reference.json.gz
+      asr: zavarili-rituals.asr.json.gz
+
+# How the reference timestamps were established, recorded here because a metric
+# whose ground truth is undocumented is a number nobody can argue with.
+#
+#   large-v3 (int8, CPU, big-one socket 1) produces the reference transcript.
+#   Queries are then drafted from that transcript, and the ±30 s around each
+#   answer is listened to and corrected by hand. Two episodes — one RU, one EN —
+#   are additionally corrected in full, to measure how much the unchecked
+#   large-v3 reference flatters itself.
+#
+# large-v3 is not clean on rare terms either. Measured on a 180 s sample of
+# zapusk-neuro: base wrote «в изотипервелении защиты» where large-v3 wrote «без
+# этой первой линии защиты», but the technical word «асимптотически» came back
+# wrong from all three of base, medium and large-v3. That is exactly what the
+# hand pass is for.
+annotation:
+  reference_model: large-v3
+  method: spot-verified
+  fully_corrected: []
+
+# The queries themselves land here once the fixtures exist: 30 positive across
+# quote / meaning / mention, and 10 negatives. Drafting them before there is a
+# transcript to draft them from would be inventing the answer key.
+queries: []
+
+# Filled in by the first green run and updated deliberately whenever a number
+# moves. The runner asserts no regression against these, not an absolute
+# quality bar — nobody knows in advance what hit@3 should be on these episodes,
+# and a threshold invented before the first measurement is a guess in a
+# requirement's clothes.
+baseline: {}

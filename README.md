@@ -136,6 +136,40 @@ over a local HTTP server, so it exercises the same path production does:
 redirect resolution, remote probing, the download fallback, and 403/404
 handling. Those tests skip automatically when ffmpeg is unavailable.
 
+### How the search is measured
+
+Every search defect so far was found by a person noticing something odd. That
+is not a method, and it cannot answer the question that matters — how *often* a
+search is wrong, and in which of several ways. So there are evaluation baskets:
+`evals/baskets/{ru,en}.yaml`, four shows per language chosen to span how they
+were recorded, with queries in four classes. A literal quote tests the
+recogniser. A query sharing no words with what was said tests the retriever. A
+phrase said several times tests whether three answers are three moments or one
+moment listed three times. And a **negative** — something never said — tests the
+only failure that costs trust, because a search that always returns its best
+guess turns a recognition error into a confident lie.
+
+`hit@3` within ±15 s of the reference is the headline, with `hit@1`, the median
+start error and the false-hit rate beside it, RU and EN kept apart.
+
+**Each basket is run twice**: once over a reference transcript and once over
+what the shipped model actually produced from the same audio. Neither number
+means much alone — the gap between them is the price of running `base`, and
+without it there is no telling whether to change the recogniser or the
+retriever. Both transcripts are committed, so both runs are seconds of pure CPU
+with no model and no network, which is what lets the comparison live in the
+test suite instead of in a script nobody remembers to run:
+
+```shell
+poetry run pytest tests/test_baskets.py -s
+```
+
+A basket does not assert an absolute quality bar — nobody knows in advance what
+`hit@3` should be on four particular episodes. It carries the numbers it last
+produced and fails when one moves the wrong way, so an improvement is committed
+deliberately and the history of that block is the record of whether the search
+is getting better.
+
 `scripts/check_api.py` is a live smoke check against the Podcast Index API; it
 needs real credentials and network access.
 

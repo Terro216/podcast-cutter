@@ -27,7 +27,9 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**695 tests pass, ruff clean.** Verify with the command in §6.
+**733 tests pass (8 skipped), ruff clean.** Verify with the command in §6. The
+skips are the basket runs: they wait on an answer key and on the reference
+fixtures, and say so rather than passing vacuously — see §3b.
 
 Two things about the deployment that were not true a week ago:
 
@@ -321,6 +323,52 @@ bot; a missing recognition library does the same by itself, since
 
 ---
 
+## 3b. Measuring the search — apparatus built, answer key pending
+
+`ROADMAP.md` §16 has the design and the measurements. This is the operating
+picture.
+
+**Shape.** `podcast_cutter/evals.py` holds the query classes, the scoring and
+the runner; `evals/baskets/{ru,en}.yaml` hold the queries and the episodes;
+`evals/fixtures/` holds committed transcripts; `tests/test_baskets.py` runs the
+whole thing on every push. `scripts/make_fixtures.py` produces the fixtures and
+`scripts/draft_queries.py` helps write and then check the answer key.
+
+**Both runs are offline.** Searching a transcript is milliseconds; *producing*
+one is the cost. So both the reference (`large-v3`) and the shipped model's
+output (`base`) are committed, and CI reports the gap between them rather than
+somebody occasionally remembering to measure it. The consequence to remember:
+**changing `ASR_MODEL` makes the `asr` fixtures stale**, and nothing detects
+that automatically — regenerate them.
+
+**A basket asserts no regression, not a quality bar.** Each carries a
+`baseline:` block of the numbers it last produced. A metric that moves the
+wrong way by more than one query's wobble fails the test; one that improves is
+re-committed by hand, which makes that block's git history the record of
+whether the search is getting better.
+
+**Measured, so the plan could stop guessing** — 180 s RU sample, int8, socket 1
+(`--cpuset-cpus 8-15 --cpuset-mems 1`), eight physical cores: `base` RTF 0.079,
+`medium` 0.665, `large-v3` 1.252. `base` reproducing §3's 0.07–0.09 is what
+makes the other two trustworthy. Both baskets are 369 min of audio, so a
+reference pass is ~8 h — one night, on the socket the bot is not pinned to.
+
+**Traps.**
+
+* Run benches and fixture jobs on **socket 1**. Production is pinned to
+  `cpuset: "0-7"`, and `--cpus` is a CFS quota that lets threads wander across
+  sockets onto SMT siblings and remote memory — which is what made §3's
+  thread-scaling conclusion unsupportable in the first place (§13.1).
+* A container writing into the repo writes as root; the tree is uid 1001.
+  `chown -R 1001:1001 /app/evals` at the end of the command, or Mutagen carries
+  root-owned files back to DE.
+* Output from a long `docker run` through the SSH shim buffers and may not
+  reach the terminal. `docker logs <id>` shows it immediately.
+* pyyaml is a **dev** dependency. The bot never loads a basket, `evals.py`
+  imports yaml lazily, and the test command in §6 installs it.
+
+---
+
 ## 4. Deliberate decisions worth not re-litigating
 
 * **No `ConversationHandler`.** A screen stack in `Session` plus an explicit
@@ -354,29 +402,43 @@ bot; a missing recognition library does the same by itself, since
 
 ## 5. Known gaps, roughly by value
 
-1. **No evaluation baskets.** Every search defect so far was found by a person
-   using the bot and noticing. That does not scale and it is the next step in
-   `ROADMAP.md` §11. Two things are already known to need measuring: recall of
-   rare entities, where `base` visibly mangles terms and names («нейросеиц»,
-   «оминокислого», «голки в 100 гисены» for "иголки в стоге сена"), and
-   false-hit rate on phrases that were never spoken.
-2. **English morphology.** `unicode61` finds `protein` and does not connect it
-   to `proteins`; pymorphy3 is a Russian dictionary. FTS5 ships `porter`, but a
-   tokenizer is per table, so this is another column or another table.
-3. **Queues and abuse limits.** One heavy job per user exists; a per-user token
+1. **The baskets have no answer key yet.** The apparatus is built and green —
+   `podcast_cutter/evals.py`, `tests/test_baskets.py`, eight episodes chosen
+   and checked reachable in `evals/baskets/` — but the queries are still empty,
+   because they have to be drafted from the reference transcripts and those are
+   an overnight `large-v3` run. §3b has what a maintainer needs; `ROADMAP.md`
+   §16 has the reasoning and the numbers.
+2. **English morphology — the lemma column is inert, not inaccurate.** Checked
+   rather than assumed: `lemmatize("proteins folding rapidly")` returns the
+   string unchanged, and so do `investors`, `companies`, `studies`. pymorphy3's
+   guesser never fires on Latin script, so both indexed columns match English
+   literally and `protein` does not find `proteins`. FTS5 ships `porter`, but a
+   tokenizer is per table, so the fix is another column or another table.
+   Deliberately still open: the EN basket exists to price it first.
+3. **A decoding loop survives quarantine.** Found while building the baskets,
+   not looked for. `obrecheny-startup` at 54:30 has a 448-character
+   «генегенеген…» with `compression_ratio` 24.08 — ten times the threshold —
+   and it is **indexed**, because `is_indexable` needs two signals and this
+   trips only `repetitive`. `looping` counts four-word phrases and the loop is
+   one token; `silence` and `unsure` need low confidence and the model reports
+   −0.06; `too_dense` counts words per second and this is one word. Same shape
+   in `lora-spies` at 20:58 («бззззз…», cr 6.06). Left unfixed on purpose so
+   the basket can price it before and after — see `ROADMAP.md` §16.
+
+4. **Queues and abuse limits.** One heavy job per user exists; a per-user token
    bucket on input, a bounded queue with a visible position, and a ceiling on
    inline use do not. Handing out `src_` links before that is asking for it.
-4. **Backups.** Nothing is backed up. The transcripts are now the expensive
+5. **Backups.** Nothing is backed up. The transcripts are now the expensive
    artifact — `sqlite3 .backup`, not `cp`, because WAL is on.
-5. **Avatar and inline placeholder** — the last two things only @BotFather can
+6. **Avatar and inline placeholder** — the last two things only @BotFather can
    set (`/setuserpic`, `/setinline`); commands and both descriptions are
    published from `_on_startup` and overwrite anything set there by hand.
-6. `MAX_CUT_SECONDS` is still 900. A fifteen-minute extract is hard to call a
+7. `MAX_CUT_SECONDS` is still 900. A fifteen-minute extract is hard to call a
    citation; see `ROADMAP.md` §13.4.
-7. Caching of directory searches — identical queries each hit the API.
-8. Cancel during a cut leaves ffmpeg running.
-9. Chapter-aware clip boundaries; embedded cover art in clips.
-10. The audio detour has no monitoring beyond the startup check and the
+8. Caching of directory searches — identical queries each hit the API.
+9. Cancel during a cut leaves ffmpeg running.
+10. Chapter-aware clip boundaries; embedded cover art in clips.
+11. The audio detour has no monitoring beyond the startup check and the
     journal. `gatus` already runs on DE and could watch the proxy directly —
     and it now matters more, because Telegram goes through the same tunnel.
 
@@ -385,12 +447,32 @@ bot; a missing recognition library does the same by itself, since
 ## 6. Commands you will want
 
 ```shell
-# tests + lint (runs in the image, on big-one)
+# tests + lint (runs in the image, on big-one).
+# pyyaml is dev-only — the baskets need it, the bot never loads one.
 docker build -q -t podcast-cutter:test . && \
-  tar cf - tests pyproject.toml scripts main.py | \
+  tar cf - tests pyproject.toml scripts main.py podcast_cutter evals | \
   docker run --rm -i --user root -e HOME=/tmp podcast-cutter:test bash -c '
-    cd /app && tar xf - && pip -q install pytest pytest-asyncio ruff
+    cd /app && tar xf - && pip -q install pytest pytest-asyncio ruff pyyaml
     ruff check . --output-format concise && pytest -q'
+
+# how expensive is a model on this host? Socket 1, because production is
+# pinned to socket 0 — see the cpuset note in §1.
+docker run --rm --user root --cpuset-cpus 8-15 --cpuset-mems 1 \
+  -v podcast-asr-bench:/bench -e HF_HOME=/bench/hf \
+  -v /home/me/server/projects/podcast-cutter:/app -w /app \
+  --entrypoint python podcast-cutter-podcast-cutter:latest \
+  scripts/bench_asr.py --sample /bench/sample_ru_180.wav \
+  --models base,large-v3 --threads 8
+
+# the basket fixtures. `asr` is ~20 min per basket, `reference` is overnight.
+# Resumable: an episode whose fixture exists is skipped.
+docker run --rm --user root --cpuset-cpus 8-15 --cpuset-mems 1 \
+  -v podcast-asr-bench:/bench -e HF_HOME=/bench/hf \
+  -v /home/me/server/projects/podcast-cutter:/app -w /app \
+  --entrypoint sh podcast-cutter-podcast-cutter:latest -c '
+    python scripts/make_fixtures.py evals/baskets/ru.yaml evals/baskets/en.yaml \
+      --variant asr --model base --work /bench/work
+    chown -R 1001:1001 /app/evals'
 
 # deploy
 docker compose up -d --build && docker compose logs -f

@@ -1060,4 +1060,4 @@ testing = ["check_manifest", "pyroma", "pytest (>=4.3)", "pytest-cov", "pytest-m
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "86efb37c9ba9624e187f5d36e118141dd5e9881f74dfa514623fa7c843a6059e"
+content-hash = "e01ebc1c451900bde66ed1f567930ec32ccab7e95656687da9ff74a4f1739678"

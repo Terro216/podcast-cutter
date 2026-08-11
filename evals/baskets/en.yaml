@@ -1,0 +1,75 @@
+# English evaluation basket — see ROADMAP.md §5 and podcast_cutter/evals.py.
+#
+# The English side has one known problem waiting for a number: `unicode61`
+# finds `protein` and does not connect it to `proteins`, and pymorphy3 is a
+# Russian dictionary. FTS5 ships `porter`, but a tokenizer is per table, so
+# fixing it costs another column or another table. §15 left it until the
+# baskets could say how much it actually costs — which makes plural/singular
+# pairs a deliberate part of this basket rather than an accident of drafting.
+language: en
+
+episodes:
+  invisible-biomimicry:
+    title: The Borrowed Nature of Biomimicry
+    podcast: 99% Invisible
+    # Heavily produced narrative: music beds, field tape, narration cut against
+    # interview. The best case the recogniser will ever get, and therefore the
+    # ceiling the other three are read against.
+    episode_id: "58523106514"
+    duration_s: 1904
+    condition: studio
+    audio_url: https://mgln.ai/e/2/dts.podtrac.com/redirect.mp3/stitcher.simplecastaudio.com/3bb687b0-04af-4257-90f1-39eef4e631b6/episodes/ef052af4-9036-4c68-9d01-5e54358b7fe5/audio/128/default.mp3?aid=rss_feed&awCollectionId=3bb687b0-04af-4257-90f1-39eef4e631b6&awEpisodeId=ef052af4-9036-4c68-9d01-5e54358b7fe5&feed=BqbsxVfO
+    transcripts:
+      reference: invisible-biomimicry.reference.json.gz
+      asr: invisible-biomimicry.asr.json.gz
+
+  hidden-brain-feelings:
+    title: How Feelings Make Us Smarter
+    podcast: Hidden Brain
+    # Studio interview about research: researcher names, institutions and study
+    # descriptions, which is where the `meaning` class has something to bite on
+    # — the words a listener would use are not the words that were said.
+    episode_id: "58811983422"
+    duration_s: 2887
+    condition: studio
+    audio_url: https://mgln.ai/e/2/dts.podtrac.com/redirect.mp3/stitcher.simplecastaudio.com/df179a36-a022-41e3-bf7c-b7a4efc6f51e/episodes/4c93f587-a360-4f19-a445-924c451e26e3/audio/128/default.mp3?aid=rss_feed&awCollectionId=df179a36-a022-41e3-bf7c-b7a4efc6f51e&awEpisodeId=4c93f587-a360-4f19-a445-924c451e26e3&feed=kwWc0lhf
+    transcripts:
+      reference: hidden-brain-feelings.reference.json.gz
+      asr: hidden-brain-feelings.asr.json.gz
+
+  twist-duct-tape:
+    title: $100T is managed by "human duct tape" | E2308
+    podcast: This Week in Startups
+    # Remote multi-host with crosstalk, and jargon nobody's dictionary knows:
+    # ticker symbols, fund names, product names, numbers read aloud. The
+    # English counterpart to the Russian entity-recall problem.
+    episode_id: "57186730831"
+    duration_s: 3482
+    condition: remote
+    audio_url: https://pscrb.fm/rss/p/traffic.libsyn.com/secure/4a885955-6823-4b22-a3e1-a526c25516a5/427464598-44100-2-f957394b89be3.mp3?dest-id=5500155
+    transcripts:
+      reference: twist-duct-tape.reference.json.gz
+      asr: twist-duct-tape.asr.json.gz
+
+  twista-investor:
+    title: Series 2025 Episode 8 - Investor Special
+    podcast: TWISTA - This Week in Startups Australia
+    # Australian speakers and a small production. Whisper's English is trained
+    # overwhelmingly on North American speech, and a basket of four US shows
+    # would report a number that does not survive contact with the directory.
+    episode_id: "46698390099"
+    duration_s: 1722
+    condition: remote
+    audio_url: https://twistartupsaus.com/wp-content/uploads/2025/12/TWISTA-S25E08-Investor-Special.mp3
+    transcripts:
+      reference: twista-investor.reference.json.gz
+      asr: twista-investor.asr.json.gz
+
+annotation:
+  reference_model: large-v3
+  method: spot-verified
+  fully_corrected: []
+
+queries: []
+
+baseline: {}

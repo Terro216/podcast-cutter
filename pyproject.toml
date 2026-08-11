@@ -37,6 +37,12 @@ pymorphy3 = "^2.0.6"
 pytest = "^8.2.0"
 pytest-asyncio = "^0.23.7"
 ruff = "^0.4.4"
+# The evaluation baskets, and nothing else. YAML because a basket is written
+# and read by a person and its comments carry half its value — the note saying
+# what the recogniser was heard to do with a query is what turns a red number
+# into a diagnosis. Dev-only on purpose: the bot never loads one, so this stays
+# out of the production image, and `evals.py` imports it lazily to match.
+pyyaml = "^6.0"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

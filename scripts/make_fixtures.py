@@ -1,0 +1,191 @@
+"""Produce the transcript fixtures a basket is measured over.
+
+A basket is run twice — once against a reference transcript and once against
+what production's model actually wrote — and the gap between them is the price
+of that model. Both runs have to be cheap and deterministic or they will not
+live in CI, so the expensive half happens here, once, offline, and its output
+is committed.
+
+    # what production ships, ~30 minutes for both baskets
+    python scripts/make_fixtures.py evals/baskets/*.yaml --variant asr --model base
+
+    # the reference, ~8 hours for both baskets on this host
+    python scripts/make_fixtures.py evals/baskets/*.yaml \\
+        --variant reference --model large-v3
+
+Measured on big-one, 180 s sample, int8, 8 physical cores of one socket:
+``base`` runs at RTF 0.079, ``medium`` at 0.665 and ``large-v3`` at 1.252. The
+reference pass is therefore an overnight job, and it belongs on the socket the
+bot is *not* pinned to — production has ``cpuset: "0-7"``, so:
+
+    docker run --rm --user root --cpuset-cpus 8-15 --cpuset-mems 1 \\
+      -v podcast-asr-bench:/bench -e HF_HOME=/bench/hf \\
+      -v /home/me/server/projects/podcast-cutter:/app -w /app \\
+      --entrypoint python podcast-cutter-podcast-cutter:latest \\
+      scripts/make_fixtures.py evals/baskets/ru.yaml --variant reference \\
+      --model large-v3 --work /bench/work
+
+Resumable, because eight hours is long enough for something to go wrong: an
+episode whose fixture already exists is skipped, and the decoded audio is kept
+so the second variant does not re-download anything.
+
+**Off the production host** — the reference pass is much faster on an Apple
+Silicon laptop, and it needs nothing from big-one. `ffmpeg` on `PATH`, then:
+
+    poetry install
+    poetry run python scripts/make_fixtures.py evals/baskets/ru.yaml \\
+        evals/baskets/en.yaml --variant reference --model large-v3 --threads 10
+
+It downloads the episodes itself and writes straight into `evals/fixtures/`,
+so the result is a `git add` away. Keep `--compute int8`: the reference is
+going to be corrected by hand regardless, and float32 buys hours rather than
+accuracy where it matters.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from podcast_cutter.asr import LocalWhisper  # noqa: E402
+from podcast_cutter.config import Settings  # noqa: E402
+from podcast_cutter.evals import EpisodeRef, dump_utterances, load_basket  # noqa: E402
+from podcast_cutter.indexer import (  # noqa: E402
+    _decode_for_asr,
+    _download_with_fallback,
+    _resolve_url,
+)
+from podcast_cutter.proxy import MediaProxy  # noqa: E402
+from podcast_cutter.text import format_duration  # noqa: E402
+from podcast_cutter.urls import ensure_safe_source  # noqa: E402
+
+
+async def _audio_for(
+    episode: EpisodeRef, settings: Settings, proxy: MediaProxy, work: Path
+) -> Path:
+    """The episode as 16 kHz mono PCM, fetched once and kept.
+
+    Kept rather than cleaned up on purpose: the two variants of one episode
+    must be transcribed from *the same bytes*, or the comparison quietly
+    includes whatever advertisement the feed inserted between the two runs —
+    which is the failure `TranscriptKey` exists to make impossible in
+    production and would be just as wrong here.
+    """
+    decoded = work / f"{episode.slug}.wav"
+    if decoded.exists():
+        return decoded
+
+    source = work / f"{episode.slug}.bin"
+    await ensure_safe_source(episode.audio_url)
+    resolved, route = await _resolve_url(
+        episode.audio_url, settings.probe_timeout, proxy
+    )
+    await ensure_safe_source(resolved)
+    print(f"   fetching via {route}", flush=True)
+    await _download_with_fallback(resolved, source, settings, proxy, route)
+    await _decode_for_asr(source, decoded, settings.ffmpeg_timeout)
+    source.unlink(missing_ok=True)
+    return decoded
+
+
+async def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("baskets", nargs="+", type=Path)
+    parser.add_argument("--variant", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument(
+        "--compute",
+        default="int8",
+        help=(
+            "CTranslate2 compute type. int8 by default, which is what "
+            "production runs and what the RTF figures above were measured "
+            "with. float32 costs several times the time for a reference "
+            "transcript that is going to be hand-corrected anyway."
+        ),
+    )
+    parser.add_argument(
+        "--fixtures",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "evals" / "fixtures",
+    )
+    parser.add_argument("--work", type=Path, default=Path("/tmp/basket-fixtures"))
+    args = parser.parse_args(argv)
+
+    args.work.mkdir(parents=True, exist_ok=True)
+    # No MEDIA_PROXY: this runs in a bench container outside the compose
+    # network, where the proxy's hostname does not resolve. Every episode in
+    # the baskets was checked to answer directly before it was chosen, so the
+    # detour has nothing to add and a dead one would only add latency.
+    settings = Settings(bot_token="x", api_key="x", api_secret="x", data_dir=args.work)
+    proxy = MediaProxy(settings)
+    recognizer = LocalWhisper(
+        model=args.model,
+        download_root=settings.asr_model_dir,
+        compute_type=args.compute,
+        cpu_threads=args.threads,
+    )
+
+    todo: list[tuple[EpisodeRef, Path]] = []
+    for path in args.baskets:
+        basket = load_basket(path)
+        for episode in basket.episodes.values():
+            name = episode.transcripts.get(args.variant)
+            if name is None:
+                print(f"!! {episode.slug}: no {args.variant!r} fixture named")
+                continue
+            todo.append((episode, args.fixtures / name))
+
+    # Said up front, because the difference between "twenty minutes" and "all
+    # night" is the whole reason the RTF above was measured rather than guessed.
+    hours = sum(episode.duration_s or 0 for episode, _ in todo) / 3600
+    print(
+        f"{len(todo)} episodes, {hours:.1f} h of audio, "
+        f"variant={args.variant} model={args.model}\n"
+    )
+
+    for index, (episode, target) in enumerate(todo, start=1):
+        head = f"[{index}/{len(todo)}] {episode.slug}"
+        if target.exists():
+            print(f"{head}: already done, skipping")
+            continue
+
+        print(f"{head}: {episode.title[:60]}")
+        decoded = await _audio_for(episode, settings, proxy, args.work)
+
+        started = time.monotonic()
+        utterances, language = await recognizer.transcribe(decoded)
+        elapsed = time.monotonic() - started
+        spoken = max((u.end for u in utterances), default=0.0)
+
+        dump_utterances(
+            utterances,
+            target,
+            {
+                "episode_id": episode.slug,
+                "audio_url": episode.audio_url,
+                "backend": recognizer.backend,
+                "model": args.model,
+                "language": language,
+                "seconds": round(spoken, 1),
+                "recognised_in_s": round(elapsed, 1),
+            },
+        )
+        rtf = elapsed / spoken if spoken else 0.0
+        print(
+            f"   {format_duration(int(spoken))} in {elapsed / 60:.1f} min "
+            f"(RTF {rtf:.2f}), {len(utterances)} utterances, lang={language}",
+            flush=True,
+        )
+
+    print(f"\nFixtures in {args.fixtures}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main(sys.argv[1:])))

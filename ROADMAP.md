@@ -149,7 +149,8 @@ has actually been spent on.
 
 ## 5. Evals
 
-Built **before** tuning, or the tuning is blind.
+Built **before** tuning, or the tuning is blind. **Status: the apparatus is
+built and green; the answer key is being written — see §16.**
 
 **Baskets:** 25–30 queries per language, RU and EN, across 3–4 podcasts each,
 deliberately spanning recording conditions — studio, remote/Skype, noisy field.
@@ -311,7 +312,9 @@ internet fails more often than anyone plans for.
    duration ceiling.~~ **Done** — see §14.
 1. ~~Transcription on `base`, cache in SQLite, FTS5 — minimal working search.~~
    **Done and deployed** — §15.
-2. RU/EN baskets and the pytest runner. **Before** tuning.
+2. RU/EN baskets and the pytest runner. **Before** tuning. **In progress** —
+   the runner and both baskets' episodes are in; the queries wait on the
+   reference transcripts. §16.
 3. Embeddings on top, negatives, LLM judge.
 4. SpeechKit as the second backend, and the comparison table.
 5. Queues, limits, source ceiling, backups.
@@ -658,3 +661,244 @@ which of the several possible ways.
   `proteins`, and pymorphy3 is a Russian dictionary. FTS5 has `porter`, but a
   tokenizer is per table, so this is another column or another table. Left
   until the baskets say how much it actually costs.
+
+---
+
+## 16. In progress: the baskets
+
+Step 2 of §11. The apparatus is built, tested and green; what it does not yet
+have is an answer key, because the answer key has to be written *from* the
+reference transcripts and those take a night to produce.
+
+### The design decision that changed the shape
+
+§5 assumed one run in CI and one run by hand. That is backwards. The expensive
+part is *producing* a transcript, not searching one — searching is milliseconds
+— so **both** transcripts are committed as fixtures and **both** runs are
+offline, deterministic, and in CI. The gap between them is then a number CI
+reports on every push rather than a number somebody occasionally remembers to
+go and measure.
+
+The cost is that a fixture has to be regenerated when the model changes, which
+is exactly the event `TranscriptKey`'s `asr_model` field already tracks.
+
+### What exists
+
+* **`podcast_cutter/evals.py`** — the query classes, the scoring, the roll-up
+  and the runner. It goes through the real `Indexer.search` and the real store
+  rather than calling the retrieval helpers directly: an eval that reimplements
+  the path it measures measures the reimplementation, and both defects this
+  project has had in placement and clustering lived *between* those helpers.
+* **`evals/baskets/{ru,en}.yaml`** — four shows per language, chosen for
+  recording condition as §5 asks, with every enclosure checked reachable from
+  big-one first. An episode this server cannot fetch is not a candidate, and
+  several obvious ones are not: BBC's `open.live.bbc.co.uk` read-timed out on
+  both routes, and Радио-Т — the best Russian crosstalk case there is — never
+  came back with a duration the API would filter on.
+
+  | | show | episode | min | condition |
+  | --- | --- | --- | --- | --- |
+  | ru | Запуск завтра | нейросети и лекарства | 53 | studio |
+  | ru | Мы обречены | «Вот уволюсь и сделаю свой стартап» | 63 | remote |
+  | ru | Дневники Лоры Палны | «Шпионы» | 59 | studio |
+  | ru | Заварили бизнес | итоги сезона, ч.1 | 28 | field |
+  | en | 99% Invisible | The Borrowed Nature of Biomimicry | 32 | studio |
+  | en | Hidden Brain | How Feelings Make Us Smarter | 48 | studio |
+  | en | This Week in Startups | E2308 | 58 | remote |
+  | en | TWISTA | Investor Special | 29 | remote |
+
+  Two of those are chosen for being hard rather than representative. The
+  Заварили episode is published «без редактуры и монтажа» — unedited, with
+  crosstalk and uneven levels — and TWISTA is Australian, where Whisper's
+  English training skews heavily North American. A basket of four well-produced
+  US shows would report a number that does not survive the directory.
+* **`tests/test_baskets.py`** — runs both baskets over both variants, prints
+  the table unconditionally, and fails on regression.
+* **`scripts/make_fixtures.py`** — the overnight half. Resumable, and it keeps
+  the decoded audio so both variants are transcribed from *the same bytes*.
+* **`scripts/draft_queries.py`** — the part that makes writing sixty queries an
+  evening instead of a week. `--draft` proposes candidates by how a word is
+  distributed across the basket, which needs no stopword list and no dictionary
+  — both of which would be one more thing to be wrong in a second language.
+  The useful case is the negatives: a word the *other* episodes lean on and
+  this one never says is a negative a listener could plausibly type and be
+  wrong about, which is a better test than one somebody invented.
+  `--verify` then prints the reference text around each claimed timestamp
+  beside what both variants return, so a wrong `at:` shows up as text that does
+  not contain the phrase.
+* **`scripts/bench_asr.py`** — the model-cost bench §13.1 asked for.
+
+### A basket asserts no regression, not a quality bar
+
+Nobody knows in advance what `hit@3` *should* be on four particular episodes,
+and a threshold invented before the first measurement is a guess wearing a
+requirement's clothes. So each basket carries a `baseline:` block of the
+numbers it last produced, and the test fails when a number moves the wrong way
+by more than one query's worth of wobble. A number that improves is re-committed
+deliberately, which makes the git history of that block the record of whether
+the search is getting better.
+
+Slack is per metric and not one figure: rates are fractions and the start error
+is seconds, so a single tolerance would be either hair-trigger on one or inert
+on the other.
+
+### Measured: what a reference transcript costs here
+
+The plan said "generate with `large-v3` on the M2 Pro". Before building around
+that, `large-v3` was measured on big-one itself — 180 s RU sample, int8,
+`--cpuset-cpus 8-15 --cpuset-mems 1`, i.e. eight physical cores of the socket
+production is *not* pinned to:
+
+| Model | load | decode 180 s | RTF | 53-min episode |
+| --- | --- | --- | --- | --- |
+| `base` | 6.0 s | 14.3 s | **0.079** | ~4.2 min |
+| `medium` | 23.0 s | 119.7 s | **0.665** | ~35 min |
+| `large-v3` | 42.0 s | 225.4 s | **1.252** | ~67 min |
+
+`base` at 0.079 reproduces the 0.07–0.09 in §3, which is what makes the other
+two rows believable. The extrapolation that had been reasoned from parameter
+counts said 1.5–2 h per episode for `large-v3`; the measurement says 1.1 h.
+Both baskets together are 369 minutes of audio, so the reference pass is about
+**8 hours** — one night, on the idle socket, without taking a core from the bot.
+
+**The quality difference is the class that breaks lexical search**, which is
+the part RTF cannot tell you. On the same sample:
+
+| `base` | `large-v3` |
+| --- | --- |
+| «в изотипервелении защиты» | «без этой первой линии защиты» |
+| «первые статии» | «первые стадии» |
+| «в одной инстрации» | «Новая администрация» |
+| «привык**слышать**» | «привык слышать» |
+
+The last one matters more than it looks: FTS5 tokenises on word boundaries, so
+a glued pair is one token and a search for either half misses it entirely.
+
+And the honest limit: «асимптотически» came back wrong from `base`, `medium`
+*and* `large-v3`. A `large-v3` transcript is a much better reference, not a
+correct one — which is the whole argument for the hand pass below.
+
+### Ground truth: spot-verified, plus two episodes in full
+
+Hand-transcribing six hours is not realistic and short excerpts would cheat:
+with only ten minutes of context, "this was never said" is trivially easy and
+the false-hit rate — the number the negatives exist to produce — comes out
+flattering. So:
+
+* `large-v3` produces the reference transcript;
+* queries are drafted *from* it, so the timestamp is usually already right;
+* the ±30 s around each answer is listened to and corrected — 60 queries at
+  about a minute each, an evening rather than a week;
+* **one RU and one EN episode are corrected in full**, which is what makes the
+  cheap method auditable: it measures how much the unchecked reference
+  flatters itself, and it gives a real WER figure at two points.
+
+### Found while building it: the quarantine's two-signal rule has a hole
+
+Not looked for. The drafting tool proposes candidate queries by picking out
+distinctive words, and it proposed a 448-character one:
+
+```
+obrecheny-startup, 54:30
+  «но не, но не генегенегенегенегенеген…»  (448 chars)
+  compression_ratio = 24.08   avg_logprob = -0.06   no_speech_prob = 0.50
+  signals = ['repetitive']    indexable = True
+```
+
+A textbook Whisper decoding loop — the exact failure §13.2's quarantine exists
+for — **stays in the index**, because `is_indexable` needs two independent
+signals and this trips only one. Each of the others misses for a reason:
+
+* `looping` counts a repeated four-word phrase, and the loop is inside a
+  *single token*, so there are fewer than four words to count;
+* `silence` needs `no_speech_prob > 0.6` *and* `avg_logprob < -1.0`, and the
+  model is supremely confident in its invention: −0.06;
+* `unsure` needs the same low confidence, so it misses too;
+* `too_dense` counts words per second, and this is one enormous word.
+
+`lora-spies` has the same shape at 20:58 — «бззззззз…», `compression_ratio`
+6.06, one signal, indexed.
+
+**Not fixed here, deliberately.** A compression ratio ten times the threshold
+is arguably conclusive on its own, and that is the obvious one-line change. But
+changing what gets indexed changes every number the basket is about to produce,
+and this project's own rule is that the answer is a metric rather than a
+plausible fix applied blind. It goes in as a known defect, the basket prices
+it — the excerpt shown beside an answer is drawn from window text, so the
+visible cost is a moment quoted with «бззззззз» in it — and then it gets fixed
+against a baseline that can show the fix worked.
+
+Worth noting what this says about the method: the baskets caught something in
+their first hour of existence, and it was caught by the *drafting* tool, before
+a single query had been written.
+
+### Checked while building it: English gets no morphology at all
+
+§15 recorded the English gap as "pymorphy3 is a Russian dictionary", which
+implied it does something imperfect to English words. It does not do anything:
+`lemmatize("proteins folding rapidly")` returns the string unchanged, and the
+same for `investors`, `companies`, `studies`. pymorphy3's guesser never fires
+on Latin script.
+
+So the lemma column is **inert** for English rather than unreliable, and both
+indexed columns match literally. That is a cleaner problem than the one §15
+described — nothing has to be undone, something has to be added.
+
+The drafting tool then showed what it costs without being asked. Run over
+`invisible-biomimicry`, its own candidate list contains the evidence:
+
+```
+mention candidates      15×  tunnel        0:19, 4:23, 4:52, 5:02, 7:51
+                         7×  tunnels       4:28, 4:34, 5:56, 5:57, 7:21
+negative candidates     53×  emotional
+                        37×  emotions
+```
+
+`tunnel` and `tunnels` are two different index tokens describing one subject,
+so a search for either misses the other's occurrences outright. Those pairs are
+the cheapest possible measurement of the missing stemmer, and they write
+themselves into the EN `quote` class.
+
+Worth noting alongside: English entity mangling is not milder than Russian.
+`base` wrote `biomemically` for "biomimetically" and `endomologist` for
+"entomologist" in the same episode.
+
+### Metrics
+
+`hit@3` at ±15 s is the headline, with `hit@1`, the median start error, and the
+false-hit rate on negatives beside it, RU and EN separately and split again by
+query class — `quote` tests the recogniser, `meaning` tests the retriever,
+`negative` tests the refusal, and one average over the three says nothing about
+which one moved.
+
+Two details that are not cosmetic:
+
+* **A positive query carries a *list* of acceptable timestamps.** The `mention`
+  class exists for phrases said several times; with one reference, answering at
+  the second and third real occurrences would score as two misses.
+* **The median start error is reported, not the mean.** Placement lands either
+  on the matched word or, when `locate_phrase` cannot find it, on the window
+  start. That is bimodal, and a mean over it describes neither case.
+* **Its floor is ~2 s, not 0.** A reference names when the word was said and
+  `CLIP_LEAD_IN` opens the clip two seconds earlier on purpose, so perfect
+  placement measures as two seconds of error. Worth writing down before the
+  first person reads 2.0 s as a defect.
+
+### Smoke-run on real audio, before any of it was believed
+
+Six hand-made queries against the committed `base` transcript of
+`zapusk-neuro` — not the answer key, just enough to prove the path works on a
+790-utterance transcript rather than on the synthetic one in the unit tests:
+
+```
+run                        n  hit@1  hit@3    err  false
+ru/asr                     6 100.0% 100.0%   2.6s   0.0%
+```
+
+Both negatives came back empty, «нейросети» returned three distinct moments —
+so §15's lemmatisation fix still holds — and «лекарство» landed on three
+different occurrences, which is the clustering working. One query, «белки»,
+scored `distinct=1` against four references: two of the returned moments were
+real occurrences the hand-made list simply did not contain. That is not a
+tooling failure, it is the reason `at:` has to be written from the transcript
+rather than from memory, and it is exactly what the drafting tool is for.
