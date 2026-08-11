@@ -19,6 +19,8 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
+| `44701e7` | evaluation baskets: how often the search is wrong, and which way |
+| `a866f4b` | bench what a Whisper model costs on this host |
 | `299b2e2` | place the clip on the spoken word; quote the match back |
 | `4652af5` | real progress, estimate and rotating notes while transcribing |
 | `8360846` | `TELEGRAM_PROXY` — this host can no longer reach Telegram |
