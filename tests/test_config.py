@@ -21,6 +21,7 @@ def clean_env(monkeypatch):
         "MAX_SOURCE_SECONDS",
         "MAX_CONCURRENT_JOBS",
         "WORK_DIR",
+        "TELEGRAM_PROXY",
     ):
         monkeypatch.delenv(name, raising=False)
     # load_settings() calls load_dotenv(); stop it from picking up a real .env.
@@ -144,6 +145,64 @@ class TestSourceCeiling:
         assert not Settings(
             bot_token="t", api_key="k", api_secret="s"
         ).allow_private_sources
+
+
+class TestTelegramProxy:
+    """The escape hatch for a host that cannot reach Telegram at all.
+
+    Added after the production host's egress started black-holing
+    api.telegram.org while ordinary sites answered normally.
+    """
+
+    def test_direct_by_default(self):
+        assert Settings(
+            bot_token="t", api_key="k", api_secret="s"
+        ).telegram_proxy == ""
+
+    def test_read_from_the_environment(self, monkeypatch):
+        with_env(monkeypatch, TELEGRAM_PROXY="http://media-proxy:3128")
+        assert load_settings().telegram_proxy == "http://media-proxy:3128"
+
+    def test_a_trailing_slash_is_dropped(self, monkeypatch):
+        with_env(monkeypatch, TELEGRAM_PROXY="http://media-proxy:3128/")
+        assert load_settings().telegram_proxy == "http://media-proxy:3128"
+
+    @pytest.mark.parametrize(
+        "value", ["media-proxy:3128", "ftp://x", "3128", "//media-proxy:3128"]
+    )
+    def test_refuses_something_that_is_not_a_proxy_url(self, value):
+        # At startup, naming the variable — rather than as a connection error
+        # on the first update, which says nothing about why.
+        with pytest.raises(ConfigError, match="TELEGRAM_PROXY"):
+            Settings(
+                bot_token="t", api_key="k", api_secret="s", telegram_proxy=value
+            )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "http://media-proxy:3128",
+            "https://proxy.example:8443",
+            "socks5://127.0.0.1:1080",
+        ],
+    )
+    def test_accepts_the_schemes_httpx_understands(self, value):
+        assert Settings(
+            bot_token="t", api_key="k", api_secret="s", telegram_proxy=value
+        ).telegram_proxy == value
+
+    def test_it_is_independent_of_the_media_proxy(self):
+        """They solve different problems and must be settable apart: audio
+        needs a detour far more often than the API does."""
+        settings = Settings(
+            bot_token="t",
+            api_key="k",
+            api_secret="s",
+            telegram_proxy="http://a:3128",
+            media_proxy="http://b:3128",
+        )
+        assert settings.telegram_proxy != settings.media_proxy
+        assert settings.proxy_enabled
 
 
 class TestInvariants:

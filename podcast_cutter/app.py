@@ -277,7 +277,7 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
         store.connect()
     bot = PodcastCutterBot(settings, client, store, build_indexer(settings, store))
 
-    application = (
+    builder = (
         ApplicationBuilder()
         .token(settings.bot_token)
         # Queues outgoing calls so a burst of users cannot trip Telegram's
@@ -285,8 +285,17 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
         .rate_limiter(AIORateLimiter())
         .post_init(_on_startup)
         .post_shutdown(_on_shutdown)
-        .build()
     )
+    if settings.telegram_proxy:
+        # Both, deliberately: PTB keeps a second connection pool for long
+        # polling, and routing only the first would leave the bot able to
+        # answer and unable to hear.
+        builder = builder.proxy(settings.telegram_proxy).get_updates_proxy(
+            settings.telegram_proxy
+        )
+        logger.info("Talking to Telegram through %s", settings.telegram_proxy)
+
+    application = builder.build()
     application.bot_data["api_client"] = client
     application.bot_data["bot"] = bot
     application.bot_data["store"] = store

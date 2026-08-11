@@ -58,6 +58,7 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|
 | `LOG_RETENTION_DAYS`  | no       | Journal retention, 0 keeps everything (90)|
 | `ADMIN_IDS`           | no       | Telegram ids allowed to run `/stats`     |
+| `TELEGRAM_PROXY`      | no       | Proxy for the Bot API; empty = direct    |
 | `MEDIA_PROXY`         | no       | Proxy for audio fetches; empty = direct  |
 | `MEDIA_PROXY_MODE`    | no       | `fallback` (default), `always` or `off`  |
 
@@ -263,7 +264,8 @@ redirect to — accounted for a sixth of the directory on its own, and
 Anchor-hosted feeds answer 403.
 
 `MEDIA_PROXY` routes **audio fetches only** through a proxy somewhere the CDNs
-are happier; the directory API and Telegram always go direct. It defaults to
+are happier; the directory API goes direct, and so does Telegram unless
+`TELEGRAM_PROXY` says otherwise — see below. It defaults to
 empty, in which case none of this is active.
 
 With `MEDIA_PROXY_MODE=fallback` — the default — episodes are fetched directly
@@ -275,6 +277,33 @@ configured but stops using it, which is the one-variable rollback.
 
 `deploy/README.md` covers a working setup — a loopback proxy plus an SSH
 forward — and how to move it elsewhere.
+
+### When Telegram itself is unreachable
+
+On 2026-08-10 the production host stopped reaching Telegram at all. Measured
+from that host: `api.telegram.org` and `core.telegram.org` were TCP black holes
+— DNS resolved, `connect` never completed, 20 s timeouts — while `api.github.com`
+and `pypi.org` answered in under 150 ms and the same request from another
+egress got a `302` in 24 ms. Selective filtering, not an outage, and the same
+filter that already blocks `traffic.megaphone.fm`.
+
+`TELEGRAM_PROXY` sends the Bot API through a proxy, and it is set for both the
+main connection pool and the long-polling one — routing only the first leaves a
+bot that can answer but cannot hear.
+
+Two things make this different from `MEDIA_PROXY`, and both are the reason it
+is off by default:
+
+- **There is no fallback and no mode.** A proxy that works for one Bot API
+  request works for all of them, and one that does not means no bot at all —
+  `getMe` runs before anything else and a failure there is not a degraded mode,
+  it is a crash loop.
+- **It makes the proxy a hard dependency.** Losing the tunnel used to cost
+  audio fetches; with this set it costs the whole bot. Nothing in
+  `docker-compose.yml` enforces the ordering, on purpose: `restart:
+  unless-stopped` plus PTB's bootstrap retries converge on their own once the
+  sidecar is healthy, which is simpler than a `depends_on` that would drag the
+  proxy profile into deployments that do not want it.
 
 ## Sources
 

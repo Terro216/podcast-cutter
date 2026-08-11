@@ -132,6 +132,20 @@ class Settings:
     #: Must be ``http://``: ffmpeg only understands a plain HTTP proxy, which
     #: it uses for ``https://`` sources via CONNECT.
     media_proxy: str = ""
+    #: HTTP proxy for the Telegram Bot API itself. Empty — the default — goes
+    #: direct, which is what every deployment should want.
+    #:
+    #: This exists because on 2026-08-10 the production host's egress stopped
+    #: reaching Telegram at all: `api.telegram.org` and `core.telegram.org` both
+    #: became TCP black holes while GitHub and PyPI answered in under 150 ms,
+    #: i.e. selective filtering rather than an outage. The bot cannot start
+    #: without `getMe`, so there is no degraded mode to fall back to.
+    #:
+    #: Unlike :attr:`media_proxy` this has no fallback ordering: a proxy that
+    #: works for one request works for all of them, and one that does not means
+    #: no bot. Setting it therefore makes the proxy a hard dependency — worth
+    #: knowing, because until now losing the tunnel only cost audio fetches.
+    telegram_proxy: str = ""
     #: See :data:`PROXY_MODES`.
     media_proxy_mode: str = PROXY_MODE_FALLBACK
     media_proxy_probe_url: str = DEFAULT_PROXY_PROBE_URL
@@ -195,6 +209,13 @@ class Settings:
             raise ConfigError(
                 f"MEDIA_PROXY_MODE must be one of {', '.join(PROXY_MODES)}, "
                 f"got {self.media_proxy_mode!r}."
+            )
+        if self.telegram_proxy and not self.telegram_proxy.startswith(
+            ("http://", "https://", "socks5://")
+        ):
+            raise ConfigError(
+                "TELEGRAM_PROXY must be an http://, https:// or socks5:// URL, "
+                f"got {self.telegram_proxy!r}."
             )
         if self.media_proxy and not self.media_proxy.startswith("http://"):
             raise ConfigError(
@@ -324,6 +345,7 @@ def load_settings() -> Settings:
         asr_backend=(_env("ASR_BACKEND") or Settings.asr_backend).lower(),
         asr_model=_env("ASR_MODEL") or Settings.asr_model,
         asr_threads=_positive_int("ASR_THREADS", Settings.asr_threads),
+        telegram_proxy=_env("TELEGRAM_PROXY").rstrip("/"),
         media_proxy=_env("MEDIA_PROXY").rstrip("/"),
         media_proxy_mode=(
             _env("MEDIA_PROXY_MODE") or Settings.media_proxy_mode
