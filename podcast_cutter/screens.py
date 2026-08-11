@@ -57,10 +57,27 @@ def breadcrumb(session: Session) -> str:
             parts.append(esc(truncate(session.feed.title, 28)))
         elif session.episode:
             parts.append(esc(truncate(session.episode.feed_title, 28)))
+        # And, when the clip came out of a search, what was searched for — the
+        # trail is where "how did I get here" is answered.
+        if session.phrase and (
+            screen is Screen.MOMENTS or came_from_search(session)
+        ):
+            parts.append(f"🔎 “{esc(truncate(session.phrase, 20))}”")
 
     if not parts:
         return ""
     return f"<i>{CRUMB.join(parts)}</i>\n\n"
+
+
+def came_from_search(session: Session) -> bool:
+    """Whether the moments list is one ``‹ Back`` away.
+
+    Asked of the history rather than of ``session.phrase``, which outlives the
+    screen that set it: a user who searches, leaves, and opens another episode
+    by hand still has a phrase, and would be told to go back to a list that is
+    no longer behind them.
+    """
+    return any(nav.screen is Screen.MOMENTS for nav in session.history)
 
 
 def episode_label(episode: Episode) -> str:
@@ -250,6 +267,16 @@ def interval(session: Session, settings: Settings) -> View:
         f"<code>12:30-14:00</code> for an exact range."
     )
 
+    # Arriving from a search replaces the list of moments with this screen, so
+    # say where the others went. `‹ Back` already returns to them; without this
+    # line the only way to know is to try it, and a person who found three
+    # moments and wants the second one should not have to guess.
+    if came_from_search(session) and len(session.moments) > 1:
+        body += (
+            f"\n\n<i>‹ Back returns to the {len(session.moments)} moments "
+            f"found for “{esc(truncate(session.phrase, 40))}”.</i>"
+        )
+
     return View(
         breadcrumb(session) + body,
         kb.interval_keyboard(
@@ -317,7 +344,11 @@ def moments(session: Session) -> View:
     lines = []
     for index, moment in enumerate(session.moments, start=1):
         before, match, after = excerpt(moment.text, session.phrase)
-        quoted = esc(before) + (f"<b>{esc(match)}</b>" if match else "") + esc(after)
+        # Joined here, with the separators outside the escaped parts: `esc`
+        # collapses and strips whitespace, so a space tucked inside a fragment
+        # never arrives.
+        parts = [esc(before), f"<b>{esc(match)}</b>" if match else "", esc(after)]
+        quoted = " ".join(part for part in parts if part)
         lines.append(
             f"<b>{index}.</b> <code>{format_duration(int(moment.clip_start))}</code>"
             f"\n{quoted}"

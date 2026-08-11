@@ -403,11 +403,11 @@ def excerpt(text: str, query: str, width: int = 120) -> tuple[str, str, str]:
     if last_kept < len(words) - 1:
         after = after + "…"
 
-    return (
-        (before + " ") if before else "",
-        words[hit],
-        (" " + after) if after else "",
-    )
+    # Bare fragments, with no padding spaces: whoever renders them joins them.
+    # Padding here does not survive — the escaping helper collapses and strips
+    # whitespace, so a space carried inside a fragment is silently eaten and
+    # the parts arrive glued together ("ту жевышкуна прикладной").
+    return before, words[hit], after
 
 
 @dataclass

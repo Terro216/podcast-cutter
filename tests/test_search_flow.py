@@ -337,10 +337,72 @@ class TestHowAnswersRead:
         picks = [r for r in rows if r[0].callback_data.startswith(kb.MOMENT_PREFIX)]
         assert len(picks) == 1 and len(picks[0]) == 3
 
+    async def test_words_are_not_glued_to_the_emphasised_match(self):
+        """Reported from real use: "ту жевышкуна прикладной".
+
+        The escaping helper collapses and strips whitespace, so a separator
+        carried inside a fragment is eaten before it is ever rendered.
+        """
+        rendered = self._view().text
+        assert "провышленный" not in rendered
+        assert " <b>фолдинг</b> " in rendered
+
     async def test_markup_in_the_transcript_cannot_break_the_message(self):
         """Recognised text is arbitrary, and it is rendered as HTML."""
         view = self._view(phrase="<b>")
         assert "<b>&lt;" in view.text or "&lt;b&gt;" in view.text
+
+
+class TestGettingBackToTheOtherMoments:
+    """Asked in real use: "why does the list disappear, what if I want the
+    second one?" Opening a moment edits the same message, so the list is
+    replaced — recoverable with Back, but only if you know that."""
+
+    async def _searched(self, bot, context):
+        session, _ = await at_the_editor(bot, context)
+        await tap(bot, context, kb.ACTION_FIND)
+        await text(bot, context, "фолдинг")
+        return session
+
+    async def test_back_returns_to_the_moments(self, bot, context):
+        session = await self._searched(bot, context)
+        await tap(bot, context, f"{kb.MOMENT_PREFIX}:122")
+        assert session.current.screen is Screen.INTERVAL
+
+        update = await tap(bot, context, kb.NAV_BACK)
+
+        assert session.current.screen is Screen.MOMENTS
+        assert "фолдинг" in update.shown
+
+    async def test_the_moments_survive_the_trip(self, bot, context):
+        """The list is rebuilt from the session, so it must still be there."""
+        session = await self._searched(bot, context)
+        found = len(session.moments)
+        await tap(bot, context, f"{kb.MOMENT_PREFIX}:122")
+        await tap(bot, context, kb.NAV_BACK)
+        assert len(session.moments) == found
+
+    async def test_the_clip_editor_says_where_back_leads(self, bot, context):
+        session = await self._searched(bot, context)
+        session.moments = session.moments * 2  # more than one to return to
+        update = await tap(bot, context, f"{kb.MOMENT_PREFIX}:122")
+        assert "Back returns to" in update.shown
+
+    async def test_it_says_nothing_when_there_is_nothing_to_return_to(
+        self, bot, context
+    ):
+        """A phrase outlives the screen that set it, so this is asked of the
+        history: opening an episode by hand after an earlier search must not
+        promise a list that is not behind you."""
+        session, _ = await at_the_editor(bot, context)
+        session.phrase = "фолдинг"
+        view = screens.interval(session, bot.settings)
+        assert "Back returns to" not in view.text
+
+    async def test_the_trail_shows_what_was_searched_for(self, bot, context):
+        await self._searched(bot, context)
+        update = await tap(bot, context, f"{kb.MOMENT_PREFIX}:122")
+        assert "🔎" in update.shown
 
 
 class TestOpeningAMoment:
