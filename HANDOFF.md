@@ -367,9 +367,15 @@ python scripts/make_fixtures.py evals/baskets/ru.yaml evals/baskets/en.yaml \
 ```
 
 It downloads the episodes itself and writes into `evals/fixtures/`. Both
-variants of one episode must come from the same bytes or the comparison is
-partly between two recordings, so each fixture records the decoded audio's
+variants of one episode must come from the same recording or the comparison is
+partly between two recordings, so each fixture records the **download's**
 SHA-256 and the script refuses to write one that disagrees with its sibling.
+
+Hash the download, never the decode. The first attempt hashed the decoded PCM
+and failed on episode one of a laptop run: macOS ffmpeg and the container's
+7.1.5 produce different PCM from an identical mp3. big-one re-downloading and
+re-decoding reproduced its own hash exactly, which is what pinned the
+difference on the decoder rather than on the feed.
 
 **Traps.**
 

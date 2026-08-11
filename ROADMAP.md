@@ -715,15 +715,25 @@ is exactly the event `TranscriptKey`'s `asr_model` field already tracks.
 * **`tests/test_baskets.py`** — runs both baskets over both variants, prints
   the table unconditionally, and fails on regression.
 * **`scripts/make_fixtures.py`** — the expensive half. Resumable, it keeps the
-  decoded audio so both variants are transcribed from *the same bytes*, and it
-  records that audio's SHA-256 in the fixture and refuses to write a variant
-  whose audio no longer matches a sibling's. That guard exists because the
-  reference pass runs on a different machine days later, which is exactly when
-  dynamic ad insertion would make the two runs a comparison of two different
-  recordings. Checked at the time: re-fetching `hidden-brain-feelings` and
-  `twist-duct-tape` — both behind podtrac/simplecast/libsyn chains — came back
-  byte-identical, so the hazard is not live today. That is a fact about one
-  afternoon, not a property of podcast hosting, hence the guard.
+  decoded audio so both variants come from one recording, and it records the
+  **download's** SHA-256 and refuses to write a variant whose source no longer
+  matches a sibling's. That guard exists because the reference pass runs on a
+  different machine days later, which is exactly when dynamic ad insertion
+  would make the two runs a comparison of two different recordings. Checked at
+  the time: re-fetching `hidden-brain-feelings` and `twist-duct-tape` — both
+  behind podtrac/simplecast/libsyn chains — came back byte-identical, so the
+  hazard is not live today. That is a fact about one afternoon, not a property
+  of podcast hosting, hence the guard.
+
+  **It hashed the decoded PCM first, and that was wrong.** The first reference
+  pass on a laptop failed on episode one: macOS ffmpeg and the container's
+  7.1.5 turn one identical mp3 into two different byte streams, so the check
+  fired everywhere and blamed the feed for it. Diagnosed rather than guessed —
+  big-one re-downloading *and* re-decoding `zapusk-neuro` reproduced the stored
+  hash exactly, which puts the difference in the laptop's decoder and nowhere
+  else. Hashing the download is both correct and what `indexer._transcribe`
+  already did. The mistake was inventing a second, cleverer notion of identity
+  beside the one production had already settled on.
 
   It needs no `poetry install`: `faster-whisper httpx python-dotenv pymorphy3
   pyyaml` and ffmpeg are enough, verified by running it in a bare

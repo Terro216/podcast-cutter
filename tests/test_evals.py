@@ -377,12 +377,12 @@ def test_a_fixture_records_what_produced_it(tmp_path):
     dump_utterances(
         sample_utterances(),
         path,
-        {"model": "base", "backend": "local", "audio_sha256": "abc123"},
+        {"model": "base", "backend": "local", "source_sha256": "abc123"},
     )
 
     meta = load_meta(path)
     assert meta["model"] == "base"
-    assert meta["audio_sha256"] == "abc123"
+    assert meta["source_sha256"] == "abc123"
     assert "chunker_version" in meta
 
     # And the file really is gzipped JSON of the documented shape, not just

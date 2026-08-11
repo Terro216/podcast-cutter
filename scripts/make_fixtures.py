@@ -82,13 +82,13 @@ def _sha256(path: Path) -> str:
 def _audio_of_other_variants(
     fixtures: Path, episode: EpisodeRef, variant: str
 ) -> tuple[str, str] | None:
-    """``(variant, audio_sha256)`` of some already-written sibling fixture."""
+    """``(variant, source_sha256)`` of some already-written sibling fixture."""
     for other, name in episode.transcripts.items():
         if other == variant or not name:
             continue
         path = fixtures / name
         if path.exists():
-            digest = load_meta(path).get("audio_sha256")
+            digest = load_meta(path).get("source_sha256")
             if digest:
                 return other, digest
     return None
@@ -96,18 +96,30 @@ def _audio_of_other_variants(
 
 async def _audio_for(
     episode: EpisodeRef, settings: Settings, proxy: MediaProxy, work: Path
-) -> Path:
-    """The episode as 16 kHz mono PCM, fetched once and kept.
+) -> tuple[Path, str]:
+    """The episode as 16 kHz mono PCM, plus the hash of what was downloaded.
 
-    Kept rather than cleaned up on purpose: the two variants of one episode
-    must be transcribed from *the same bytes*, or the comparison quietly
-    includes whatever advertisement the feed inserted between the two runs —
-    which is the failure `TranscriptKey` exists to make impossible in
-    production and would be just as wrong here.
+    The decoded audio is kept rather than cleaned up: the two variants of one
+    episode must be transcribed from *the same bytes*, or the comparison
+    quietly includes whatever advertisement the feed inserted between the two
+    runs — the failure `TranscriptKey` exists to make impossible in production.
+
+    **The hash is of the download, not of the decode**, which is the same
+    choice `indexer._transcribe` makes and for a reason learned the hard way
+    here: decoded PCM depends on the ffmpeg that produced it. The reference
+    pass runs on a laptop and the shipped-model pass runs in a Linux container,
+    and those two decode one identical mp3 into two different byte streams. A
+    guard on the decoded hash therefore fires on every cross-machine run and
+    says "the feed changed", which is both wrong and alarming. The downloaded
+    bytes are the thing that is actually supposed to be identical.
+
+    The hash is cached beside the audio, so resuming a run does not have to
+    re-download an episode just to remember what it was.
     """
     decoded = work / f"{episode.slug}.wav"
-    if decoded.exists():
-        return decoded
+    fingerprint = work / f"{episode.slug}.sha256"
+    if decoded.exists() and fingerprint.exists():
+        return decoded, fingerprint.read_text().strip()
 
     source = work / f"{episode.slug}.bin"
     await ensure_safe_source(episode.audio_url)
@@ -117,9 +129,12 @@ async def _audio_for(
     await ensure_safe_source(resolved)
     print(f"   fetching via {route}", flush=True)
     await _download_with_fallback(resolved, source, settings, proxy, route)
+
+    digest = await asyncio.to_thread(_sha256, source)
     await _decode_for_asr(source, decoded, settings.ffmpeg_timeout)
     source.unlink(missing_ok=True)
-    return decoded
+    fingerprint.write_text(digest, encoding="utf-8")
+    return decoded, digest
 
 
 async def main(argv: list[str]) -> int:
@@ -185,26 +200,23 @@ async def main(argv: list[str]) -> int:
             continue
 
         print(f"{head}: {episode.title[:60]}")
-        decoded = await _audio_for(episode, settings, proxy, args.work)
-        digest = await asyncio.to_thread(_sha256, decoded)
+        decoded, digest = await _audio_for(episode, settings, proxy, args.work)
 
-        # The two variants have to be transcribed from the same bytes or the
-        # gap between them is partly a gap between two different recordings.
-        # Feeds insert advertisements dynamically — the reason production keys
-        # a transcript on `source_sha256` at all — and a reference pass run on
-        # another machine, days later, is exactly when that bites. Re-fetching
-        # these eight was byte-identical when checked, which is a fact about
-        # one afternoon and not a property of podcast hosting.
+        # The two variants have to come from the same download or the gap
+        # between them is partly a gap between two different recordings. Feeds
+        # insert advertisements dynamically — the reason production keys a
+        # transcript on `source_sha256` at all — and a reference pass run on
+        # another machine, days later, is exactly when that bites.
         sibling = _audio_of_other_variants(args.fixtures, episode, args.variant)
         if sibling is not None and sibling[1] != digest:
             other, expected = sibling
             raise SystemExit(
-                f"\n{episode.slug}: the audio no longer matches the {other!r} "
-                f"fixture.\n  {other}: {expected[:16]}…\n  now:"
-                f"       {digest[:16]}…\n"
-                f"The feed is serving different bytes, so timestamps taken "
-                f"against one would not fit the other. Delete the {other!r} "
-                f"fixture and rebuild both variants from this audio."
+                f"\n{episode.slug}: the feed is serving different bytes than "
+                f"the {other!r} fixture was built from.\n"
+                f"  {other}: {expected[:16]}…\n  now:  {digest[:16]}…\n"
+                f"Timestamps taken against one would not fit the other. "
+                f"Delete the {other!r} fixture and rebuild both variants from "
+                f"this download."
             )
 
         started = time.monotonic()
@@ -218,10 +230,12 @@ async def main(argv: list[str]) -> int:
             {
                 "episode_id": episode.slug,
                 "audio_url": episode.audio_url,
-                # Of the decoded PCM, not of the download: that is what the
-                # recogniser actually read, and it is comparable across hosts
-                # where a container's ffmpeg build is the same.
-                "audio_sha256": digest,
+                # Of the download, matching what production stores. Hashing
+                # the *decoded* audio instead is the obvious-looking choice
+                # and it is wrong: two ffmpeg builds turn one identical mp3
+                # into two different byte streams, so the check would fail on
+                # every cross-machine run and blame the feed for it.
+                "source_sha256": digest,
                 "backend": recognizer.backend,
                 "model": args.model,
                 "language": language,
