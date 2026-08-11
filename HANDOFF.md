@@ -352,8 +352,19 @@ whether the search is getting better.
 **Measured, so the plan could stop guessing** — 180 s RU sample, int8, socket 1
 (`--cpuset-cpus 8-15 --cpuset-mems 1`), eight physical cores: `base` RTF 0.079,
 `medium` 0.665, `large-v3` 1.252. `base` reproducing §3's 0.07–0.09 is what
-makes the other two trustworthy. Both baskets are 369 min of audio, so a
-reference pass is ~8 h — one night, on the socket the bot is not pinned to.
+makes the other two trustworthy.
+
+The real pass then came in at an aggregate **RTF 1.068** — 6.13 h of audio in
+6.54 h — so the short sample was 17% pessimistic, denser speech than a whole
+episode where VAD drops the pauses. Russian ran ~8% slower than English.
+
+**Do not move this to a laptop.** An M2 Pro did the same episode at RTF 1.06
+against big-one's 1.10: four percent, not the several times the plan assumed.
+CTranslate2's int8 kernels are tuned for x86 and its CPU path ignores Apple's
+accelerators. Run it here, where the audio is already cached in the
+`podcast-asr-bench` volume, with `--cpu-shares 256` — `cpuset` confines the
+container to socket 1 but does *not* reserve it, so the low share is what
+actually keeps a Jellyfin transcode ahead of an overnight eval.
 
 **Making the reference fixtures off-host.** The pass does not need the bot's
 dependency set — no `poetry install`, no `python-telegram-bot`. Verified in a
@@ -426,12 +437,15 @@ difference on the decoder rather than on the feed.
 
 ## 5. Known gaps, roughly by value
 
-1. **The baskets have no answer key yet.** The apparatus is built and green —
-   `podcast_cutter/evals.py`, `tests/test_baskets.py`, eight episodes chosen
-   and checked reachable in `evals/baskets/` — but the queries are still empty,
-   because they have to be drafted from the reference transcripts and those are
-   an overnight `large-v3` run. §3b has what a maintainer needs; `ROADMAP.md`
-   §16 has the reasoning and the numbers.
+1. **The baskets have no answer key yet.** Everything else is done: the
+   apparatus is green, and all sixteen transcript fixtures are committed —
+   eight episodes × `base` and `large-v3`, 2.1 MB, every pair cross-checked to
+   come from one download. What is missing is the queries. They have to be
+   drafted from the reference transcripts with `scripts/draft_queries.py
+   --draft` and then spot-verified by ear with `--verify`; the test refuses a
+   basket under 30 positive and 10 negative per language, so it cannot be
+   half-done by accident. §3b has the operating picture; `ROADMAP.md` §16 has
+   the reasoning and the numbers.
 2. **English morphology — the lemma column is inert, not inaccurate.** Checked
    rather than assumed: `lemmatize("proteins folding rapidly")` returns the
    string unchanged, and so do `investors`, `companies`, `studies`. pymorphy3's

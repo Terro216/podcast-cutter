@@ -666,9 +666,25 @@ which of the several possible ways.
 
 ## 16. In progress: the baskets
 
-Step 2 of §11. The apparatus is built, tested and green; what it does not yet
-have is an answer key, because the answer key has to be written *from* the
-reference transcripts and those take a night to produce.
+Step 2 of §11. The apparatus is built and green and **all sixteen transcript
+fixtures exist** — eight episodes × `base` and `large-v3`. What is missing is
+the answer key: the queries themselves, which have to be written *from* the
+reference transcripts and spot-verified by ear.
+
+What the fixtures already say, before a single query is written:
+
+| | reference (`large-v3`) | asr (`base`) |
+| --- | --- | --- |
+| utterances | 371–1672 | 354–1325 |
+| words | within 1% of each other, every episode | |
+| quarantined | **0 in all eight** | 17, 9, 2, 1 in four of them |
+
+The word counts landing within a percent is the reassuring part: both models
+hear the same *amount* of speech, and the whole difference is in what they
+wrote and how they cut it. The quarantine column is the interesting part —
+every decoding loop and «бззззз» artifact belongs to `base`, so the defect
+below is a property of what ships, invisible in the reference, and therefore
+something the gap between the two runs will price directly.
 
 ### The design decision that changed the shape
 
@@ -780,8 +796,34 @@ production is *not* pinned to:
 `base` at 0.079 reproduces the 0.07–0.09 in §3, which is what makes the other
 two rows believable. The extrapolation that had been reasoned from parameter
 counts said 1.5–2 h per episode for `large-v3`; the measurement says 1.1 h.
-Both baskets together are 369 minutes of audio, so the reference pass is about
-**8 hours** — one night, on the idle socket, without taking a core from the bot.
+
+**Then the real pass ran, and the sample was 17% pessimistic.** Eight episodes,
+6.13 h of audio, finished in 6.54 h — an aggregate RTF of **1.068** against the
+1.252 the 180-second sample predicted. A three-minute excerpt of continuous
+speech is denser than a whole episode, where VAD drops the pauses. Russian cost
+about 8% more than English (~1.10 against ~1.02), which is worth remembering
+the next time a duration is estimated for a Russian feed.
+
+### The laptop was not faster, which is why it was worth measuring
+
+§5 said to generate the reference on an M2 Pro, and the plan was built on that
+being several times quicker than the old Xeons. It is not. The same episode,
+`large-v3` int8, on both:
+
+| | RTF | wall clock |
+| --- | --- | --- |
+| M2 Pro, 10 threads | 1.06 | 56 min |
+| big-one, 8 pinned cores | 1.10 | 58 min |
+
+Four percent. CTranslate2's int8 kernels are far better optimised for x86 than
+for ARM, and its CPU path uses none of Apple's accelerators; four of the ten
+threads also landed on efficiency cores. So the whole reason for the manual
+off-host step — speed — did not exist, and the pass moved back to the server,
+where the audio was already cached and nobody's fans were involved.
+
+The run itself is pinned to socket 1 with `--cpu-shares 256`. `cpuset` confines
+the container to those cores but does **not** reserve them, so the low share is
+what actually keeps a Jellyfin transcode ahead of an overnight eval.
 
 **The quality difference is the class that breaks lexical search**, which is
 the part RTF cannot tell you. On the same sample:
