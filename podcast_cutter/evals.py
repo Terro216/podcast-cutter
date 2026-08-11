@@ -315,6 +315,18 @@ def load_utterances(path: Path) -> list[Utterance]:
     ]
 
 
+def load_meta(path: Path) -> dict:
+    """What produced a fixture, without caring what it says.
+
+    Separate from :func:`load_utterances` because the interesting question is
+    usually about provenance — which model wrote this, and from which audio —
+    and answering it should not require caring about ten thousand words.
+    """
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle).get("meta") or {}
+
+
 def _word_payload(word: Word) -> dict:
     payload = {
         "start": round(word.start, 3),

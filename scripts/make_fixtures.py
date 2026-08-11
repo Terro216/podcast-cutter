@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -54,7 +55,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from podcast_cutter.asr import LocalWhisper  # noqa: E402
 from podcast_cutter.config import Settings  # noqa: E402
-from podcast_cutter.evals import EpisodeRef, dump_utterances, load_basket  # noqa: E402
+from podcast_cutter.evals import (  # noqa: E402
+    EpisodeRef,
+    dump_utterances,
+    load_basket,
+    load_meta,
+)
 from podcast_cutter.indexer import (  # noqa: E402
     _decode_for_asr,
     _download_with_fallback,
@@ -63,6 +69,29 @@ from podcast_cutter.indexer import (  # noqa: E402
 from podcast_cutter.proxy import MediaProxy  # noqa: E402
 from podcast_cutter.text import format_duration  # noqa: E402
 from podcast_cutter.urls import ensure_safe_source  # noqa: E402
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _audio_of_other_variants(
+    fixtures: Path, episode: EpisodeRef, variant: str
+) -> tuple[str, str] | None:
+    """``(variant, audio_sha256)`` of some already-written sibling fixture."""
+    for other, name in episode.transcripts.items():
+        if other == variant or not name:
+            continue
+        path = fixtures / name
+        if path.exists():
+            digest = load_meta(path).get("audio_sha256")
+            if digest:
+                return other, digest
+    return None
 
 
 async def _audio_for(
@@ -157,6 +186,26 @@ async def main(argv: list[str]) -> int:
 
         print(f"{head}: {episode.title[:60]}")
         decoded = await _audio_for(episode, settings, proxy, args.work)
+        digest = await asyncio.to_thread(_sha256, decoded)
+
+        # The two variants have to be transcribed from the same bytes or the
+        # gap between them is partly a gap between two different recordings.
+        # Feeds insert advertisements dynamically — the reason production keys
+        # a transcript on `source_sha256` at all — and a reference pass run on
+        # another machine, days later, is exactly when that bites. Re-fetching
+        # these eight was byte-identical when checked, which is a fact about
+        # one afternoon and not a property of podcast hosting.
+        sibling = _audio_of_other_variants(args.fixtures, episode, args.variant)
+        if sibling is not None and sibling[1] != digest:
+            other, expected = sibling
+            raise SystemExit(
+                f"\n{episode.slug}: the audio no longer matches the {other!r} "
+                f"fixture.\n  {other}: {expected[:16]}…\n  now:"
+                f"       {digest[:16]}…\n"
+                f"The feed is serving different bytes, so timestamps taken "
+                f"against one would not fit the other. Delete the {other!r} "
+                f"fixture and rebuild both variants from this audio."
+            )
 
         started = time.monotonic()
         utterances, language = await recognizer.transcribe(decoded)
@@ -169,6 +218,10 @@ async def main(argv: list[str]) -> int:
             {
                 "episode_id": episode.slug,
                 "audio_url": episode.audio_url,
+                # Of the decoded PCM, not of the download: that is what the
+                # recogniser actually read, and it is comparable across hosts
+                # where a container's ffmpeg build is the same.
+                "audio_sha256": digest,
                 "backend": recognizer.backend,
                 "model": args.model,
                 "language": language,

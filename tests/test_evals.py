@@ -23,6 +23,7 @@ from podcast_cutter.evals import (
     by_kind,
     dump_utterances,
     load_basket,
+    load_meta,
     load_utterances,
     render,
     run_variant,
@@ -373,12 +374,29 @@ def test_a_fixture_records_what_produced_it(tmp_path):
     """A fixture that does not name its model becomes unattributable the first
     time the model changes, and the comparison it belongs to becomes a guess."""
     path = tmp_path / "ep.asr.json.gz"
-    dump_utterances(sample_utterances(), path, {"model": "base", "backend": "local"})
+    dump_utterances(
+        sample_utterances(),
+        path,
+        {"model": "base", "backend": "local", "audio_sha256": "abc123"},
+    )
 
-    with gzip.open(path, "rt", encoding="utf-8") as handle:
-        meta = json.load(handle)["meta"]
+    meta = load_meta(path)
     assert meta["model"] == "base"
+    assert meta["audio_sha256"] == "abc123"
     assert "chunker_version" in meta
+
+    # And the file really is gzipped JSON of the documented shape, not just
+    # whatever the loader happens to accept back from itself.
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        assert json.load(handle)["meta"]["model"] == "base"
+
+
+def test_reading_provenance_does_not_require_reading_the_transcript(tmp_path):
+    """`load_meta` answers "which model, which audio" on its own, which is what
+    the fixture builder needs before deciding whether to transcribe at all."""
+    path = tmp_path / "ep.reference.json"
+    dump_utterances([], path, {"model": "large-v3"})
+    assert load_meta(path) == {"model": "large-v3", "chunker_version": 1}
 
 
 # ----------------------------------------------------------------------

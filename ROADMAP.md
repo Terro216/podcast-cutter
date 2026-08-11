@@ -714,8 +714,20 @@ is exactly the event `TranscriptKey`'s `asr_model` field already tracks.
   US shows would report a number that does not survive the directory.
 * **`tests/test_baskets.py`** — runs both baskets over both variants, prints
   the table unconditionally, and fails on regression.
-* **`scripts/make_fixtures.py`** — the overnight half. Resumable, and it keeps
-  the decoded audio so both variants are transcribed from *the same bytes*.
+* **`scripts/make_fixtures.py`** — the expensive half. Resumable, it keeps the
+  decoded audio so both variants are transcribed from *the same bytes*, and it
+  records that audio's SHA-256 in the fixture and refuses to write a variant
+  whose audio no longer matches a sibling's. That guard exists because the
+  reference pass runs on a different machine days later, which is exactly when
+  dynamic ad insertion would make the two runs a comparison of two different
+  recordings. Checked at the time: re-fetching `hidden-brain-feelings` and
+  `twist-duct-tape` — both behind podtrac/simplecast/libsyn chains — came back
+  byte-identical, so the hazard is not live today. That is a fact about one
+  afternoon, not a property of podcast hosting, hence the guard.
+
+  It needs no `poetry install`: `faster-whisper httpx python-dotenv pymorphy3
+  pyyaml` and ffmpeg are enough, verified by running it in a bare
+  `python:3.12-slim` with no `python-telegram-bot` present at all.
 * **`scripts/draft_queries.py`** — the part that makes writing sixty queries an
   evening instead of a week. `--draft` proposes candidates by how a word is
   distributed across the basket, which needs no stopword list and no dictionary

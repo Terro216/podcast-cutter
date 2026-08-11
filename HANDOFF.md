@@ -355,6 +355,22 @@ whether the search is getting better.
 makes the other two trustworthy. Both baskets are 369 min of audio, so a
 reference pass is ~8 h — one night, on the socket the bot is not pinned to.
 
+**Making the reference fixtures off-host.** The pass does not need the bot's
+dependency set — no `poetry install`, no `python-telegram-bot`. Verified in a
+bare `python:3.12-slim`:
+
+```shell
+brew install ffmpeg                       # or apt
+pip install faster-whisper httpx python-dotenv pymorphy3 pyyaml
+python scripts/make_fixtures.py evals/baskets/ru.yaml evals/baskets/en.yaml \
+    --variant reference --model large-v3 --threads 10
+```
+
+It downloads the episodes itself and writes into `evals/fixtures/`. Both
+variants of one episode must come from the same bytes or the comparison is
+partly between two recordings, so each fixture records the decoded audio's
+SHA-256 and the script refuses to write one that disagrees with its sibling.
+
 **Traps.**
 
 * Run benches and fixture jobs on **socket 1**. Production is pinned to
