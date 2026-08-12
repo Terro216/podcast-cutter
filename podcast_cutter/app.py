@@ -280,6 +280,13 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
     builder = (
         ApplicationBuilder()
         .token(settings.bot_token)
+        # Without this PTB processes updates strictly one at a time, and a
+        # first-time transcription — minutes of work — freezes the bot for
+        # every user at once. Bounded rather than unlimited so a flood cannot
+        # hold arbitrarily many coroutines open; per-user exclusivity is the
+        # busy flag in handlers, which is claimed before the first await for
+        # exactly this reason.
+        .concurrent_updates(32)
         # Queues outgoing calls so a burst of users cannot trip Telegram's
         # flood limits and get the bot temporarily blocked.
         .rate_limiter(AIORateLimiter())

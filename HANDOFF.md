@@ -35,7 +35,7 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**742 tests pass, nothing skipped, ruff clean.** Verify with the command in
+**757 tests pass, nothing skipped, ruff clean.** Verify with the command in
 §6. The basket runs no longer skip: the answer key exists and the baselines
 are committed — see §3b.
 
@@ -510,14 +510,16 @@ difference on the decoder rather than on the feed.
    transcripts are stale by design: the first search against each re-runs
    transcription once.
 
-3a. **The same review found bot-side defects, none fixed yet.** In value
-   order: (a) the PTB application is built without `concurrent_updates`, so
-   every update is processed strictly in sequence — one first-time
-   transcription freezes the bot for every user for minutes, and the whole
-   `_busy_users`/`_job_slots`/queued-message apparatus is unreachable while
-   that holds. Do not just flip the flag: the busy-check in `_search_phrase`
-   and `_start_cut` has an add-after-await race that sequential processing
-   currently masks. (b) The SSRF guard checks addresses before the cut, but
+3a. **The same review found bot-side defects.** (a) is fixed: the
+   application now runs `concurrent_updates(32)`, the busy flag is claimed
+   before the first await in both heavy handlers (a test holds two
+   simultaneous taps against it), transcription has its own single slot
+   apart from the cut pool with a bounded queue (`MAX_ASR_QUEUE`), and
+   per-user budgets guard input, cuts and first listens —
+   `RATE_INPUT_PER_MINUTE` / `RATE_CUTS_PER_HOUR` / `RATE_ASR_PER_DAY`,
+   0 = off, admins exempt, refusals journalled as `action=limit`. Still
+   open from the same review: (b) the SSRF guard checks addresses before
+   the cut, but
    the ffmpeg fetch that follows can follow an HTTP redirect to anywhere —
    a host that answers the probe politely can 302 ffmpeg into
    `169.254.169.254`; DNS rebinding gives the same result without the
@@ -532,9 +534,11 @@ difference on the decoder rather than on the feed.
    passes validation but the default clip is a fixed 60. (h)
    `sweep_work_dir` removes only `cut-*`, so a crash mid-transcription
    leaks an `asr-<id>` directory with a full episode in it.
-4. **Queues and abuse limits.** One heavy job per user exists; a per-user token
-   bucket on input, a bounded queue with a visible position, and a ceiling on
-   inline use do not. Handing out `src_` links before that is asking for it.
+4. **Queues and abuse limits — largely done, two pieces remain.** Per-user
+   budgets on input/cuts/first-listens exist (see 3a), inline is covered,
+   transcription queues on its own slot and refuses when full. Not done:
+   the queue lives in memory, so a restart loses waiting jobs (§7 wants it
+   in SQLite), and a queued search says «queued», not its position number.
 5. **Backups.** Nothing is backed up. The transcripts are now the expensive
    artifact — `sqlite3 .backup`, not `cp`, because WAL is on.
 6. **Avatar and inline placeholder** — the last two things only @BotFather can

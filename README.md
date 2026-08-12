@@ -54,6 +54,9 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `ASR_MODEL`           | no       | Whisper model size (`base`)              |
 | `ASR_THREADS`         | no       | CPU threads for recognition (8)          |
 | `MAX_CONCURRENT_JOBS` | no       | Simultaneous ffmpeg jobs (2)             |
+| `RATE_INPUT_PER_MINUTE` | no     | Per-user messages/buttons per minute (20); 0 = off |
+| `RATE_CUTS_PER_HOUR`  | no       | Per-user cuts per hour (30); 0 = off     |
+| `RATE_ASR_PER_DAY`    | no       | Per-user first transcriptions per day (10); 0 = off |
 | `WORK_DIR`            | no       | Scratch space for in-flight cuts         |
 | `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|
 | `LOG_RETENTION_DAYS`  | no       | Journal retention, 0 keeps everything (90)|

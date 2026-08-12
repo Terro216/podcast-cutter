@@ -37,6 +37,7 @@ from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
 from .errors import NotFoundError, PodcastCutterError
 from .indexer import Indexer, TranscriptionDisabled
+from .limits import Budget
 from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
@@ -115,6 +116,11 @@ _WAITING_NOTES = (
 #: `base` on eight cores; the store replaces it with the median of real runs
 #: as soon as there is one.
 DEFAULT_RTF = 0.09
+
+#: How many first-time transcriptions may hold or wait on the listening slot
+#: at once — one running plus three in line. Beyond that the wait is tens of
+#: minutes, and an honest refusal beats a queue position that means "tonight".
+MAX_ASR_QUEUE = 4
 
 #: How long each waiting note stays on screen.
 NOTE_SECONDS = 20
@@ -268,8 +274,41 @@ class PodcastCutterBot:
         #: discovering a dead proxy spares the rest the same wait.
         self.media_proxy = MediaProxy(settings)
         self._job_slots = asyncio.Semaphore(settings.max_concurrent_jobs)
-        #: User ids with a cut in flight — one heavy job per person.
+        #: Transcription has its own single slot, apart from the cut pool:
+        #: sharing one semaphore let a single first-search occupy a cut slot
+        #: for minutes, and the recogniser serialises on its own lock anyway,
+        #: so more than one slot here would only hide the queue.
+        self._asr_slots = asyncio.Semaphore(1)
+        #: How many searches are waiting on that slot right now. A semaphore
+        #: keeps no public count, and the count is the difference between
+        #: "queued behind one episode" and a queue that should refuse.
+        self._asr_waiting = 0
+        #: User ids with a cut in flight — one heavy job per person. Checked
+        #: and set with no await in between, or two quick taps both pass.
         self._busy_users: set[int] = set()
+        self._input_budget = Budget(settings.rate_input_per_minute, 60)
+        self._cut_budget = Budget(settings.rate_cuts_per_hour, 3600)
+        self._asr_budget = Budget(settings.rate_asr_per_day, 86400)
+        #: Refusals are throttled separately: a flood of over-budget messages
+        #: must not become a flood of scolding replies.
+        self._limit_notice = Budget(1, 30)
+
+    def _budget_allows(self, budget: Budget, update: Update) -> bool:
+        """Charge one event, unless the user is an admin — admins are the
+        people debugging the bot, and a debugging session looks exactly like
+        abuse."""
+        user = update.effective_user
+        user_id = user.id if user else 0
+        if self.settings.is_admin(user_id):
+            return True
+        return budget.allow(user_id)
+
+    async def _refuse_rate(self, update: Update, kind: str, text: str) -> None:
+        await self._log(update, "limit", outcome=kind)
+        user = update.effective_user
+        if self._limit_notice.allow(user.id if user else 0):
+            with contextlib.suppress(TelegramError):
+                await update.effective_message.reply_text(text)
 
     # ------------------------------------------------------------------
     # Output
@@ -663,6 +702,52 @@ class PodcastCutterBot:
             )
             return
 
+        # Whether this search is milliseconds or minutes decides everything
+        # below: only a first-time transcription is charged against the daily
+        # budget, queues for the single listening slot, or can be refused
+        # because that queue is full.
+        indexed = (
+            await self.store.transcript_for_episode(episode.id)
+            if self.store
+            else None
+        )
+        if indexed is None:
+            if not self._budget_allows(self._asr_budget, update):
+                await self._log(update, "limit", outcome="asr")
+                await self._show_failure(
+                    update,
+                    session,
+                    "🐢 That is the day's budget for first listens spent. "
+                    "Episodes the bot already knows still search instantly.",
+                )
+                return
+            if self._asr_waiting >= MAX_ASR_QUEUE:
+                await self._log(update, "limit", outcome="asr_queue")
+                await self._show_failure(
+                    update,
+                    session,
+                    "The listening queue is full right now — "
+                    "try again in a few minutes.",
+                )
+                return
+
+        # Claimed before the first await, or two quick messages both pass the
+        # busy check above and start two jobs.
+        self._busy_users.add(user_id)
+        try:
+            await self._listen_and_search(update, session, episode, phrase, indexed)
+        finally:
+            self._busy_users.discard(user_id)
+
+    async def _listen_and_search(
+        self,
+        update: Update,
+        session: Session,
+        episode: Episode,
+        phrase: str,
+        indexed: int | None,
+    ) -> None:
+        """The body of a phrase search, with the busy flag already held."""
         rtf = await self.store.measured_rtf() if self.store else None
         estimate = int((episode.duration or 0) * (rtf or DEFAULT_RTF))
         opening = "🎧 Getting ready to listen…"
@@ -671,6 +756,8 @@ class PodcastCutterBot:
                 f"\n\n<i>About {format_duration(estimate)} for this one — "
                 "it only happens once per episode.</i>"
             )
+        if indexed is None and self._asr_slots.locked():
+            opening += "\n\n⏳ <i>Queued behind another episode…</i>"
 
         progress = StatusEditor(
             await update.effective_message.reply_text(opening, parse_mode="HTML")
@@ -693,11 +780,10 @@ class PodcastCutterBot:
         # anticipate still reaches the journal as a failure, not as a search
         # that worked. `_perform_cut` learned this first.
         outcome = "failed"
-        self._busy_users.add(user_id)
         job_dir = self.settings.work_dir / f"asr-{episode.id}"
         try:
-            async with self._job_slots:
-                transcript = await self.indexer.transcript_id(
+            async def acquire_transcript() -> int:
+                return await self.indexer.transcript_id(
                     episode.id,
                     episode.enclosure_url,
                     job_dir,
@@ -707,6 +793,18 @@ class PodcastCutterBot:
                         "feed_title": episode.feed_title,
                     },
                 )
+
+            if indexed is not None:
+                # Already searchable: milliseconds, and it must not stand in
+                # line behind somebody else's half-hour first listen.
+                transcript = await acquire_transcript()
+            else:
+                self._asr_waiting += 1
+                try:
+                    async with self._asr_slots:
+                        transcript = await acquire_transcript()
+                finally:
+                    self._asr_waiting -= 1
             session.moments = await self.indexer.search(transcript, phrase)
             outcome = "ok" if session.moments else "empty"
         except PodcastCutterError as exc:
@@ -716,7 +814,6 @@ class PodcastCutterBot:
             await self._show_failure(update, session, exc.user_message)
             return
         finally:
-            self._busy_users.discard(user_id)
             shutil.rmtree(job_dir, ignore_errors=True)
             await self._log(
                 update,
@@ -757,6 +854,15 @@ class PodcastCutterBot:
         text = one_line(update.effective_message.text)
 
         if not text:
+            return
+
+        if not self._budget_allows(self._input_budget, update):
+            await self._refuse_rate(
+                update,
+                "input",
+                "🐢 That is a lot of requests in one minute. "
+                "Give it a moment and try again.",
+            )
             return
 
         try:
@@ -832,6 +938,12 @@ class PodcastCutterBot:
             await query.answer()
 
         if data == kb.NAV_NOOP:
+            return
+
+        if not self._budget_allows(self._input_budget, update):
+            # The spinner is already answered; a refusal here is silence plus
+            # a journal row, which is exactly what a button-masher deserves.
+            await self._log(update, "limit", outcome="input")
             return
 
         session = await self.session_for(update, context)
@@ -1020,23 +1132,37 @@ class PodcastCutterBot:
             )
             return
 
-        session.clamp()
-        interval = Interval(start=session.clip_start, end=session.clip_end)
-
-        queued = self._job_slots.locked()
-        status_message = await self.show(
-            update,
-            screens.working(
-                "⏳ Queued — waiting for a free slot…"
-                if queued
-                else "⏳ Working on it…"
-            ),
-        )
-        if status_message is None:
+        if not self._budget_allows(self._cut_budget, update):
+            await self.show(
+                update,
+                View(
+                    "🐢 That was a lot of clips for one hour. "
+                    "The budget resets as the hour rolls on — try again soon.",
+                    self.view_for(session).keyboard,
+                ),
+            )
+            await self._log(update, "limit", outcome="cut")
             return
 
+        # Claimed before the first await, or two quick taps both pass the
+        # check above and cut twice.
         self._busy_users.add(user_id)
         try:
+            session.clamp()
+            interval = Interval(start=session.clip_start, end=session.clip_end)
+
+            queued = self._job_slots.locked()
+            status_message = await self.show(
+                update,
+                screens.working(
+                    "⏳ Queued — waiting for a free slot…"
+                    if queued
+                    else "⏳ Working on it…"
+                ),
+            )
+            if status_message is None:
+                return
+
             await self._perform_cut(
                 update, session, episode, interval, StatusEditor(status_message)
             )
@@ -1221,6 +1347,20 @@ class PodcastCutterBot:
                 is_personal=False,
                 button=open_button,
             )
+            return
+
+        # Inline needs no /start and would otherwise be the way around every
+        # limit above it. Same input budget, empty answer when it runs out —
+        # the button survives, so the polite path stays open.
+        if not self._budget_allows(self._input_budget, update):
+            await self._log(update, "limit", outcome="inline")
+            with contextlib.suppress(TelegramError):
+                await inline.answer(
+                    [],
+                    cache_time=INLINE_CACHE_SECONDS,
+                    is_personal=True,
+                    button=open_button,
+                )
             return
 
         try:

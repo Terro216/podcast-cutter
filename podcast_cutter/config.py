@@ -91,6 +91,19 @@ class Settings:
     #: Simultaneous cutting jobs across the whole bot. ffmpeg is the bottleneck.
     max_concurrent_jobs: int = 2
 
+    # --- per-user input budgets (0 switches one off) ----------------------
+    #: Messages, button presses and inline queries per user per minute. The
+    #: cheap actions still hit the Podcast Index key, where the risk is not
+    #: our load but the key getting banned.
+    rate_input_per_minute: int = 20
+    #: Cuts per user per hour. A cut is seconds of ffmpeg, but it holds one of
+    #: `max_concurrent_jobs` slots while it runs.
+    rate_cuts_per_hour: int = 30
+    #: First-time transcriptions per user per day — minutes of CPU each, the
+    #: most expensive thing a button can start. Searches over an episode that
+    #: is already indexed are not charged against this.
+    rate_asr_per_day: int = 10
+
     # --- speech recognition -----------------------------------------------
     #: The kill switch. Transcription is minutes of CPU where a cut is seconds,
     #: so it must be possible to stop it without stopping the bot.
@@ -334,6 +347,15 @@ def load_settings() -> Settings:
         ),
         max_concurrent_jobs=_positive_int(
             "MAX_CONCURRENT_JOBS", Settings.max_concurrent_jobs
+        ),
+        rate_input_per_minute=_non_negative_int(
+            "RATE_INPUT_PER_MINUTE", Settings.rate_input_per_minute
+        ),
+        rate_cuts_per_hour=_non_negative_int(
+            "RATE_CUTS_PER_HOUR", Settings.rate_cuts_per_hour
+        ),
+        rate_asr_per_day=_non_negative_int(
+            "RATE_ASR_PER_DAY", Settings.rate_asr_per_day
         ),
         work_dir=Path(_env("WORK_DIR") or "/tmp/podcast-cutter"),
         data_dir=Path(_env("DATA_DIR") or "data"),
