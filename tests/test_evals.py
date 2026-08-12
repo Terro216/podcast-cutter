@@ -170,8 +170,11 @@ def test_a_rate_that_falls_beyond_the_slack_is_a_regression():
 
 def test_a_rate_that_wobbles_by_one_query_is_not():
     """A thirty-query basket moves 3.3 points when a single query flips, and a
-    check that fires on that is a check people learn to ignore."""
-    assert make_report(hits_at_k=27).regressions({f"hit@{ANSWERS}": 0.91}) == []
+    check that fires on that is a check people learn to ignore. The baseline
+    here is one a 30-query run can actually produce — 27/30 — because the slack
+    has to clear the real step size, 1/30, not a rounder number."""
+    assert make_report(hits_at_k=26).regressions({f"hit@{ANSWERS}": 27 / 30}) == []
+    assert make_report(hits_at_k=25).regressions({f"hit@{ANSWERS}": 27 / 30}) != []
 
 
 def test_a_rate_that_improves_is_never_a_regression():
@@ -196,8 +199,13 @@ def test_a_growing_start_error_is_measured_in_seconds_not_in_points():
     assert make_report(errors=(6.0,)).regressions({"median_error_s": 3.0}) != []
 
 
-def test_a_baseline_naming_a_metric_this_run_did_not_produce_is_ignored():
-    assert summarize([], "run").regressions({f"hit@{ANSWERS}": 0.9}) == []
+def test_a_baseline_naming_a_metric_this_run_did_not_produce_complains():
+    """The quiet alternative is a disabled check: mistype a key, or change
+    RESULTS so the run measures hit@5 against a baseline that still says
+    hit@3, and every regression on that metric would pass unnoticed."""
+    complaints = summarize([], "run").regressions({f"hit@{ANSWERS}": 0.9})
+    assert len(complaints) == 1
+    assert "did not measure" in complaints[0]
 
 
 def test_render_puts_the_runs_in_one_table():

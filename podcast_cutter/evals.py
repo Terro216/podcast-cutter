@@ -62,13 +62,16 @@ KINDS = ("quote", "meaning", "mention", "negative")
 
 #: How far a metric may move before it counts as a regression. Rates are
 #: fractions and the error is seconds, so one number for both would be either
-#: meaningless on one or useless on the other. The rate slack is a little over
-#: one query in thirty, which is the wobble a basket this size has by
-#: construction.
+#: meaningless on one or useless on the other. The hit-rate slack is a little
+#: over one query in thirty — 1/30 ≈ 0.0333 is the step a 30-positive basket
+#: moves in, so anything smaller would fire on the wobble it exists to absorb.
+#: The false-hit slack is deliberately *below* one negative in ten: a new
+#: false hit is the failure that costs trust, and it must fail the build even
+#: though it is a single query's worth of movement.
 SLACK: Mapping[str, float] = {
-    "hit@1": 0.02,
-    f"hit@{ANSWERS}": 0.02,
-    "false_hit_rate": 0.02,
+    "hit@1": 0.034,
+    f"hit@{ANSWERS}": 0.034,
+    "false_hit_rate": 0.05,
     "median_error_s": 1.0,
 }
 
@@ -177,6 +180,12 @@ def _timestamps(raw, query_id: str) -> tuple[float, ...]:
         raw = [raw]
     stamps = []
     for item in raw:
+        # YAML numbers go straight through: `at: 90.5` is already seconds,
+        # and round-tripping it through the clock parser would refuse the
+        # decimal point it never promised to read.
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            stamps.append(float(item))
+            continue
         try:
             stamps.append(float(parse_timestamp(str(item))))
         except Exception as exc:
@@ -500,6 +509,15 @@ class Report:
         for name, expected in baseline.items():
             actual = measured.get(name)
             if actual is None:
+                # A baseline naming a metric the run did not produce is a
+                # disabled check, not a passing one: a typo in the key, or a
+                # stale `hit@3` after RESULTS changed, would otherwise turn
+                # the guard off silently — the one failure mode a regression
+                # test must not have.
+                complaints.append(
+                    f"{self.label}: baseline names {name!r}, which this run "
+                    f"did not measure — stale or mistyped baseline key?"
+                )
                 continue
             slack = SLACK.get(name, 0.0)
             if name in LOWER_IS_BETTER:

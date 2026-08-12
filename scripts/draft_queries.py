@@ -100,22 +100,29 @@ def _words_at(utterances) -> dict[str, list[float]]:
                         when[lemma(token)].append(word.start)
         else:
             for token in normalize(utterance.text).split():
-                if len(token) >= MIN_WORD:
+                if _usable(token):
                     when[lemma(token)].append(utterance.start)
     return when
 
 
 def draft(basket, fixtures: Path, variant: str) -> None:
     episodes = {}
+    spoken: dict[str, set[str]] = {}
     for slug, episode in basket.episodes.items():
         path = _fixture_path(fixtures, episode, variant)
         if path is None:
             print(f"!! {slug}: no {variant} fixture")
             continue
-        built = build(load_utterances(path))
+        utterances = load_utterances(path)
+        built = build(utterances)
         if built.quarantined:
             print(f"   {slug}: {built.quarantined} utterances quarantined, skipped")
         episodes[slug] = _words_at(built.indexable_utterances)
+        # For negatives the bar is "never *spoken*", not "never searchable":
+        # a word confined to a quarantined span is still a word the episode
+        # said, and proposing it as a negative writes a required refusal that
+        # turns into a false hit the day the quarantine heuristics improve.
+        spoken[slug] = set(_words_at(utterances))
 
     if not episodes:
         return
@@ -124,7 +131,6 @@ def draft(basket, fixtures: Path, variant: str) -> None:
         elsewhere = set().union(
             *(other.keys() for name, other in episodes.items() if name != slug)
         )
-        here = set(when)
         counts = Counter({word: len(times) for word, times in when.items()})
 
         print(f"\n{'=' * 72}\n{slug} — {basket.episodes[slug].title[:60]}")
@@ -159,7 +165,7 @@ def draft(basket, fixtures: Path, variant: str) -> None:
         absent = [
             word
             for word in elsewhere
-            if word not in here and spread[word] <= 2 and loudest[word] >= 3
+            if word not in spoken[slug] and spread[word] <= 2 and loudest[word] >= 3
         ]
         for word in sorted(absent, key=lambda w: -loudest[w])[:15]:
             print(f"    {loudest[word]:>4}×  {word}")

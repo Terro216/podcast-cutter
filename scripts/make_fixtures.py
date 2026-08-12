@@ -118,8 +118,25 @@ async def _audio_for(
     """
     decoded = work / f"{episode.slug}.wav"
     fingerprint = work / f"{episode.slug}.sha256"
+    # The cache is keyed by slug, and a slug is only unique within one basket
+    # file — nothing stops ru.yaml and en.yaml sharing one, and nothing stops
+    # an episode's `audio_url` being edited between runs. Either way the
+    # cached audio silently belongs to a different URL, and the sibling-hash
+    # guard cannot catch it because both variants would be fed the same wrong
+    # bytes. So the URL is recorded beside the audio and a mismatch refetches.
+    url_marker = work / f"{episode.slug}.url"
     if decoded.exists() and fingerprint.exists():
-        return decoded, fingerprint.read_text().strip()
+        cached_url = url_marker.read_text().strip() if url_marker.exists() else None
+        if cached_url is None:
+            # A cache written before the marker existed. It can only have come
+            # from the URL the basket named at the time, so adopt it.
+            url_marker.write_text(episode.audio_url, encoding="utf-8")
+            cached_url = episode.audio_url
+        if cached_url == episode.audio_url:
+            return decoded, fingerprint.read_text().strip()
+        print("   cached audio is from a different URL, refetching", flush=True)
+        decoded.unlink()
+        fingerprint.unlink()
 
     source = work / f"{episode.slug}.bin"
     await ensure_safe_source(episode.audio_url)
@@ -134,6 +151,7 @@ async def _audio_for(
     await _decode_for_asr(source, decoded, settings.ffmpeg_timeout)
     source.unlink(missing_ok=True)
     fingerprint.write_text(digest, encoding="utf-8")
+    url_marker.write_text(episode.audio_url, encoding="utf-8")
     return decoded, digest
 
 
