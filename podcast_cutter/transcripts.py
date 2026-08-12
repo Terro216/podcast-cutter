@@ -315,6 +315,14 @@ def cluster(moments: list[Moment], gap: float = CLUSTER_GAP_SECONDS) -> list[Mom
 
     Without this, 50%-overlapping windows make the answer look broken while
     the retriever is working perfectly: three results, one moment.
+
+    The gap is measured **between starts**, not from a window's far edge to
+    the next start. Windows are half a minute long and their stored bounds
+    stretch to the utterances they overlap, so edge-to-start merging chained
+    genuinely distinct moments 40–75 seconds apart into one cluster — and the
+    weaker one silently vanished from the answers. Two hits produced by the
+    same spoken moment sit one stride apart at most, which is exactly what
+    the gap is.
     """
     if not moments:
         return []
@@ -323,10 +331,8 @@ def cluster(moments: list[Moment], gap: float = CLUSTER_GAP_SECONDS) -> list[Mom
     clusters: list[list[Moment]] = [[by_time[0]]]
 
     for moment in by_time[1:]:
-        current = clusters[-1]
-        latest_end = max(m.end for m in current)
-        if moment.start - latest_end <= gap:
-            current.append(moment)
+        if moment.start - clusters[-1][-1].start <= gap:
+            clusters[-1].append(moment)
         else:
             clusters.append([moment])
 
@@ -354,6 +360,13 @@ def locate_phrase(
     timings, leaving the caller to fall back on the window start.
     """
     wanted = {lemma(word) for word in normalize(query).split()}
+    # «в стоге сена» must not open the clip on the first «в» the window
+    # happens to contain — with a preposition in the query that is the top of
+    # the window, up to half a minute before the phrase. Short words only get
+    # to place the clip when the query has nothing longer to offer.
+    specific = {word for word in wanted if len(word) >= 3}
+    if specific:
+        wanted = specific
     if not wanted:
         return None
 

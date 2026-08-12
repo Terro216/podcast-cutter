@@ -37,10 +37,13 @@ from .proxy import MediaProxy
 from .store import Store, TranscriptKey
 from .transcripts import (
     CHUNKER_VERSION,
+    CLUSTER_GAP_SECONDS,
     Moment,
     build,
     cluster,
+    is_indexable,
     locate_phrase,
+    quarantine_signals,
 )
 from .urls import ensure_safe_source
 
@@ -336,25 +339,42 @@ class Indexer:
         if not hits:
             return []
 
-        moments = cluster(hits)[:limit]
-        utterances = await self.store.utterances_for(transcript_id)
+        # Quarantined utterances stay out of placement the same way they stay
+        # out of the index: a clip must not open on a timestamp the index
+        # itself refused to trust.
+        utterances = [
+            u
+            for u in await self.store.utterances_for(transcript_id)
+            if is_indexable(quarantine_signals(u))
+        ]
 
-        placed = []
-        for moment in moments:
+        # Placement happens before the answer is cut to `limit`, and moments
+        # whose clips open at the same instant collapse to the best-scored
+        # one. Clustering catches windows that overlap; this catches the same
+        # spoken moment reached through windows too far apart to cluster —
+        # without it, two of the three answers can be one moment twice.
+        placed: list[Moment] = []
+        for moment in cluster(hits):
             found = locate_phrase(
                 utterances, query, within=(moment.start, moment.end),
                 padding=CLIP_LEAD_IN,
             )
+            # Falling back to the window start is deliberate: without word
+            # timings the honest answer is "somewhere in here", and the nudge
+            # buttons exist for exactly that.
+            clip = found if found is not None else moment.start
+            if any(abs(clip - other.clip_start) <= CLUSTER_GAP_SECONDS
+                   for other in placed):
+                continue
             placed.append(
                 Moment(
                     start=moment.start,
                     end=moment.end,
                     text=moment.text,
                     score=moment.score,
-                    # Falling back to the window start is deliberate: without
-                    # word timings the honest answer is "somewhere in here",
-                    # and the nudge buttons exist for exactly that.
-                    clip_start=found if found is not None else moment.start,
+                    clip_start=clip,
                 )
             )
+            if len(placed) == limit:
+                break
         return placed

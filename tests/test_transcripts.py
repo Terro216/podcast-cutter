@@ -333,6 +333,18 @@ class TestCluster:
         ]
         assert len(cluster(moments)) == 2
 
+    def test_two_moments_forty_seconds_apart_are_two_moments(self):
+        """The bug this pins: window bounds stretch to the utterances they
+        overlap, so measuring the gap from one window's far edge to the next
+        window's start chained distinct moments 40–75 s apart into one
+        cluster — and only the higher-scored one survived into the answers.
+        Starts one stride apart are the same moment; these are not."""
+        moments = [
+            Moment(start=100, end=135, text="first", score=5.0),
+            Moment(start=140, end=170, text="second", score=4.0),
+        ]
+        assert len(cluster(moments)) == 2
+
     def test_results_come_back_best_first(self):
         moments = [
             Moment(start=100, end=130, text="weak", score=1.0),
@@ -396,6 +408,47 @@ class TestLocatePhrase:
         ]
         found = locate_phrase(speech, "Вышка", within=(885, 915))
         assert found == pytest.approx(903.0)
+
+    def test_a_preposition_does_not_place_the_clip(self):
+        """«иголка в стоге сена» must open on the needle, not on the first
+        «в» the window contains — which is the top of the window, up to half
+        a minute before the phrase."""
+        speech = [
+            Utterance(
+                start=100,
+                end=110,
+                text="мы поговорим в этот раз про поиск",
+                words=(
+                    Word(start=101.0, end=101.2, text="в"),
+                    Word(start=101.2, end=101.6, text="этот"),
+                ),
+            ),
+            Utterance(
+                start=110,
+                end=120,
+                text="иголка в стоге сена",
+                words=(
+                    Word(start=112.0, end=112.5, text="иголка"),
+                    Word(start=112.5, end=112.7, text="в"),
+                    Word(start=112.7, end=113.2, text="стоге"),
+                ),
+            ),
+        ]
+        found = locate_phrase(speech, "иголка в стоге сена", within=(100, 130))
+        assert found == pytest.approx(110.0)
+
+    def test_a_short_query_still_places(self):
+        """When the query has nothing longer than a preposition, short words
+        keep their right to place the clip — a worse anchor beats none."""
+        speech = [
+            Utterance(
+                start=100,
+                end=104,
+                text="ну и всё",
+                words=(Word(start=102.0, end=102.4, text="ну"),),
+            )
+        ]
+        assert locate_phrase(speech, "ну", within=(95, 130)) == pytest.approx(100.0)
 
     def test_ignores_matches_outside_the_window(self):
         speech = [
