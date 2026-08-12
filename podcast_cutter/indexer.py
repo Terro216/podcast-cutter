@@ -32,7 +32,7 @@ from pathlib import Path
 from .asr import SAMPLE_RATE, Recognizer
 from .audio import _download_with_fallback, _resolve_url, _run, probe
 from .config import Settings
-from .errors import AudioError, PodcastCutterError
+from .errors import AudioError, PodcastCutterError, ProcessingTimeout
 from .proxy import MediaProxy
 from .store import Store, TranscriptKey
 from .transcripts import (
@@ -293,6 +293,13 @@ class Indexer:
                 ),
                 timeout=self.settings.transcribe_timeout,
             )
+        except asyncio.TimeoutError:
+            # A bare TimeoutError is invisible to every `except
+            # PodcastCutterError` upstream: the user got the generic crash
+            # reply and the journal recorded the search as ok. Known gap that
+            # remains: the worker thread cannot be cancelled and keeps
+            # decoding — see HANDOFF §5.
+            raise ProcessingTimeout() from None
         finally:
             ticker.cancel()
             with contextlib.suppress(asyncio.CancelledError):

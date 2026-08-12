@@ -689,7 +689,10 @@ class PodcastCutterBot:
             )
 
 
-        outcome = "ok"
+        # "failed" until proven otherwise: an exception this handler did not
+        # anticipate still reaches the journal as a failure, not as a search
+        # that worked. `_perform_cut` learned this first.
+        outcome = "failed"
         self._busy_users.add(user_id)
         job_dir = self.settings.work_dir / f"asr-{episode.id}"
         try:
@@ -705,8 +708,7 @@ class PodcastCutterBot:
                     },
                 )
             session.moments = await self.indexer.search(transcript, phrase)
-            if not session.moments:
-                outcome = "empty"
+            outcome = "ok" if session.moments else "empty"
         except PodcastCutterError as exc:
             outcome = getattr(exc, "code", "error")
             with contextlib.suppress(TelegramError):

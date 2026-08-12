@@ -186,9 +186,15 @@ podcast_cutter/
   errors.py                exception hierarchy with user-facing messages
   api.py                   async Podcast Index client, typed Feed/Episode
   audio.py                 interval parsing, ffprobe, ffmpeg cutting
+  urls.py                  where an episode URL is allowed to point
+  proxy.py                 the media detour: routes, fallback, breaker
   text.py                  escaping, filenames, progress bars
   states.py                screen stack and the per-user session
-  store.py                 SQLite journal and the persisted recent list
+  store.py                 SQLite journal, transcripts and the FTS index
+  asr.py                   the recogniser interface, faster-whisper behind it
+  transcripts.py           quarantine, windowing, clustering, placement
+  indexer.py               transcription pipeline and the search
+  evals.py                 the basket runner — how often search is wrong
   screens.py               pure state → (text, keyboard) renderers
   keyboards.py             menus, pagination, callback-data vocabulary
   handlers.py              the text router, callback router and cut job

@@ -507,6 +507,28 @@ difference on the decoder rather than on the feed.
    transcripts are stale by design: the first search against each re-runs
    transcription once.
 
+3a. **The same review found bot-side defects, none fixed yet.** In value
+   order: (a) the PTB application is built without `concurrent_updates`, so
+   every update is processed strictly in sequence — one first-time
+   transcription freezes the bot for every user for minutes, and the whole
+   `_busy_users`/`_job_slots`/queued-message apparatus is unreachable while
+   that holds. Do not just flip the flag: the busy-check in `_search_phrase`
+   and `_start_cut` has an add-after-await race that sequential processing
+   currently masks. (b) The SSRF guard checks addresses before the cut, but
+   the ffmpeg fetch that follows can follow an HTTP redirect to anywhere —
+   a host that answers the probe politely can 302 ffmpeg into
+   `169.254.169.254`; DNS rebinding gives the same result without the
+   redirect. (c) The «›» button on podcast search results re-renders page 1
+   with a bigger counter — `_search_feeds` is only ever called with
+   `page=1` and FEEDS is the one screen without a cached full list. (d)
+   `‹ Back` restores a prompt screen without restoring `awaiting`, so
+   typing into a restored "send a phrase" prompt runs a podcast-name
+   search instead. (e) Typing on GLOBAL/RECENT sets `episode_filter`, which
+   those screens ignore. (f) The transcription progress bar renders seconds
+   through `human_bytes` («1.4 KB / 3.5 KB»). (g) `MAX_CUT_SECONDS` below 60
+   passes validation but the default clip is a fixed 60. (h)
+   `sweep_work_dir` removes only `cut-*`, so a crash mid-transcription
+   leaks an `asr-<id>` directory with a full episode in it.
 4. **Queues and abuse limits.** One heavy job per user exists; a per-user token
    bucket on input, a bounded queue with a visible position, and a ceiling on
    inline use do not. Handing out `src_` links before that is asking for it.
