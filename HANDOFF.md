@@ -1,4 +1,4 @@
-# Handoff — podcast-cutter, 2026-08-11
+# Handoff — podcast-cutter, 2026-08-12
 
 Working notes for whoever picks this up. `README.md` describes the project as
 it is, `ROADMAP.md` where it is going and why; this file records **where we
@@ -19,6 +19,14 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
+| `fd7efcc` | small/speechkit baselines guarded by CI; the one honest 6.2% false hit |
+| `b414df8` | the small and speechkit fixtures; make_fixtures passes the basket's language |
+| `1ccc566` | SpeechKit as the second recogniser behind the one-method door |
+| `91d5f3d` | an expired session says so, and `/reset` exists |
+| `7ce2d4f` | progress bars that count the right thing, and a bar for indexing |
+| `e4e3f7c` | feeds pagination actually fetches the next page |
+| `df40650` | hybrid retrieval: search by meaning, refuse by measurement |
+| `b3af46d` | concurrent updates, per-user budgets, the transcription queue |
 | `1d255b9` | a transcription timeout journals as failure; README layout; bot-side findings |
 | `f9b84ce` | clip placement on the phrase; distinct moments no longer merge |
 | `6c02926` | an extreme compression ratio convicts on its own (the §16 decoder loop) |
@@ -35,9 +43,10 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**763 tests pass, ruff clean** (4 hybrid basket rows skip unless
+**772 tests pass, ruff clean** (8 hybrid basket rows skip unless
 `EMBED_MODEL_DIR` points at the converted model — §6 has the command).
-The answer key exists and the baselines are committed — see §3b.
+The answer key exists, the baselines are committed for all four transcript
+variants, and the model comparison table is done — see §3b.
 
 Two things about the deployment that were not true a week ago:
 
