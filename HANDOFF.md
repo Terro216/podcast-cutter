@@ -35,9 +35,9 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**757 tests pass, nothing skipped, ruff clean.** Verify with the command in
-§6. The basket runs no longer skip: the answer key exists and the baselines
-are committed — see §3b.
+**763 tests pass, ruff clean** (4 hybrid basket rows skip unless
+`EMBED_MODEL_DIR` points at the converted model — §6 has the command).
+The answer key exists and the baselines are committed — see §3b.
 
 Two things about the deployment that were not true a week ago:
 
@@ -341,12 +341,20 @@ four classes, drafted from the reference transcripts and text-verified against
 them. What CI now holds every push against:
 
 ```
-run             hit@1  hit@3    err  false
-en/reference    63.9%  66.7%   1.8s   0.0%
-en/asr          52.8%  55.6%   1.9s   0.0%
-ru/reference    61.1%  66.7%   1.0s   0.0%
-ru/asr          36.1%  36.1%   1.6s   0.0%
+run                hit@1  hit@3    err  false
+en/reference       63.9%  66.7%   1.8s   0.0%
+en/reference+e5    69.4%  72.2%   2.6s   0.0%
+en/asr             52.8%  55.6%   1.9s   0.0%
+en/asr+e5          61.1%  69.4%   3.5s   0.0%
+ru/reference       61.1%  66.7%   1.0s   0.0%
+ru/reference+e5    66.7%  69.4%   1.0s   0.0%
+ru/asr             36.1%  36.1%   1.6s   0.0%
+ru/asr+e5          44.4%  44.4%   1.4s   0.0%
 ```
+
+The `+e5` rows are hybrid retrieval (`ROADMAP.md` §16a): lexical + dense over
+`multilingual-e5-small`, fused by reciprocal rank, with a refusal floor
+measured against the negatives. They run wherever the converted model exists.
 
 What the numbers already say: `base` costs Russian **30 points of hit@3**
 (66.7 → 36.1) and English only 11 — the model, not the retriever, is the
@@ -584,6 +592,27 @@ docker run --rm --user root --cpuset-cpus 8-15 --cpuset-mems 1 \
     python scripts/make_fixtures.py evals/baskets/ru.yaml evals/baskets/en.yaml \
       --variant asr --model base --work /bench/work
     chown -R 1001:1001 /app/evals'
+
+# the hybrid basket rows (the +e5 baselines). ~6 min: embedding 16 fixtures
+# through the int8 encoder is the cost; the searches stay milliseconds.
+docker run --rm --user root --cpuset-cpus 8-15 --cpuset-mems 1 \
+  -v podcast-asr-bench:/bench -v /home/me/server/projects/podcast-cutter:/app \
+  -w /app -e EMBED_MODEL_DIR=/bench/models/multilingual-e5-small-ct2 \
+  --entrypoint sh podcast-cutter-podcast-cutter:latest -c '
+    pip -q install pyyaml pytest pytest-asyncio
+    python -m pytest tests/test_baskets.py -q -k hybrid'
+
+# re-converting the embedding model, should it ever be lost or upgraded
+# (one-off container with torch; writes into the bench volume)
+docker run --rm --user root -v podcast-asr-bench:/bench -e HF_HOME=/bench/hf \
+  python:3.12-slim bash -c '
+    pip -q install torch --index-url https://download.pytorch.org/whl/cpu
+    pip -q install transformers ctranslate2 sentencepiece protobuf huggingface_hub
+    ct2-transformers-converter --model intfloat/multilingual-e5-small \
+      --output_dir /bench/models/multilingual-e5-small-ct2 --quantization int8 --force
+    python -c "from huggingface_hub import hf_hub_download; import shutil; \
+      shutil.copy(hf_hub_download(\"intfloat/multilingual-e5-small\", \
+      \"tokenizer.json\"), \"/bench/models/multilingual-e5-small-ct2/\")"'
 
 # deploy
 docker compose up -d --build && docker compose logs -f

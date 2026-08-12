@@ -385,3 +385,13 @@ baseline:
     hit@3: 0.556
     false_hit_rate: 0.0
     median_error_s: 1.9
+  reference+e5:
+    hit@1: 0.694
+    hit@3: 0.722
+    false_hit_rate: 0.0
+    median_error_s: 2.6
+  asr+e5:
+    hit@1: 0.611
+    hit@3: 0.694
+    false_hit_rate: 0.0
+    median_error_s: 3.5

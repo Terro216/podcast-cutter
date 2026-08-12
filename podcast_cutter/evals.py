@@ -606,6 +606,7 @@ async def run_variant(
     variant: str,
     db: Path,
     tolerance: float = TOLERANCE_SECONDS,
+    embedder=None,
 ) -> list[Answer]:
     """Index every episode's ``variant`` transcript, then ask every question.
 
@@ -616,6 +617,7 @@ async def run_variant(
     where a shortcut would not have looked.
     """
     from .config import Settings
+    from .embeddings import EMBEDDING_MODEL
     from .indexer import Indexer
     from .store import Store, TranscriptKey
 
@@ -623,8 +625,10 @@ async def run_variant(
     store.connect()
     settings = Settings(bot_token="x", api_key="x", api_secret="x", data_dir=db.parent)
     # No recogniser: a basket never transcribes. Everything expensive already
-    # happened, offline, and is sitting in the fixtures.
-    indexer = Indexer(settings, store, recognizer=None)
+    # happened, offline, and is sitting in the fixtures. The embedder is the
+    # exception the caller opts into: with one, windows are embedded here the
+    # way the pipeline embeds them, and the run measures hybrid retrieval.
+    indexer = Indexer(settings, store, recognizer=None, embedder=embedder)
 
     try:
         transcript_ids = {}
@@ -636,6 +640,11 @@ async def run_variant(
                     f"{variant} run cannot cover it."
                 )
             result = build(load_utterances(fixtures / name))
+            vectors = (
+                embedder.encode_passages([w.text for w in result.windows])
+                if embedder is not None and result.windows
+                else None
+            )
             transcript_ids[slug] = await store.save_transcript(
                 TranscriptKey(
                     episode_id=f"{basket.language}:{slug}:{variant}",
@@ -650,6 +659,8 @@ async def run_variant(
                 ),
                 {"source_url": episode.audio_url, "language": basket.language},
                 result,
+                vectors=vectors,
+                embedding_model=EMBEDDING_MODEL if vectors else None,
             )
 
         answers = []

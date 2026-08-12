@@ -15,6 +15,8 @@ production so far lived there.
 
 from __future__ import annotations
 
+import functools
+import os
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,30 @@ from podcast_cutter.evals import (
 EVALS = Path(__file__).resolve().parent.parent / "evals"
 BASKETS = sorted(EVALS.glob("baskets/*.yaml"))
 VARIANTS = ("reference", "asr")
+#: The retrieval axis: plain lexical, and lexical+dense when a converted
+#: embedding model is available. CI without the model still guards the
+#: lexical baselines; the hybrid rows run wherever EMBED_MODEL_DIR points at
+#: real weights — see HANDOFF §6 for the command.
+RETRIEVALS = ("lexical", "hybrid")
+
+
+@functools.cache
+def _embedder():
+    path = os.environ.get("EMBED_MODEL_DIR", "")
+    if not path or not (Path(path) / "model.bin").exists():
+        return None
+    from podcast_cutter.embeddings import Embedder
+
+    return Embedder(Path(path))
+
+
+def _embedder_or_skip(retrieval: str):
+    if retrieval == "lexical":
+        return None
+    embedder = _embedder()
+    if embedder is None:
+        pytest.skip("EMBED_MODEL_DIR does not point at a converted model")
+    return embedder
 
 
 def basket_ids() -> list[str]:
@@ -92,15 +118,21 @@ def test_the_basket_is_big_enough_to_mean_something(basket):
     assert not missing, f"{basket.language}: missing query classes {missing}"
 
 
+@pytest.mark.parametrize("retrieval", RETRIEVALS)
 @pytest.mark.parametrize("variant", VARIANTS)
-async def test_the_basket_has_not_regressed(basket, variant, tmp_path, capsys):
+async def test_the_basket_has_not_regressed(
+    basket, variant, retrieval, tmp_path, capsys
+):
     if not _fixtures_present(basket, variant):
         pytest.skip(f"{variant} fixtures are not committed yet")
+    embedder = _embedder_or_skip(retrieval)
 
+    key = variant if retrieval == "lexical" else f"{variant}+e5"
     answers = await run_variant(
-        basket, EVALS / "fixtures", variant, tmp_path / "basket.db"
+        basket, EVALS / "fixtures", variant, tmp_path / "basket.db",
+        embedder=embedder,
     )
-    label = f"{basket.language}/{variant}"
+    label = f"{basket.language}/{key}"
     report = summarize(answers, label)
 
     # Printed unconditionally: the number is the point of the exercise, and a
@@ -118,7 +150,7 @@ async def test_the_basket_has_not_regressed(basket, variant, tmp_path, capsys):
                 + (f" — {answer.query.note}" if answer.query.note else "")
             )
 
-    complaints = report.regressions(basket.baseline.get(variant, {}))
+    complaints = report.regressions(basket.baseline.get(key, {}))
     assert not complaints, "\n".join(complaints)
 
 

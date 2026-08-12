@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import statistics
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from pathlib import Path
 from .asr import SAMPLE_RATE, Recognizer
 from .audio import _download_with_fallback, _resolve_url, _run, probe
 from .config import Settings
+from .embeddings import EMBEDDING_MODEL, MIN_MARGIN, MIN_SIMILARITY, Embedder
 from .errors import AudioError, PodcastCutterError, ProcessingTimeout
 from .proxy import MediaProxy
 from .store import Store, TranscriptKey
@@ -145,10 +147,14 @@ class Indexer:
         store: Store,
         recognizer: Recognizer,
         proxy: MediaProxy | None = None,
+        embedder: Embedder | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.recognizer = recognizer
+        #: Absent when dense search is off, in which case search is exactly
+        #: the lexical behaviour the committed baselines describe.
+        self.embedder = embedder
         self.proxy = proxy if proxy is not None else MediaProxy(settings)
         #: Episode id -> the task transcribing it. Everyone asking for the same
         #: episode awaits the same task rather than starting another.
@@ -307,14 +313,30 @@ class Indexer:
         decoded.unlink(missing_ok=True)
 
         result = build(utterances)
+
+        # Seconds of extra CPU against the minutes recognition just took, and
+        # it buys the whole `meaning` class. Off-thread, like everything else
+        # heavy here.
+        vectors = None
+        if self.embedder is not None and result.windows:
+            if on_progress is not None:
+                with contextlib.suppress(Exception):
+                    await on_progress(Progress(stage="index"))
+            vectors = await asyncio.to_thread(
+                self.embedder.encode_passages,
+                [window.text for window in result.windows],
+            )
+
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
-            "Transcribed %s in %d ms: %d utterances, %d quarantined, %d windows",
+            "Transcribed %s in %d ms: %d utterances, %d quarantined, %d windows"
+            "%s",
             episode_id,
             elapsed_ms,
             len(result.utterances),
             result.quarantined,
             len(result.windows),
+            " (embedded)" if vectors else "",
         )
 
         return await self.store.save_transcript(
@@ -327,6 +349,8 @@ class Indexer:
                 "ms": elapsed_ms,
             },
             result,
+            vectors=vectors,
+            embedding_model=EMBEDDING_MODEL if vectors else None,
         )
 
     # ------------------------------------------------------------------
@@ -342,7 +366,7 @@ class Indexer:
         that always returns its best guess turns a recognition error into a
         confident lie.
         """
-        hits = await self.store.search_windows(transcript_id, query)
+        hits = await self._hybrid_hits(transcript_id, query)
         if not hits:
             return []
 
@@ -385,3 +409,69 @@ class Indexer:
             if len(placed) == limit:
                 break
         return placed
+
+    async def _hybrid_hits(self, transcript_id: int, query: str) -> list[Moment]:
+        """Lexical and dense hits over one transcript, fused.
+
+        Lexical carries names, jargon and exact quotes — the main query type
+        here, and the one dense retrieval is weakest at. Dense carries the
+        `meaning` class, which lexical scores 0% on by construction. Fusion is
+        reciprocal rank (§13.2: RRF needs no score calibration), so neither
+        BM25 nor cosine has to be made commensurable with the other.
+
+        The refusal contract survives: a dense hit is only a hit past both an
+        absolute similarity floor *and* a margin over the episode's median —
+        see the measurement behind the pair in
+        :mod:`~podcast_cutter.embeddings`. Without them every negative query
+        would come back answered, and that failure costs more trust than the
+        `meaning` class earns.
+        """
+        lexical = await self.store.search_windows(transcript_id, query)
+
+        dense: list[Moment] = []
+        if self.embedder is not None:
+            rows = await self.store.vector_rows(transcript_id, EMBEDDING_MODEL)
+            if rows:
+                ranked = await asyncio.to_thread(
+                    self.embedder.rank, query, [row["vector"] for row in rows]
+                )
+                background = statistics.median(s for _, s in ranked)
+                dense = [
+                    Moment(
+                        start=rows[i]["start_ms"] / 1000,
+                        end=rows[i]["end_ms"] / 1000,
+                        text=rows[i]["text"],
+                        score=similarity,
+                    )
+                    for i, similarity in ranked[:20]
+                    if similarity >= MIN_SIMILARITY
+                    and similarity - background >= MIN_MARGIN
+                ]
+
+        if not dense:
+            return lexical
+        if not lexical:
+            return dense
+
+        # Reciprocal rank fusion, k=60 as published. Windows are matched
+        # across the two lists by their bounds — same window, same row.
+        fused: dict[tuple[float, float], Moment] = {}
+        scores: dict[tuple[float, float], float] = {}
+        for hits in (lexical, dense):
+            for rank, moment in enumerate(hits, start=1):
+                bounds = (moment.start, moment.end)
+                fused.setdefault(bounds, moment)
+                scores[bounds] = scores.get(bounds, 0.0) + 1.0 / (60 + rank)
+        return sorted(
+            (
+                Moment(
+                    start=moment.start,
+                    end=moment.end,
+                    text=moment.text,
+                    score=scores[bounds],
+                )
+                for bounds, moment in fused.items()
+            ),
+            key=lambda moment: moment.score,
+            reverse=True,
+        )

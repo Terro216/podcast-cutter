@@ -92,6 +92,7 @@ _LISTENING_STAGES = {
     "download": "⬇️ Fetching the episode…",
     "decode": "🔧 Preparing the audio…",
     "transcribe": "🎧 Listening to the episode…",
+    "index": "🧭 Indexing what was said…",
 }
 
 #: Rotated under the bar while recognition runs, one every few edits.

@@ -44,7 +44,7 @@ from .transcripts import (
 logger = logging.getLogger(__name__)
 
 #: Bumped when the schema changes; see ``_migrate``.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS transcripts (
     asr_model       TEXT    NOT NULL,
     chunker_version INTEGER NOT NULL,
     normalizer_version INTEGER NOT NULL,
+    -- Which model produced the rows in window_vectors, NULL when none did.
+    -- Written *and read*: search only trusts vectors whose model matches the
+    -- one it would query with. The lemma column's unread version field is the
+    -- cautionary tale here.
+    embedding_model TEXT,
     quarantined     INTEGER NOT NULL DEFAULT 0,
     ms              INTEGER,
     at              REAL    NOT NULL,
@@ -156,6 +161,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS windows_fts USING fts5 (
     tokenize='unicode61'
 );
 
+-- Dense vectors for the same windows, one blob of float32 per row. A plain
+-- table rather than a vector index on purpose: an episode is a few hundred
+-- windows, and §12's research verdict was that exact NumPy over that beats a
+-- pre-v1 ANN extension. NULLs never appear — a window either has a vector
+-- from the model named on its transcript row, or no row here at all, which is
+-- how search knows to stay lexical for that transcript.
+CREATE TABLE IF NOT EXISTS window_vectors (
+    window_id INTEGER PRIMARY KEY REFERENCES windows (id) ON DELETE CASCADE,
+    vector    BLOB NOT NULL
+);
+
 -- External content means FTS5 holds no copy of the text, so it has to be told
 -- about every change or queries silently return rows that no longer exist.
 CREATE TRIGGER IF NOT EXISTS windows_ai AFTER INSERT ON windows BEGIN
@@ -176,7 +192,13 @@ END;
 
 #: Tables that only ever held derived data, and are therefore safe to rebuild
 #: rather than migrate. Ordered so a drop never leaves a dangling reference.
-_DERIVED_TABLES = ("windows_fts", "windows", "utterances", "transcripts")
+_DERIVED_TABLES = (
+    "window_vectors",
+    "windows_fts",
+    "windows",
+    "utterances",
+    "transcripts",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,9 +342,10 @@ class Store:
             )
             return
 
-        if 0 < current < 3:
-            # Version 3 gave windows a lemma column, without which Russian
-            # searches only match the exact form that was spoken.
+        if 0 < current < SCHEMA_VERSION:
+            # v3 gave windows a lemma column; v4 gave them vectors and the
+            # transcript row an embedding_model. Either way the answer is the
+            # same: derived tables are rebuilt, not migrated.
             logger.info("Rebuilding transcript tables for schema %s", SCHEMA_VERSION)
             for table in _DERIVED_TABLES:
                 connection.execute(f"DROP TABLE IF EXISTS {table}")
@@ -443,16 +466,28 @@ class Store:
         return int(rows[0]["id"]) if rows else None
 
     def _save_transcript(
-        self, key: TranscriptKey, meta: dict, build: TranscriptBuild
+        self,
+        key: TranscriptKey,
+        meta: dict,
+        build: TranscriptBuild,
+        vectors: list[bytes] | None = None,
+        embedding_model: str | None = None,
     ) -> int:
         """Write a transcript and everything derived from it, in one go.
 
         A single transaction on purpose: a transcript row with no windows would
         look like a searchable episode that silently answers nothing, and that
         is precisely the state a crash between two commits would leave behind.
+        The same reasoning covers the vectors: half-embedded windows would make
+        dense search quietly blind to half of an episode.
         """
         if self._connection is None:
             raise RuntimeError("Store is not connected")
+        if vectors is not None and len(vectors) != len(build.windows):
+            raise ValueError(
+                f"{len(vectors)} vectors for {len(build.windows)} windows — "
+                f"these must correspond one to one."
+            )
 
         with self._lock:
             connection = self._connection
@@ -463,8 +498,9 @@ class Store:
                         episode_id, episode_title, feed_title, source_url,
                         source_sha256, source_bytes, duration_s, language,
                         asr_backend, asr_model, chunker_version,
-                        normalizer_version, quarantined, ms, at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        normalizer_version, embedding_model, quarantined,
+                        ms, at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         key.episode_id,
@@ -479,6 +515,7 @@ class Store:
                         key.asr_model,
                         key.chunker_version,
                         NORMALIZER_VERSION,
+                        embedding_model if vectors else None,
                         build.quarantined,
                         meta.get("ms"),
                         time.time(),
@@ -541,12 +578,37 @@ class Store:
                     ],
                 )
 
+                if vectors:
+                    # executemany reports no rowids, so the freshly written
+                    # windows are read back; AUTOINCREMENT ids preserve the
+                    # insertion order that ties vector i to window i.
+                    ids = [
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT id FROM windows WHERE transcript_id = ? "
+                            "ORDER BY id",
+                            (transcript_id,),
+                        )
+                    ]
+                    connection.executemany(
+                        "INSERT INTO window_vectors (window_id, vector) "
+                        "VALUES (?, ?)",
+                        list(zip(ids, vectors, strict=True)),
+                    )
+
         return transcript_id
 
     async def save_transcript(
-        self, key: TranscriptKey, meta: dict, build: TranscriptBuild
+        self,
+        key: TranscriptKey,
+        meta: dict,
+        build: TranscriptBuild,
+        vectors: list[bytes] | None = None,
+        embedding_model: str | None = None,
     ) -> int:
-        return await asyncio.to_thread(self._save_transcript, key, meta, build)
+        return await asyncio.to_thread(
+            self._save_transcript, key, meta, build, vectors, embedding_model
+        )
 
     async def search_windows(
         self, transcript_id: int, query: str, limit: int = 20
@@ -596,6 +658,30 @@ class Store:
                 ]
 
         return []
+
+    async def vector_rows(
+        self, transcript_id: int, embedding_model: str
+    ) -> list[sqlite3.Row]:
+        """Every window of a transcript with its vector, in episode order.
+
+        Empty unless the transcript's recorded embedding model is exactly the
+        one asked for: vectors from a different model share a shape and
+        nothing else, and comparing them would be a wrong answer with a
+        confident score. Raw rows rather than an array, because this module
+        must not require NumPy — the caller that can use vectors already has
+        it.
+        """
+        return await self._run(
+            """
+            SELECT w.start_ms, w.end_ms, w.text, v.vector
+            FROM windows w
+            JOIN window_vectors v ON v.window_id = w.id
+            JOIN transcripts t ON t.id = w.transcript_id
+            WHERE w.transcript_id = ? AND t.embedding_model = ?
+            ORDER BY w.start_ms
+            """,
+            (transcript_id, embedding_model),
+        )
 
     async def measured_rtf(self, limit: int = 20) -> float | None:
         """How long recognition actually takes here, per second of audio.

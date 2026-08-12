@@ -314,7 +314,8 @@ internet fails more often than anyone plans for.
    **Done and deployed** — §15.
 2. ~~RU/EN baskets and the pytest runner. **Before** tuning.~~ **Done** —
    answer key written and baselines committed; the by-ear pass remains. §16.
-3. Embeddings on top, negatives, LLM judge.
+3. ~~Embeddings on top, negatives.~~ **Done** — hybrid retrieval with a
+   measured refusal floor, §16a. The LLM judge remains open.
 4. SpeechKit as the second backend, and the comparison table.
 5. Queues, limits, source ceiling, backups.
 6. Video notes with presets and subtitles.
@@ -963,6 +964,40 @@ Two details that are not cosmetic:
   `CLIP_LEAD_IN` opens the clip two seconds earlier on purpose, so perfect
   placement measures as two seconds of error. Worth writing down before the
   first person reads 2.0 s as a defect.
+
+## 16a. Done: hybrid retrieval, priced by the basket it was built under
+
+Step 3 of §11, minus the LLM judge. `multilingual-e5-small` (§12's verdict)
+on CTranslate2 int8 — the engine faster-whisper already ships, so the image
+gains no dependency, only 120 MB of weights on the volume. Windows are
+embedded at index time (seconds, against recognition's minutes), a query
+fuses lexical and dense hits by reciprocal rank (§13.2: RRF needs no score
+calibration), and the answer pipeline downstream — clustering, placement,
+dedup — is untouched.
+
+**The refusal floor was measured, not chosen.** Over all 208 basket queries:
+the strongest absolute similarity any negative reaches is 0.842, the
+strongest margin over its episode's median is 0.0545 — and no negative
+clears both. So a dense hit must clear both (0.84 and 0.05), which held
+false hits at **0.0% in all eight runs** while buying:
+
+```
+             lexical→hybrid, hit@3
+en/reference   66.7 → 72.2
+en/asr         55.6 → 69.4   ← +13.8, dense rescues base's garbles
+ru/reference   66.7 → 69.4
+ru/asr         36.1 → 44.4
+meaning class  0% → up to 25% (en/asr @3)
+```
+
+The en/asr jump is the surprise worth keeping: dense retrieval recovers
+quotes whose words `base` mangled — «hypochondriac» lost by the recogniser is
+still found by meaning. The honest limits, also on record: ru/asr meaning is
+still 0% (base's Russian garbles poison window embeddings too), and e5-small
+packs every score into a 0.78–0.87 band, which is why the floor is a
+conjunction of two razor-thin criteria rather than one comfortable number. A
+bigger e5 is the obvious next experiment, and the `+e5` baseline rows will
+price it the day it is tried.
 
 ### Smoke-run on real audio, before any of it was believed
 

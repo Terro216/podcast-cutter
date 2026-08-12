@@ -53,6 +53,7 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `ASR_BACKEND`         | no       | Recognition backend (`local`)            |
 | `ASR_MODEL`           | no       | Whisper model size (`base`)              |
 | `ASR_THREADS`         | no       | CPU threads for recognition (8)          |
+| `EMBED_MODEL_DIR`     | no       | Converted e5 model dir; empty = lexical only |
 | `MAX_CONCURRENT_JOBS` | no       | Simultaneous ffmpeg jobs (2)             |
 | `RATE_INPUT_PER_MINUTE` | no     | Per-user messages/buttons per minute (20); 0 = off |
 | `RATE_CUTS_PER_HOUR`  | no       | Per-user cuts per hour (30); 0 = off     |
@@ -257,6 +258,17 @@ two spoken sentences still lands whole inside one window; overlapping hits are
 collapsed before three answers are shown, or the three would be one moment
 listed three times. The clip opens on the matched word's own timestamp, padded
 back two seconds, because word timings are not editing-grade.
+
+**Search matches meaning as well as words** when `EMBED_MODEL_DIR` points at a
+converted `multilingual-e5-small` (CTranslate2 int8 — the engine
+faster-whisper already ships, so this costs no new dependency, only weights
+on the volume). Windows are embedded once at index time; a query fuses
+lexical and dense hits by reciprocal rank, which is how «где рассказывают про
+эффект пустышки» finds an episode that only ever says «плацебо». A dense hit
+counts only past an absolute similarity floor *and* a margin over the
+episode's own background — both measured against the evaluation baskets — so
+a phrase that was never said still gets the honest empty answer instead of
+the nearest thing lying around.
 
 **Russian needs lemmatisation, and this is not theoretical.** On a real episode
 about neural networks the recogniser wrote «нейросетей» and never once the

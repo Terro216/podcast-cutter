@@ -28,6 +28,7 @@ from .api import PodcastIndexClient
 from .asr import build_recognizer
 from .audio import ensure_ffmpeg_available
 from .config import Settings, load_settings
+from .embeddings import build_embedder
 from .handlers import PodcastCutterBot
 from .indexer import Indexer
 from .states import Screen
@@ -267,7 +268,10 @@ def build_indexer(settings: Settings, store: Store) -> Indexer | None:
         settings.asr_model,
         settings.asr_model_dir,
     )
-    return Indexer(settings, store, recognizer)
+    embedder = build_embedder(settings)
+    if embedder is not None:
+        logger.info("Dense search ready: %s", settings.embed_model_dir)
+    return Indexer(settings, store, recognizer, embedder=embedder)
 
 
 def build_application(settings: Settings, store: Store | None = None) -> Application:
