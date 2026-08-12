@@ -175,13 +175,214 @@ class LocalWhisper:
             )
 
 
+class SpeechKit:
+    """Yandex SpeechKit v3 async recognition, over plain REST.
+
+    The measured trade against local Whisper (`ROADMAP.md` §4 guessed, the
+    smoke run confirmed): a 180 s Russian sample came back in ten seconds,
+    correctly, including the exact phrases `base` garbles — «первой линии
+    защиты», «руководством факультета». What the cloud does not return is any
+    of the quarantine metrics; the judge already treats missing metrics as a
+    property of the backend, not as suspicion.
+
+    Two response details drive the parsing:
+
+    * Results arrive as newline-delimited JSON where each final carries
+      word-level timings; `finalRefinement` repeats the same words with
+      numbers and names normalised («100», not «сто»), which is what users
+      type — so refinements win over their raw finals.
+    * A "final" can span a minute of audio, and a minute-long utterance
+      repeated into every 30-second window it overlaps would bloat the index.
+      Words are therefore regrouped into utterances at speech pauses, the
+      same granularity Whisper produces naturally.
+    """
+
+    backend = "speechkit"
+
+    #: Split a final into utterances at silences this long, or when one grows
+    #: past a window's length anyway.
+    _SPLIT_PAUSE_S = 1.2
+    _MAX_UTTERANCE_S = 20.0
+
+    def __init__(self, api_key: str, folder_id: str, model: str = "general") -> None:
+        self.model = model
+        self._api_key = api_key
+        self._folder_id = folder_id
+
+    @property
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Api-Key {self._api_key}",
+            "x-folder-id": self._folder_id,
+        }
+
+    async def transcribe(
+        self,
+        path: Path,
+        language: str | None = None,
+        on_segment: Callable[[float], None] | None = None,
+    ) -> tuple[list[Utterance], str | None]:
+        import base64
+
+        import httpx
+
+        from .errors import AudioError
+
+        ogg = path.with_suffix(".spk.ogg")
+        try:
+            await self._encode_opus(path, ogg)
+            content = base64.b64encode(
+                await asyncio.to_thread(ogg.read_bytes)
+            ).decode()
+        finally:
+            ogg.unlink(missing_ok=True)
+
+        body = {
+            "content": content,
+            "recognitionModel": {
+                "model": self.model,
+                "audioFormat": {
+                    "containerAudio": {"containerAudioType": "OGG_OPUS"}
+                },
+                "textNormalization": {
+                    "textNormalization": "TEXT_NORMALIZATION_ENABLED"
+                },
+            },
+        }
+        if language:
+            body["recognitionModel"]["languageRestriction"] = {
+                "restrictionType": "WHITELIST",
+                "languageCode": [self._language_code(language)],
+            }
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            submitted = await client.post(
+                "https://stt.api.cloud.yandex.net/stt/v3/recognizeFileAsync",
+                headers=self._headers,
+                json=body,
+            )
+            if submitted.status_code != 200:
+                raise AudioError(
+                    f"SpeechKit refused the job: {submitted.status_code} "
+                    f"{submitted.text[:200]}"
+                )
+            operation = submitted.json()["id"]
+
+            while True:
+                await asyncio.sleep(10)
+                state = (
+                    await client.get(
+                        f"https://operation.api.cloud.yandex.net/operations/{operation}",
+                        headers=self._headers,
+                    )
+                ).json()
+                if state.get("done"):
+                    if "error" in state:
+                        raise AudioError(
+                            f"SpeechKit failed: {state['error']!r}"[:300]
+                        )
+                    break
+
+            results = await client.get(
+                "https://stt.api.cloud.yandex.net/stt/v3/getRecognition",
+                headers=self._headers,
+                params={"operationId": operation},
+            )
+            results.raise_for_status()
+
+        utterances = self._parse(results.text, on_segment)
+        return utterances, language
+
+    async def _encode_opus(self, source: Path, target: Path) -> None:
+        """Re-encode for upload: a raw 16 kHz WAV is ~115 MB per hour, over
+        the API's direct-content limit; Opus at 32 kbps is ~14 MB and the
+        recogniser's own documentation prefers it."""
+        from .errors import AudioError
+
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(source),
+            "-ac", "1", "-c:a", "libopus", "-b:a", "32k",
+            str(target),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise AudioError(
+                f"Could not prepare audio for SpeechKit: "
+                f"{stderr.decode(errors='replace')[:200]}"
+            )
+
+    @staticmethod
+    def _language_code(language: str) -> str:
+        return {"ru": "ru-RU", "en": "en-US"}.get(language, language)
+
+    def _parse(self, ndjson: str, on_segment) -> list[Utterance]:
+        import json
+
+        # One alternatives-list per finalIndex; refinements overwrite finals
+        # because they carry the normalised text users actually type.
+        by_index: dict[str, list] = {}
+        for line in ndjson.splitlines():
+            if not line.strip():
+                continue
+            payload = json.loads(line).get("result", {})
+            cursor = payload.get("audioCursors") or {}
+            index = str(cursor.get("finalIndex", len(by_index)))
+            if "finalRefinement" in payload:
+                by_index[index] = (
+                    payload["finalRefinement"]["normalizedText"]["alternatives"]
+                )
+            elif "final" in payload and index not in by_index:
+                by_index[index] = payload["final"]["alternatives"]
+
+        words: list[Word] = []
+        for index in sorted(by_index, key=float):
+            alternative = (by_index[index] or [{}])[0]
+            for item in alternative.get("words") or ():
+                words.append(
+                    Word(
+                        start=int(item["startTimeMs"]) / 1000,
+                        end=int(item["endTimeMs"]) / 1000,
+                        text=item["text"],
+                    )
+                )
+
+        utterances: list[Utterance] = []
+        group: list[Word] = []
+
+        def flush() -> None:
+            if not group:
+                return
+            utterances.append(
+                Utterance(
+                    start=group[0].start,
+                    end=group[-1].end,
+                    text=" ".join(word.text for word in group),
+                    words=tuple(group),
+                )
+            )
+            if on_segment is not None:
+                on_segment(group[-1].end)
+            group.clear()
+
+        for word in words:
+            if group and (
+                word.start - group[-1].end >= self._SPLIT_PAUSE_S
+                or word.end - group[0].start >= self._MAX_UTTERANCE_S
+            ):
+                flush()
+            group.append(word)
+        flush()
+        return utterances
+
+
 def build_recognizer(settings) -> Recognizer:
     """The recogniser named by configuration.
 
-    Only one backend exists so far; the indirection is here because the shape
-    of the second one is already known, and because a bot started with a
-    misspelled backend should say so at startup rather than on someone's first
-    search.
+    A bot started with a misspelled backend should say so at startup rather
+    than on someone's first search.
     """
     from .errors import ConfigError
 
@@ -192,6 +393,18 @@ def build_recognizer(settings) -> Recognizer:
             cpu_threads=settings.asr_threads,
         )
 
+    if settings.asr_backend == "speechkit":
+        if not (settings.speechkit_api_key and settings.speechkit_folder_id):
+            raise ConfigError(
+                "ASR_BACKEND=speechkit needs SPEECHKIT_API_KEY and "
+                "SPEECHKIT_FOLDER_ID."
+            )
+        return SpeechKit(
+            api_key=settings.speechkit_api_key,
+            folder_id=settings.speechkit_folder_id,
+        )
+
     raise ConfigError(
-        f"ASR_BACKEND must be 'local' for now, got {settings.asr_backend!r}."
+        f"ASR_BACKEND must be 'local' or 'speechkit', got "
+        f"{settings.asr_backend!r}."
     )

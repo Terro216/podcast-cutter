@@ -23,6 +23,7 @@ episodes:
       reference: invisible-biomimicry.reference.json.gz
       asr: invisible-biomimicry.asr.json.gz
       small: invisible-biomimicry.small.json.gz
+      speechkit: invisible-biomimicry.speechkit.json.gz
 
   hidden-brain-feelings:
     title: How Feelings Make Us Smarter
@@ -38,6 +39,7 @@ episodes:
       reference: hidden-brain-feelings.reference.json.gz
       asr: hidden-brain-feelings.asr.json.gz
       small: hidden-brain-feelings.small.json.gz
+      speechkit: hidden-brain-feelings.speechkit.json.gz
 
   twist-duct-tape:
     title: $100T is managed by "human duct tape" | E2308
@@ -53,6 +55,7 @@ episodes:
       reference: twist-duct-tape.reference.json.gz
       asr: twist-duct-tape.asr.json.gz
       small: twist-duct-tape.small.json.gz
+      speechkit: twist-duct-tape.speechkit.json.gz
 
   twista-investor:
     title: Series 2025 Episode 8 - Investor Special
@@ -68,6 +71,7 @@ episodes:
       reference: twista-investor.reference.json.gz
       asr: twista-investor.asr.json.gz
       small: twista-investor.small.json.gz
+      speechkit: twista-investor.speechkit.json.gz
 
 annotation:
   reference_model: large-v3

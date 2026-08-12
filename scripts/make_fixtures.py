@@ -194,6 +194,16 @@ async def main(argv: list[str]) -> int:
     parser.add_argument("baskets", nargs="+", type=Path)
     parser.add_argument("--variant", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--backend",
+        default="local",
+        choices=("local", "speechkit"),
+        help=(
+            "Which recogniser produces the fixtures. speechkit reads "
+            "SPEECHKIT_API_KEY and SPEECHKIT_FOLDER_ID from the environment "
+            "and ignores --threads/--compute; pass --model general."
+        ),
+    )
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument(
         "--compute",
@@ -220,12 +230,23 @@ async def main(argv: list[str]) -> int:
     # detour has nothing to add and a dead one would only add latency.
     settings = Settings(bot_token="x", api_key="x", api_secret="x", data_dir=args.work)
     proxy = MediaProxy(settings)
-    recognizer = LocalWhisper(
-        model=args.model,
-        download_root=settings.asr_model_dir,
-        compute_type=args.compute,
-        cpu_threads=args.threads,
-    )
+    if args.backend == "speechkit":
+        import os
+
+        from podcast_cutter.asr import SpeechKit
+
+        recognizer = SpeechKit(
+            api_key=os.environ["SPEECHKIT_API_KEY"],
+            folder_id=os.environ["SPEECHKIT_FOLDER_ID"],
+            model=args.model,
+        )
+    else:
+        recognizer = LocalWhisper(
+            model=args.model,
+            download_root=settings.asr_model_dir,
+            compute_type=args.compute,
+            cpu_threads=args.threads,
+        )
 
     todo: list[tuple[EpisodeRef, Path]] = []
     for path in args.baskets:

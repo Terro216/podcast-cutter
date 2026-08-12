@@ -118,6 +118,9 @@ class Settings:
     #: Directory holding the converted sentence-embedding model. Empty means
     #: dense search is off and search stays exactly lexical.
     embed_model_dir: str = ""
+    #: Yandex SpeechKit credentials, needed only when ASR_BACKEND=speechkit.
+    speechkit_api_key: str = ""
+    speechkit_folder_id: str = ""
     #: Whole episodes are decoded, so this is generous by necessity: six hours
     #: of audio at RTF 0.07 is roughly half an hour of work.
     transcribe_timeout: float = 3600.0
@@ -371,6 +374,8 @@ def load_settings() -> Settings:
         asr_model=_env("ASR_MODEL") or Settings.asr_model,
         asr_threads=_positive_int("ASR_THREADS", Settings.asr_threads),
         embed_model_dir=_env("EMBED_MODEL_DIR"),
+        speechkit_api_key=_env("SPEECHKIT_API_KEY"),
+        speechkit_folder_id=_env("SPEECHKIT_FOLDER_ID"),
         telegram_proxy=_env("TELEGRAM_PROXY").rstrip("/"),
         media_proxy=_env("MEDIA_PROXY").rstrip("/"),
         media_proxy_mode=(
