@@ -981,9 +981,17 @@ class PodcastCutterBot:
 
         if prefix == kb.PAGE_PREFIX and session.current:
             with contextlib.suppress(ValueError):
+                page = int(value)
+                # FEEDS is the one paged screen without a cached full list —
+                # the directory is asked per page, so flipping a page is a
+                # fetch, not a re-render. Re-rendering here showed page 1
+                # again with a bigger number on it.
+                if session.current.screen is Screen.FEEDS and session.query:
+                    await self._search_feeds(update, session, session.query, page)
+                    return
                 # Paging replaces rather than pushes, so Back leaves the list
                 # instead of walking back through every page.
-                session.replace(session.current.screen, int(value))
+                session.replace(session.current.screen, page)
             await self.render(update, session)
             return
 

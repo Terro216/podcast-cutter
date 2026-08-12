@@ -186,6 +186,39 @@ class TestNavigationCallbacks:
         await tap(bot, context, kb.NAV_BACK)
         assert session_of(context).current.screen is not Screen.EPISODES
 
+    async def test_feeds_paging_asks_the_directory_for_that_page(
+        self, bot, context, client
+    ):
+        """The bug this pins: «›» on podcast search results re-rendered page 1
+        with a bigger counter, because FEEDS is the one paged screen without a
+        cached full list — its pages live in the directory, and flipping one
+        has to fetch it."""
+        client.feeds = [make_feed(str(i)) for i in range(5)]
+        client.has_next = True
+        await text(bot, context, "history podcasts")
+        assert session_of(context).current.screen is Screen.FEEDS
+
+        client.feeds = [make_feed(str(i)) for i in range(5, 10)]
+        await tap(bot, context, f"{kb.PAGE_PREFIX}:2")
+
+        assert "search_feeds:history podcasts:2" in client.calls
+        session = session_of(context)
+        assert session.current.page == 2
+        assert [feed.id for feed in session.feeds] == [str(i) for i in range(5, 10)]
+
+    async def test_feeds_paging_back_to_an_earlier_page_refetches_it(
+        self, bot, context, client
+    ):
+        client.feeds = [make_feed(str(i)) for i in range(5)]
+        client.has_next = True
+        await text(bot, context, "history podcasts")
+        await tap(bot, context, f"{kb.PAGE_PREFIX}:2")
+
+        await tap(bot, context, f"{kb.PAGE_PREFIX}:1")
+
+        assert "search_feeds:history podcasts:1" in client.calls[-1:]
+        assert session_of(context).current.page == 1
+
     async def test_the_page_counter_does_nothing(self, bot, context):
         update = await tap(bot, context, kb.NAV_NOOP)
         assert update.callback_query.answered
