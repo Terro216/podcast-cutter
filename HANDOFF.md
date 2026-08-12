@@ -531,9 +531,8 @@ difference on the decoder rather than on the feed.
    the ffmpeg fetch that follows can follow an HTTP redirect to anywhere —
    a host that answers the probe politely can 302 ffmpeg into
    `169.254.169.254`; DNS rebinding gives the same result without the
-   redirect. (c) The «›» button on podcast search results re-renders page 1
-   with a bigger counter — `_search_feeds` is only ever called with
-   `page=1` and FEEDS is the one screen without a cached full list. (d)
+   redirect. (c) ~~feeds pagination re-rendering page 1~~ — fixed: a page
+   flip on FEEDS now fetches that page through `_search_feeds`. (d)
    `‹ Back` restores a prompt screen without restoring `awaiting`, so
    typing into a restored "send a phrase" prompt runs a podcast-name
    search instead. (e) Typing on GLOBAL/RECENT sets `episode_filter`, which
