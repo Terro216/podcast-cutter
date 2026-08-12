@@ -319,13 +319,30 @@ class Indexer:
         # heavy here.
         vectors = None
         if self.embedder is not None and result.windows:
-            if on_progress is not None:
-                with contextlib.suppress(Exception):
-                    await on_progress(Progress(stage="index"))
-            vectors = await asyncio.to_thread(
-                self.embedder.encode_passages,
-                [window.text for window in result.windows],
-            )
+            # The same shape as the transcribe bar: the worker thread bumps a
+            # counter, a ticker reads it. Seconds for a normal episode, but a
+            # six-hour one embeds ~1400 windows, and a stage with no bar
+            # reads as a hang precisely when it is longest.
+            embedded = {"count": 0}
+            window_total = float(len(result.windows))
+
+            async def index_tick() -> None:
+                while True:
+                    await asyncio.sleep(PROGRESS_TICK)
+                    await say("index", done=embedded["count"], total=window_total)
+
+            await say("index", done=0.0, total=window_total)
+            index_ticker = asyncio.create_task(index_tick())
+            try:
+                vectors = await asyncio.to_thread(
+                    self.embedder.encode_passages,
+                    [window.text for window in result.windows],
+                    lambda count: embedded.__setitem__("count", count),
+                )
+            finally:
+                index_ticker.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await index_ticker
 
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(

@@ -104,7 +104,8 @@ _LISTENING_STAGES = {
 #: the impression this exists to remove.
 _WAITING_NOTES = (
     "This happens once per episode — every later search on it is instant.",
-    "The whole episode is being transcribed, not just the part you asked about.",
+    "The whole episode gets listened to in one go, so any future question "
+    "about it is already paid for.",
     "Timestamps come from the words themselves, so a clip opens where the "
     "phrase actually starts.",
     "Silence and music are skipped, which is why the bar sometimes jumps.",
@@ -228,7 +229,14 @@ def _listening_text(stage, started: float, estimate: int) -> str:
     fraction = stage.fraction
     if fraction is not None:
         lines.append("")
-        lines.append(progress_bar(int(stage.done), int(stage.total)))
+        # Each stage counts a different thing: bytes down, seconds of audio
+        # heard, windows embedded. The bar has to say which, or forty minutes
+        # of episode reads as «2.4 KB».
+        label = {
+            "transcribe": format_duration,
+            "index": lambda count: str(int(count)),
+        }.get(stage.stage, human_bytes)
+        lines.append(progress_bar(int(stage.done), int(stage.total), label=label))
 
     if stage.stage == "transcribe":
         elapsed = time.monotonic() - started

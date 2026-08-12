@@ -4,9 +4,22 @@ from podcast_cutter.text import (
     button_label,
     format_duration,
     one_line,
+    progress_bar,
     safe_filename,
     truncate,
 )
+
+
+class TestProgressBar:
+    def test_counts_what_it_is_told_to(self):
+        """The bug this pins: transcription fed seconds of audio into a bar
+        that only knew bytes, and forty minutes rendered as «2.4 KB»."""
+        bar = progress_bar(1500, 3600, label=format_duration)
+        assert "25:00" in bar and "1:00:00" in bar
+        assert "KB" not in bar
+
+    def test_bytes_stay_the_default(self):
+        assert "KB" in progress_bar(1500, 3600)
 
 
 class TestOneLine:

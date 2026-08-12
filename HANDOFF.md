@@ -536,8 +536,9 @@ difference on the decoder rather than on the feed.
    `‹ Back` restores a prompt screen without restoring `awaiting`, so
    typing into a restored "send a phrase" prompt runs a podcast-name
    search instead. (e) Typing on GLOBAL/RECENT sets `episode_filter`, which
-   those screens ignore. (f) The transcription progress bar renders seconds
-   through `human_bytes` («1.4 KB / 3.5 KB»). (g) `MAX_CUT_SECONDS` below 60
+   those screens ignore. (f) ~~the progress bar rendering seconds as
+   kilobytes~~ — fixed; the bar now takes a unit renderer, and the
+   embedding stage got a real bar of its own. (g) `MAX_CUT_SECONDS` below 60
    passes validation but the default clip is a fixed 60. (h)
    `sweep_work_dir` removes only `cut-*`, so a crash mid-transcription
    leaks an `asr-<id>` directory with a full episode in it.

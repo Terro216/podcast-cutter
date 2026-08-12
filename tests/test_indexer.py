@@ -330,7 +330,10 @@ class FakeEmbedder:
     def __init__(self, queries: dict[str, dict[str, float]]):
         self.queries = queries
 
-    def encode_passages(self, texts):
+    def encode_passages(self, texts, on_progress=None):
+        if on_progress is not None:
+            on_progress(len(texts))
+
         def tag(text):
             for keyword, name in self.tags.items():
                 if keyword in text:

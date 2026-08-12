@@ -107,12 +107,24 @@ class Embedder:
                 rows.append(pooled / (np.linalg.norm(pooled) or 1.0))
         return np.array(rows, dtype=np.float32)
 
-    def encode_passages(self, texts: list[str]) -> list[bytes]:
-        """Window vectors as raw bytes, ready for a BLOB column."""
+    def encode_passages(self, texts: list[str], on_progress=None) -> list[bytes]:
+        """Window vectors as raw bytes, ready for a BLOB column.
+
+        ``on_progress`` is called with the count of texts embedded so far,
+        from whatever thread is doing the work — the same contract the
+        recogniser's ``on_segment`` keeps, and for the same reason: a stage
+        with no bar looks like a hang the moment the episode is long.
+        """
         if not texts:
             return []
-        vectors = self._vectors([_PASSAGE_PREFIX + text for text in texts])
-        return [vector.tobytes() for vector in vectors]
+        prefixed = [_PASSAGE_PREFIX + text for text in texts]
+        blobs: list[bytes] = []
+        for offset in range(0, len(prefixed), _BATCH):
+            batch = self._vectors(prefixed[offset : offset + _BATCH])
+            blobs.extend(vector.tobytes() for vector in batch)
+            if on_progress is not None:
+                on_progress(len(blobs))
+        return blobs
 
     def rank(self, query: str, blobs: list[bytes]) -> list[tuple[int, float]]:
         """Indices into ``blobs`` by similarity to the query, best first.

@@ -8,6 +8,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from collections.abc import Callable
 
 #: Characters that are illegal or troublesome in filenames on common platforms.
 _UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
@@ -88,17 +89,28 @@ def human_bytes(count: float) -> str:
     return f"{count:.1f} GB"
 
 
-def progress_bar(done: int, total: int | None, width: int = 10) -> str:
-    """A textual progress bar, degrading gracefully when the size is unknown."""
+def progress_bar(
+    done: int,
+    total: int | None,
+    width: int = 10,
+    label: Callable[[int], str] = human_bytes,
+) -> str:
+    """A textual progress bar, degrading gracefully when the size is unknown.
+
+    ``label`` renders the quantities, because the bar outlived its first
+    caller: downloads count bytes, transcription counts seconds of audio, and
+    a bar that renders forty minutes as «2.4 KB» reads as a bug, not as
+    progress.
+    """
     if not total or total <= 0:
-        return f"{human_bytes(done)} so far"
+        return f"{label(done)} so far"
 
     fraction = min(1.0, max(0.0, done / total))
     filled = round(fraction * width)
     bar = "▰" * filled + "▱" * (width - filled)
     return (
         f"{bar}  {fraction * 100:.0f}%"
-        f"  ·  {human_bytes(done)} / {human_bytes(total)}"
+        f"  ·  {label(done)} / {label(total)}"
     )
 
 
