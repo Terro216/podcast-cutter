@@ -25,6 +25,7 @@ episodes:
     transcripts:
       reference: zapusk-neuro.reference.json.gz
       asr: zapusk-neuro.asr.json.gz
+      small: zapusk-neuro.small.json.gz
 
   obrecheny-startup:
     title: Вот уволюсь и сделаю свой стартап — вся правда про мечту айтишников
@@ -39,6 +40,7 @@ episodes:
     transcripts:
       reference: obrecheny-startup.reference.json.gz
       asr: obrecheny-startup.asr.json.gz
+      small: obrecheny-startup.small.json.gz
 
   lora-spies:
     title: Шпионы. В гостях — Маша Богданова
@@ -52,6 +54,7 @@ episodes:
     transcripts:
       reference: lora-spies.reference.json.gz
       asr: lora-spies.asr.json.gz
+      small: lora-spies.small.json.gz
 
   zavarili-rituals:
     title: Магические ритуалы, полицейские мотоциклы и квартира, которая только в воображении
@@ -67,6 +70,7 @@ episodes:
     transcripts:
       reference: zavarili-rituals.reference.json.gz
       asr: zavarili-rituals.asr.json.gz
+      small: zavarili-rituals.small.json.gz
 
 # How the reference timestamps were established, recorded here because a metric
 # whose ground truth is undocumented is a number nobody can argue with.

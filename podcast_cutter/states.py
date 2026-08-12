@@ -76,6 +76,12 @@ class Session:
     history: list[Nav] = field(default_factory=list)
     awaiting: Awaiting = Awaiting.NOTHING
     last_active: float = field(default_factory=time.time)
+    #: True on the first use after an expired session was thrown away. The
+    #: user's next message may have been typed against a screen that no
+    #: longer exists — «winter or tree» meant for a phrase prompt becomes a
+    #: baffling podcast search — so the router gets one chance to say what
+    #: happened before quietly carrying on.
+    was_reset: bool = False
 
     # -- search ------------------------------------------------------------
     query: str = ""

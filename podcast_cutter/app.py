@@ -45,6 +45,7 @@ BOT_COMMANDS = [
     ("surprise", "A random episode"),
     ("recent", "Episodes you looked at"),
     ("cancel", "Back to the main menu"),
+    ("reset", "Start over if something looks stuck"),
     ("help", "How this works"),
 ]
 
@@ -216,7 +217,9 @@ def register_handlers(application: Application, bot: PodcastCutterBot) -> None:
     # /start carries deep-link payloads, so it must see its arguments.
     application.add_handler(CommandHandler("start", bot.cmd_start))
     application.add_handler(CommandHandler("help", bot.cmd_help))
-    application.add_handler(CommandHandler("cancel", bot.cmd_cancel))
+    # /reset is the same full reset under the name people actually reach for
+    # when a screen looks stuck; /cancel reads as "abort this one thing".
+    application.add_handler(CommandHandler(["cancel", "reset"], bot.cmd_cancel))
 
     application.add_handler(
         CommandHandler(["search", "cut_podcast"], bot.command(bot.act_ask_podcast))

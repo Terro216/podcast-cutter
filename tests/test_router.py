@@ -219,6 +219,24 @@ class TestNavigationCallbacks:
         assert "search_feeds:history podcasts:1" in client.calls[-1:]
         assert session_of(context).current.page == 1
 
+    async def test_an_expired_session_says_so_before_carrying_on(
+        self, bot, context, client
+    ):
+        """The field report this pins: a user answered the «what was said?»
+        prompt after their session had expired, and «winter or tree» silently
+        became a podcast search. The search still runs — the text is all we
+        have — but the user is told the context is gone first."""
+        session = session_of(context)
+        session.awaiting = Awaiting.PHRASE
+        session.last_active = time.time() - 10_000
+
+        update = await text(bot, context, "winter or tree")
+
+        notices = [reply for reply, _ in update.effective_message.replies]
+        assert any("started fresh" in notice for notice in notices)
+        assert "search_feeds:winter or tree:1" in client.calls
+        assert not session_of(context).was_reset
+
     async def test_the_page_counter_does_nothing(self, bot, context):
         update = await tap(bot, context, kb.NAV_NOOP)
         assert update.callback_query.answered

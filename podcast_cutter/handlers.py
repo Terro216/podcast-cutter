@@ -400,6 +400,7 @@ class PodcastCutterBot:
         session = get_session(context.user_data)
         if session.is_stale(self.settings.conversation_timeout):
             session = reset_session(context.user_data)
+            session.was_reset = True
         session.touch()
 
         # The recent list is the one thing worth surviving a restart, so it
@@ -874,6 +875,19 @@ class PodcastCutterBot:
             )
             return
 
+        if session.was_reset:
+            session.was_reset = False
+            if text not in kb.MENU_BUTTONS:
+                # Their message may answer a prompt that expired with the old
+                # session; whatever happens next, they deserve to know the
+                # context is gone before it does.
+                with contextlib.suppress(TelegramError):
+                    await update.effective_message.reply_text(
+                        "⏱ It had been a while, so I started fresh — "
+                        "if this was meant for an earlier screen, "
+                        "just navigate there again."
+                    )
+
         try:
             if text in kb.MENU_BUTTONS:
                 await self._handle_menu_button(update, session, text)
@@ -956,6 +970,9 @@ class PodcastCutterBot:
             return
 
         session = await self.session_for(update, context)
+        # A button press lands on a rendered screen, so no notice is owed —
+        # but the flag must not survive to decorate some unrelated later text.
+        session.was_reset = False
         prefix, value = kb.parse_callback(data)
 
         try:
