@@ -248,7 +248,11 @@ async def main(argv: list[str]) -> int:
             cpu_threads=args.threads,
         )
 
-    todo: list[tuple[EpisodeRef, Path]] = []
+    # The basket's language rides along to the recogniser. Whisper detects it
+    # and would say the same thing, but SpeechKit without a languageRestriction
+    # quietly assumes Russian — the first English pass came back as scattered
+    # Cyrillic phonetics («хит холдайд стори»), four fixtures of nothing.
+    todo: list[tuple[EpisodeRef, str, Path]] = []
     for path in args.baskets:
         basket = load_basket(path)
         for episode in basket.episodes.values():
@@ -256,17 +260,17 @@ async def main(argv: list[str]) -> int:
             if name is None:
                 print(f"!! {episode.slug}: no {args.variant!r} fixture named")
                 continue
-            todo.append((episode, args.fixtures / name))
+            todo.append((episode, basket.language, args.fixtures / name))
 
     # Said up front, because the difference between "twenty minutes" and "all
     # night" is the whole reason the RTF above was measured rather than guessed.
-    hours = sum(episode.duration_s or 0 for episode, _ in todo) / 3600
+    hours = sum(episode.duration_s or 0 for episode, _, _ in todo) / 3600
     print(
         f"{len(todo)} episodes, {hours:.1f} h of audio, "
         f"variant={args.variant} model={args.model}\n"
     )
 
-    for index, (episode, target) in enumerate(todo, start=1):
+    for index, (episode, basket_language, target) in enumerate(todo, start=1):
         head = f"[{index}/{len(todo)}] {episode.slug}"
         if target.exists():
             print(f"{head}: already done, skipping")
@@ -294,7 +298,9 @@ async def main(argv: list[str]) -> int:
 
         started = time.monotonic()
         utterances, language = await recognizer.transcribe(
-            decoded, on_segment=_reporter(started, episode.duration_s)
+            decoded,
+            language=basket_language or None,
+            on_segment=_reporter(started, episode.duration_s),
         )
         elapsed = time.monotonic() - started
         # Leave the progress line behind rather than on top of the result.
