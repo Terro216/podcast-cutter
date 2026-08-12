@@ -19,6 +19,9 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
+| `c02c7d2` | the answer key: 104 queries, first baselines, the base-model price measured |
+| `603dae4` | the regression guard could not fire below one query's wobble; fixed pre-baseline |
+| `116197d` | the eight reference transcripts |
 | `44701e7` | evaluation baskets: how often the search is wrong, and which way |
 | `a866f4b` | bench what a Whisper model costs on this host |
 | `299b2e2` | place the clip on the spoken word; quote the match back |
