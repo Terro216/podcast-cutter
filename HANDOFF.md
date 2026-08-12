@@ -346,11 +346,48 @@ en/reference       63.9%  66.7%   1.8s   0.0%
 en/reference+e5    69.4%  72.2%   2.6s   0.0%
 en/asr             52.8%  55.6%   1.9s   0.0%
 en/asr+e5          61.1%  69.4%   3.5s   0.0%
+en/small           55.6%  58.3%   1.5s   0.0%
+en/small+e5        61.1%  66.7%   1.9s   0.0%
+en/speechkit       55.6%  58.3%   2.8s   0.0%
+en/speechkit+e5    63.9%  66.7%   3.6s   6.2%   <- see below
 ru/reference       61.1%  66.7%   1.0s   0.0%
 ru/reference+e5    66.7%  69.4%   1.0s   0.0%
 ru/asr             36.1%  36.1%   1.6s   0.0%
 ru/asr+e5          44.4%  44.4%   1.4s   0.0%
+ru/small           50.0%  50.0%   1.1s   0.0%
+ru/small+e5        52.8%  52.8%   1.1s   0.0%
+ru/speechkit       44.4%  52.8%   1.1s   0.0%
+ru/speechkit+e5    44.4%  55.6%   1.1s   0.0%
 ```
+
+**The comparison table is complete** (2026-08-12): all four variants of all
+eight episodes are committed and CI guards every row above. What it says:
+
+* **Russian is where recognisers differ.** small returns half of what `base`
+  loses against the reference (36.1 → 50.0 of 66.7), SpeechKit one query more
+  (52.8) — and they miss *different* quotes (small garbles «пересказывание в
+  Википедии», SpeechKit «опростоволоситься» and, surprisingly, «штраф 100
+  миллионов»), so neither dominates. English does not care: all three land on
+  58.3 lexical, and `base`+e5 is even a query ahead of both.
+* **SpeechKit's real wins are wall-clock and CPU, not quality**: RTF 0.05
+  measured over 6.2 h (a 50-min episode in ~3 min — faster than `base`'s 4),
+  zero local cores, ₽30.30/episode standard rate. small costs RTF ~0.18 of
+  local CPU and nothing else.
+* **The first false hit ever measured**: «emotional intelligence» (tw-n2)
+  against en/speechkit+e5 clears the dense-refusal conjunction — sim 0.845
+  vs the 0.84 floor, margin 0.065 vs 0.05 — on a garbled window about people
+  crying. Both tightenings were *measured before being declined*:
+  MIN_SIMILARITY 0.85 costs 1–3 hits in every EN hybrid row (the e5 gains
+  live in the 0.84–0.85 band); MIN_MARGIN 0.07 costs ~1 hit in every hybrid
+  row of *both* languages. The pair sits on the Pareto frontier, so the
+  honest 6.2% is committed as the en/speechkit+e5 baseline instead, with the
+  note in `en.yaml`. Recalibrate before ever shipping speechkit for English.
+* **No user-facing «быстро/поточнее» switch**: the two candidates are one
+  query apart on RU and identical on EN — a button between them would be
+  choice without difference. The supported move, when wanted, is
+  `ASR_BACKEND=speechkit` (or `auto`) for RU quality at better-than-base
+  latency and zero CPU — blocked on the §4 spend ceiling (ROADMAP) and a
+  deliberate deploy decision, not on any further measurement.
 
 The `+e5` rows are hybrid retrieval (`ROADMAP.md` §16a): lexical + dense over
 `multilingual-e5-small`, fused by reciprocal rank, with a refusal floor

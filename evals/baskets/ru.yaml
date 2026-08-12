@@ -430,3 +430,23 @@ baseline:
     hit@3: 0.444
     false_hit_rate: 0.0
     median_error_s: 1.4
+  small:
+    hit@1: 0.500
+    hit@3: 0.500
+    false_hit_rate: 0.0
+    median_error_s: 1.1
+  small+e5:
+    hit@1: 0.528
+    hit@3: 0.528
+    false_hit_rate: 0.0
+    median_error_s: 1.1
+  speechkit:
+    hit@1: 0.444
+    hit@3: 0.528
+    false_hit_rate: 0.0
+    median_error_s: 1.1
+  speechkit+e5:
+    hit@1: 0.444
+    hit@3: 0.556
+    false_hit_rate: 0.0
+    median_error_s: 1.1

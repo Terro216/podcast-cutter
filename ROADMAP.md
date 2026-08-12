@@ -316,7 +316,10 @@ internet fails more often than anyone plans for.
    answer key written and baselines committed; the by-ear pass remains. §16.
 3. ~~Embeddings on top, negatives.~~ **Done** — hybrid retrieval with a
    measured refusal floor, §16a. The LLM judge remains open.
-4. SpeechKit as the second backend, and the comparison table.
+4. ~~SpeechKit as the second backend, and the comparison table.~~ **Done** —
+   backend in `asr.py`, all four variants fixtured and guarded by CI, table
+   and verdict in `HANDOFF.md` §3b. Remaining from §4: the spend ceiling,
+   without which the cloud path stays an operator's manual choice.
 5. Queues, limits, source ceiling, backups.
 6. Video notes with presets and subtitles.
 7. CI, public repo, `src_` links seeded.

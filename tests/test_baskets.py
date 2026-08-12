@@ -33,7 +33,10 @@ from podcast_cutter.evals import (
 
 EVALS = Path(__file__).resolve().parent.parent / "evals"
 BASKETS = sorted(EVALS.glob("baskets/*.yaml"))
-VARIANTS = ("reference", "asr")
+#: reference and asr are the pair the two-run design stands on; small and
+#: speechkit are the candidate recognisers, guarded so the comparison table
+#: stays a fact rather than a one-off measurement.
+VARIANTS = ("reference", "asr", "small", "speechkit")
 #: The retrieval axis: plain lexical, and lexical+dense when a converted
 #: embedding model is available. CI without the model still guards the
 #: lexical baselines; the hybrid rows run wherever EMBED_MODEL_DIR points at
@@ -181,8 +184,9 @@ async def test_the_reference_is_at_least_as_good_as_the_shipped_model(
         )
         scores[variant] = summarize(answers, variant).hit_at_k
 
-    assert scores["reference"] >= scores["asr"] - SLACK[f"hit@{ANSWERS}"], (
-        f"the reference transcript scores {scores['reference']:.3f} against "
-        f"the shipped model's {scores['asr']:.3f} — suspect the fixtures, "
-        f"not the retriever"
-    )
+    for variant in VARIANTS:
+        assert scores["reference"] >= scores[variant] - SLACK[f"hit@{ANSWERS}"], (
+            f"the reference transcript scores {scores['reference']:.3f} "
+            f"against {variant}'s {scores[variant]:.3f} — suspect the "
+            f"fixtures, not the retriever"
+        )
