@@ -67,9 +67,321 @@ episodes:
 
 annotation:
   reference_model: large-v3
-  method: spot-verified
+  # Same status as ru.yaml: drafted from the reference, text-verified against
+  # it, not yet listened to. See the note there.
+  method: text-verified
   fully_corrected: []
 
-queries: []
+queries:
+  # --- invisible-biomimicry -----------------------------------------------
+  - id: bio-q1
+    episode: invisible-biomimicry
+    kind: quote
+    query: "birdwatcher"
+    at: ["0:38"]
+    note: "Said once, in the opening. Absent from the asr variant — base lost the word, the miss is priced."
+  - id: bio-q2
+    episode: invisible-biomimicry
+    kind: quote
+    query: "aerodynamic ideal"
+    at: ["14:34"]
+    note: "The Mercedes verdict, in scare quotes on air. base kept both words (14:40)."
+  - id: bio-q3
+    episode: invisible-biomimicry
+    kind: quote
+    query: "tunneling shield"
+    at: ["8:42", "10:03"]
+    note: "Brunel's invention; the 10:03 region repeats it as «tunnel shield … tunneling technology», which shares a window. Intact in asr."
+  - id: bio-q4
+    episode: invisible-biomimicry
+    kind: quote
+    query: "entomologist"
+    at: ["27:46"]
+    note: "base wrote «endomologist» — the token does not match, an asr miss by one letter. English gets no fuzziness at all."
+  - id: bio-m1
+    episode: invisible-biomimicry
+    kind: meaning
+    query: "how a bird helped make trains quieter"
+    at: ["0:30", "0:53", "1:10"]
+    note: "The kingfisher/Shinkansen opening. Phrased the way a listener would retell it, not the way it was said."
+  - id: bio-m2
+    episode: invisible-biomimicry
+    kind: meaning
+    query: "where the fish car gets debunked"
+    at: ["16:52", "17:18"]
+    note: "The boxfish takedown — «painted a very different picture», «definitely not aerodynamic». Neither «debunked» nor «fraud» is spoken."
+  - id: bio-m3
+    episode: invisible-biomimicry
+    kind: meaning
+    query: "the expert who never saw the real thing"
+    at: ["27:31", "27:55", "28:19"]
+    note: "Dhruv Bhate, a honeycomb-structures career, «had never even seen an actual honeycomb»."
+  - id: bio-t1
+    episode: invisible-biomimicry
+    kind: mention
+    query: "tunnel"
+    at: ["0:15", "4:21", "4:37", "4:58", "5:54", "7:17", "7:42", "8:42", "9:09", "9:42", "10:17", "19:04", "20:41"]
+    note: "Ground truth counts tunnel, tunnels AND tunneling; the query token matches only the singular. The gap in `distinct` is the missing English stemmer, measured."
+  - id: bio-t2
+    episode: invisible-biomimicry
+    kind: mention
+    query: "biomimicry"
+    at: ["1:23", "2:07", "2:28", "2:50", "10:40", "11:22", "11:57", "12:50", "15:42", "16:32", "19:04", "19:37", "20:29", "21:10", "26:49", "27:46", "29:53", "30:34"]
+    note: "The episode's own subject, 23 spoken occurrences. base writes «biomemically» almost every time — expect the asr run to collapse here; that collapse is the entity-mangling price §16 wanted a number for."
+  - id: bio-n1
+    episode: invisible-biomimicry
+    kind: negative
+    query: "emotional intelligence"
+    note: "Hidden Brain's territory (53×/37× there); neither word occurs here — «intelligent design» at 23:06 is a different token."
+  - id: bio-n2
+    episode: invisible-biomimicry
+    kind: negative
+    query: "google"
+    note: "Absent in both variants; 25× in twist-duct-tape."
+  - id: bio-n3
+    episode: invisible-biomimicry
+    kind: negative
+    query: "investors"
+    note: "Plausible for a startup-adjacent story (they «raised millions»), yet the word itself is never said."
+  - id: bio-n4
+    episode: invisible-biomimicry
+    kind: negative
+    query: "brain"
+    note: "Plausible for a biology-flavoured show; absent in both variants."
+  # --- hidden-brain-feelings ----------------------------------------------
+  - id: hb-q1
+    episode: hidden-brain-feelings
+    kind: quote
+    query: "differentiator"
+    at: ["30:12"]
+    note: "Said once; intact in asr (30:09) — a studio-audio quote both variants should find."
+  - id: hb-q2
+    episode: hidden-brain-feelings
+    kind: quote
+    query: "kindergarten through high school"
+    at: ["34:06"]
+    note: "The RULER rollout line; base kept it (33:57)."
+  - id: hb-q3
+    episode: hidden-brain-feelings
+    kind: quote
+    query: "correlational studies"
+    at: ["24:02"]
+    note: "Methods talk; intact in both variants."
+  - id: hb-q4
+    episode: hidden-brain-feelings
+    kind: quote
+    query: "introductory psychology"
+    at: ["12:46"]
+    note: "base wrote «a introductory psychology» — the tokens survive, the hit should too."
+  - id: hb-m1
+    episode: hidden-brain-feelings
+    kind: meaning
+    query: "the handshake that showed how to read faces"
+    at: ["3:54", "5:07", "6:46"]
+    note: "The Clinton story: he read anxiety in Salovey's face and defused it. Told as «shake hands», «look of nervousness» — no token overlap with the query."
+  - id: hb-m2
+    episode: hidden-brain-feelings
+    kind: meaning
+    query: "where they argue about renaming a college building"
+    at: ["9:56", "11:36", "14:16"]
+    note: "The Calhoun controversy. «Renaming» is never said — the debate is phrased as «continue to have a college named for…»."
+  - id: hb-m3
+    episode: hidden-brain-feelings
+    kind: meaning
+    query: "can empathy be trained"
+    at: ["33:38", "34:18", "44:13"]
+    note: "The RULER segment: «these are skills», «teach kids». «Empathy» itself appears only back at 16:18, in the Calhoun story."
+  - id: hb-t1
+    episode: hidden-brain-feelings
+    kind: mention
+    query: "calhoun"
+    at: ["7:51", "9:10", "9:56", "10:17", "11:08", "12:58", "13:25", "15:07"]
+    note: "10:17 is spoken «Calhoun» but even large-v3 wrote «Cohen» — ground truth keeps the occurrence, no lexical system will find it."
+  - id: hb-t2
+    episode: hidden-brain-feelings
+    kind: mention
+    query: "clinton"
+    at: ["3:15", "3:36", "4:31", "4:45", "5:07", "6:19", "7:44"]
+    note: "A name Whisper knows well; the interesting number is `distinct` — whether three answers are three moments of the story."
+  - id: hb-n1
+    episode: hidden-brain-feelings
+    kind: negative
+    query: "startup"
+    note: "Absent in both variants; the TWiST half of the basket says it constantly."
+  - id: hb-n2
+    episode: hidden-brain-feelings
+    kind: negative
+    query: "tunnel"
+    note: "16× in invisible-biomimicry, zero here."
+  - id: hb-n3
+    episode: hidden-brain-feelings
+    kind: negative
+    query: "therapy"
+    note: "The most plausible ask for a psychology show — and never said in 48 minutes."
+  - id: hb-n4
+    episode: hidden-brain-feelings
+    kind: negative
+    query: "billion"
+    note: "An investment bank and the Great Recession are discussed, «billion» never appears."
+  # --- twist-duct-tape ----------------------------------------------------
+  - id: tw-q1
+    episode: twist-duct-tape
+    kind: quote
+    query: "hypochondriac"
+    at: ["55:13"]
+    note: "«You're hysterical, you're paranoid, you're a hypochondriac». Absent from asr — base lost it in crosstalk, the miss is priced."
+  - id: tw-q2
+    episode: twist-duct-tape
+    kind: quote
+    query: "telecommuting"
+    at: ["56:31"]
+    note: "Absent from asr as well — two of four quotes on this remote-recorded episode die at the recogniser, which is the condition split working."
+  - id: tw-q3
+    episode: twist-duct-tape
+    kind: quote
+    query: "commoditized"
+    at: ["4:38"]
+    note: "Intact in asr (4:39)."
+  - id: tw-q4
+    episode: twist-duct-tape
+    kind: quote
+    query: "extensibility"
+    at: ["24:07"]
+    note: "Intact in asr (24:06)."
+  - id: tw-m1
+    episode: twist-duct-tape
+    kind: meaning
+    query: "where they reminisce about a doomed internet directory"
+    at: ["42:28", "45:11", "45:46"]
+    note: "Mahalo — told as «ill-fated search engine», «my failed startup»; none of the query tokens are spoken."
+  - id: tw-m2
+    episode: twist-duct-tape
+    kind: meaning
+    query: "why nobody wants the boss's favorite software"
+    at: ["34:11"]
+    note: "Said as «whenever a CEO tells me to use a tool, I just presume it's dumb»."
+  - id: tw-m3
+    episode: twist-duct-tape
+    kind: meaning
+    query: "how the pandemic emptied offices"
+    at: ["55:13", "56:31"]
+    note: "Told as «COVID accelerated … telecommuting»; «pandemic» is only ever said as the plural «pandemics», back at 26:38 — a different token to an English index."
+  - id: tw-t1
+    episode: twist-duct-tape
+    kind: mention
+    query: "figma"
+    at: ["26:44", "27:16", "28:42", "30:33", "31:50", "32:31", "37:19", "38:12", "40:24", "42:03", "57:54"]
+    note: "A brand Whisper knows: 20 spoken occurrences, 17 survive in asr. Contrast with tw-t2's era-specific name."
+  - id: tw-t2
+    episode: twist-duct-tape
+    kind: mention
+    query: "mahalo"
+    at: ["42:28", "43:10", "44:37", "45:11", "45:39", "46:23", "47:01", "48:03", "49:21"]
+    note: "15 spoken, 10 survive in asr — the dead-startup name costs a third of its moments."
+  - id: tw-n1
+    episode: twist-duct-tape
+    kind: negative
+    query: "crypto"
+    note: "The single most plausible ask for a startup show — never said in this episode, either variant."
+  - id: tw-n2
+    episode: twist-duct-tape
+    kind: negative
+    query: "emotional intelligence"
+    note: "Hidden Brain's 90 combined occurrences, zero here."
+  - id: tw-n3
+    episode: twist-duct-tape
+    kind: negative
+    query: "mercedes"
+    note: "The biomimicry episode's brand; absent here."
+  - id: tw-n4
+    episode: twist-duct-tape
+    kind: negative
+    query: "brain"
+    note: "Absent in both variants despite an hour about AI."
+  # --- twista-investor ----------------------------------------------------
+  - id: ta-q1
+    episode: twista-investor
+    kind: quote
+    query: "electrochemistry"
+    at: ["19:33"]
+    note: "The Sienta pitch. Absent from asr — an Australian-accent casualty, priced."
+  - id: ta-q2
+    episode: twista-investor
+    kind: quote
+    query: "indigestion"
+    at: ["9:42"]
+    note: "«This burp when things weren't getting funded… indigestion». Intact in asr (9:47)."
+  - id: ta-q3
+    episode: twista-investor
+    kind: quote
+    query: "overexposed"
+    at: ["9:03"]
+    note: "Intact in asr (9:08)."
+  - id: ta-q4
+    episode: twista-investor
+    kind: quote
+    query: "rationalization of valuations"
+    at: ["22:22"]
+    note: "Intact in asr, word for word (22:21). «Valuations» alone also lives at 4:41 — the AND is what pins this to one moment."
+  - id: ta-m1
+    episode: twista-investor
+    kind: meaning
+    query: "where a guest praises an exciting local manufacturer"
+    at: ["18:57", "19:33"]
+    note: "Sienta — spoken as «deep tech investing in manufacturing»; «praise» and «manufacturer» are not said."
+  - id: ta-m2
+    episode: twista-investor
+    kind: meaning
+    query: "how the age of free money ended"
+    at: ["2:59", "3:20"]
+    note: "Told as «the end of the Zerp era», «a decade of cheap capital». «Free money» does occur later (10:18, 16:41) as asides — the discussion itself is here."
+  - id: ta-m3
+    episode: twista-investor
+    kind: meaning
+    query: "where machine-made busywork gets a name"
+    at: ["21:06", "21:35"]
+    note: "«Work slop, a warning» — the coining moment; none of the query tokens are spoken."
+  - id: ta-t1
+    episode: twista-investor
+    kind: mention
+    query: "cheryl"
+    at: ["1:39", "2:31", "13:22", "16:25", "24:31", "25:56", "26:54", "27:31"]
+    note: "Guest name, said across the whole episode; survives the accent in asr (11 of 11 lines)."
+  - id: ta-t2
+    episode: twista-investor
+    kind: mention
+    query: "andrea"
+    at: ["1:51", "2:59", "22:17", "25:56", "26:59", "27:31"]
+    note: "Second guest; all asr occurrences intact."
+  - id: ta-n1
+    episode: twista-investor
+    kind: negative
+    query: "unicorn"
+    note: "The most VC-flavoured word there is — never said; absent in both variants."
+  - id: ta-n2
+    episode: twista-investor
+    kind: negative
+    query: "bitcoin"
+    note: "Plausible for an investor special; absent in both variants."
+  - id: ta-n3
+    episode: twista-investor
+    kind: negative
+    query: "jason"
+    note: "The parent show's host — a listener could easily search for him here; never said."
+  - id: ta-n4
+    episode: twista-investor
+    kind: negative
+    query: "google"
+    note: "25× in twist-duct-tape, zero here in both variants."
 
-baseline: {}
+baseline:
+  reference:
+    hit@1: 0.639
+    hit@3: 0.667
+    false_hit_rate: 0.0
+    median_error_s: 1.8
+  asr:
+    hit@1: 0.528
+    hit@3: 0.556
+    false_hit_rate: 0.0
+    median_error_s: 1.9

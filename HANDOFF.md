@@ -29,9 +29,9 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**733 tests pass (8 skipped), ruff clean.** Verify with the command in §6. The
-skips are the basket runs: they wait on an answer key and on the reference
-fixtures, and say so rather than passing vacuously — see §3b.
+**742 tests pass, nothing skipped, ruff clean.** Verify with the command in
+§6. The basket runs no longer skip: the answer key exists and the baselines
+are committed — see §3b.
 
 Two things about the deployment that were not true a week ago:
 
@@ -325,10 +325,36 @@ bot; a missing recognition library does the same by itself, since
 
 ---
 
-## 3b. Measuring the search — apparatus built, answer key pending
+## 3b. Measuring the search — running, baselines committed
 
 `ROADMAP.md` §16 has the design and the measurements. This is the operating
 picture.
+
+**The answer key is written**: 36 positive + 16 negative per language, all
+four classes, drafted from the reference transcripts and text-verified against
+them. What CI now holds every push against:
+
+```
+run             hit@1  hit@3    err  false
+en/reference    63.9%  66.7%   1.8s   0.0%
+en/asr          52.8%  55.6%   1.9s   0.0%
+ru/reference    61.1%  66.7%   1.0s   0.0%
+ru/asr          36.1%  36.1%   1.6s   0.0%
+```
+
+What the numbers already say: `base` costs Russian **30 points of hit@3**
+(66.7 → 36.1) and English only 11 — the model, not the retriever, is the
+Russian bottleneck. The `meaning` class is 0% across the board, which is the
+embeddings ticket (§11 step 3) priced before it is built. Negatives are clean
+everywhere. One drafting lesson is recorded in `ru.yaml`: «данные» failed as a
+negative because its *lemma* is «данный» and every hour of speech contains «в
+данном случае» — a negative has to differ by lemma, not by surface form.
+
+**Still owed on the key itself:** the by-ear pass. Every timestamp was checked
+against the reference *text*, nobody has yet listened to ±30 s around each
+answer (`scripts/draft_queries.py --verify` prints the listening list), and
+`annotation.fully_corrected` is still empty. The basket yamls say
+`method: text-verified` until that happens.
 
 **Shape.** `podcast_cutter/evals.py` holds the query classes, the scoring and
 the runner; `evals/baskets/{ru,en}.yaml` hold the queries and the episodes;
@@ -437,15 +463,30 @@ difference on the decoder rather than on the feed.
 
 ## 5. Known gaps, roughly by value
 
-1. **The baskets have no answer key yet.** Everything else is done: the
-   apparatus is green, and all sixteen transcript fixtures are committed —
-   eight episodes × `base` and `large-v3`, 2.1 MB, every pair cross-checked to
-   come from one download. What is missing is the queries. They have to be
-   drafted from the reference transcripts with `scripts/draft_queries.py
-   --draft` and then spot-verified by ear with `--verify`; the test refuses a
-   basket under 30 positive and 10 negative per language, so it cannot be
-   half-done by accident. §3b has the operating picture; `ROADMAP.md` §16 has
-   the reasoning and the numbers.
+1. **The answer key has not been listened to.** It is written, text-verified
+   and green in CI (§3b), but the ±30 s by-ear pass and the two
+   fully-corrected episodes from §16's method have not happened. Until then a
+   reference timestamp is only as good as large-v3's text. `scripts/
+   draft_queries.py --verify` prints exactly what to listen to.
+1a. **A full review (2026-08-12) left documented defects in the search path,
+   deliberately unfixed until the baselines above could price them.** In value
+   order: (a) `cluster()` compares window *edges*, not moment positions, so
+   two genuinely distinct moments 40–75 s apart chain into one cluster and
+   the weaker one becomes unfindable — visible today as `ls-t1` ranking 3rd
+   and mention `distinct` undercounting; (b) `locate_phrase` places the clip
+   on the first occurrence of *any* query word, including «в»/"to", and also
+   searches quarantined utterances — a query with a common word can open up
+   to a window early; (c) an ASR timeout in `indexer._transcribe` releases
+   `LocalWhisper._lock` while the un-cancellable `to_thread` worker is still
+   decoding, so a retry runs two transcriptions on one `WhisperModel`; (d)
+   `NORMALIZER_VERSION` is written to the row but never compared at search
+   time, so bumping it (or losing pymorphy3 in one environment) silently
+   splits the lemma index and the lemma query into different languages; (e)
+   `Indexer.transcript_id`'s episode-id fast path never re-checks the audio
+   hash, which is the one place the dynamic-ad guarantee does not hold
+   end-to-end; (f) two episode ids serving identical bytes can race into an
+   `IntegrityError` after a full transcription; temp files leak on the
+   timeout path. Fix (a) and (b) first — the baskets will show both moving.
 2. **English morphology — the lemma column is inert, not inaccurate.** Checked
    rather than assumed: `lemmatize("proteins folding rapidly")` returns the
    string unchanged, and so do `investors`, `companies`, `studies`. pymorphy3's

@@ -312,9 +312,8 @@ internet fails more often than anyone plans for.
    duration ceiling.~~ **Done** — see §14.
 1. ~~Transcription on `base`, cache in SQLite, FTS5 — minimal working search.~~
    **Done and deployed** — §15.
-2. RU/EN baskets and the pytest runner. **Before** tuning. **In progress** —
-   the runner and both baskets' episodes are in; the queries wait on the
-   reference transcripts. §16.
+2. ~~RU/EN baskets and the pytest runner. **Before** tuning.~~ **Done** —
+   answer key written and baselines committed; the by-ear pass remains. §16.
 3. Embeddings on top, negatives, LLM judge.
 4. SpeechKit as the second backend, and the comparison table.
 5. Queues, limits, source ceiling, backups.
@@ -664,12 +663,29 @@ which of the several possible ways.
 
 ---
 
-## 16. In progress: the baskets
+## 16. Done: the baskets
 
-Step 2 of §11. The apparatus is built and green and **all sixteen transcript
-fixtures exist** — eight episodes × `base` and `large-v3`. What is missing is
-the answer key: the queries themselves, which have to be written *from* the
-reference transcripts and spot-verified by ear.
+Step 2 of §11. The apparatus is built, **all sixteen transcript fixtures
+exist** — eight episodes × `base` and `large-v3` — and the answer key is
+written: 36 positive + 16 negative per language, drafted from the reference
+transcripts and text-verified against them (the by-ear pass is still owed —
+the yamls say `method: text-verified` until it happens). The first committed
+baselines:
+
+```
+run             hit@1  hit@3    err  false
+en/reference    63.9%  66.7%   1.8s   0.0%
+en/asr          52.8%  55.6%   1.9s   0.0%
+ru/reference    61.1%  66.7%   1.0s   0.0%
+ru/asr          36.1%  36.1%   1.6s   0.0%
+```
+
+Three readings worth writing down. `base` costs Russian **thirty points of
+hit@3** and English eleven — so the Russian bottleneck is the recogniser, not
+the retriever, and a better model (or SpeechKit, §4) is worth more than any
+retrieval tuning for RU. `meaning` is 0% in all four runs — the embeddings
+step (§11.3) now starts from a number instead of a feeling. And the negatives
+are clean in every run, so the refusal behaviour survives both models.
 
 What the fixtures already say, before a single query is written:
 

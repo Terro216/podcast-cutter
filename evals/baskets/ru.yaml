@@ -84,17 +84,331 @@ episodes:
 # hand pass is for.
 annotation:
   reference_model: large-v3
-  method: spot-verified
+  # Queries were drafted from the reference transcript and every `at:` was
+  # verified against the transcript *text* (the quoted words are on that line;
+  # negatives grepped in both variants). The by-ear pass over ±30 s of audio
+  # has NOT happened yet — method changes to spot-verified when it has.
+  method: text-verified
   fully_corrected: []
 
 # The queries themselves land here once the fixtures exist: 30 positive across
 # quote / meaning / mention, and 10 negatives. Drafting them before there is a
 # transcript to draft them from would be inventing the answer key.
-queries: []
+queries:
+  # --- zapusk-neuro -------------------------------------------------------
+  - id: zn-q1
+    episode: zapusk-neuro
+    kind: quote
+    query: "антропоцентрическое определение языка"
+    at: ["27:27"]
+    note: "Редкая пара слов из спора о языке животных. base расслышал её верно."
+  - id: zn-q2
+    episode: zapusk-neuro
+    kind: quote
+    query: "глиняные конверты"
+    at: ["29:07"]
+    note: "Единственное упоминание; base пишет «конверты из соображения конфиденциальности» — оба слова целы."
+  - id: zn-q3
+    episode: zapusk-neuro
+    kind: quote
+    query: "неандертальцы вымерли"
+    at: ["6:22", "7:50"]
+    note: "«Это их главный плюс». 6:22 — окно, где «вымерших» и «неандертальца» сходятся через лемму (причастие нормализуется в глагол)."
+  - id: zn-q4
+    episode: zapusk-neuro
+    kind: quote
+    query: "воспроизводимость"
+    at: ["38:16"]
+    note: "Один раз за эпизод, в разговоре о рецензировании. base сохранил слово."
+  - id: zn-m1
+    episode: zapusk-neuro
+    kind: meaning
+    query: "где обсуждают нейроинтерфейсы"
+    at: ["19:03", "20:36", "22:48"]
+    note: "Слово «нейроинтерфейс» не звучит ни разу — говорят «массив электродов», «разъем в голове». Класс на будущие эмбеддинги."
+  - id: zn-m2
+    episode: zapusk-neuro
+    kind: meaning
+    query: "где спорят, нужно ли скрывать опасные научные результаты"
+    at: ["50:31", "50:58"]
+    note: "В тексте — «цензура в научных журналах», «Nature Science отказывается публиковать». Ни «скрывать», ни «результаты» не звучат."
+  - id: zn-m3
+    episode: zapusk-neuro
+    kind: meaning
+    query: "где рассказывают про эффект пустышки"
+    at: ["11:07", "12:08", "12:50"]
+    note: "Сказано только «плацебо»; ни «эффект», ни «пустышка» в эпизоде не звучат."
+  - id: zn-t1
+    episode: zapusk-neuro
+    kind: mention
+    query: "иголка в стоге сена"
+    at: ["1:47", "4:30", "11:43", "14:16", "17:36", "33:28", "39:55", "49:40"]
+    note: "Сквозная метафора выпуска. base: «и голки в 100 гисены» (1:48), «иголков стоги сена» (4:33), «стогистена» (11:43) — цена модели видна прямо здесь."
+  - id: zn-t2
+    episode: zapusk-neuro
+    kind: mention
+    query: "лекарство"
+    at: ["0:36", "1:53", "8:08", "10:42", "11:07", "12:29", "37:19", "46:55"]
+    note: "Лемма находит «лекарств», «лекарства», «лекарствам» — §15-я проверка лемматизации, теперь как метрика."
+  - id: zn-n1
+    episode: zapusk-neuro
+    kind: negative
+    query: "команда"
+    note: "Ни одной формы ни в reference, ни в asr; остальная корзинка говорит это 48 раз."
+  - id: zn-n2
+    episode: zapusk-neuro
+    kind: negative
+    query: "продукт"
+    note: "Правдоподобно для техношоу — и ни разу не сказано в выпуске про науку."
+  - id: zn-n3
+    episode: zapusk-neuro
+    kind: negative
+    query: "шпионаж"
+    note: "Тема соседнего эпизода корзинки (lora-spies); здесь отсутствует в обоих вариантах."
+  - id: zn-n4
+    episode: zapusk-neuro
+    kind: negative
+    query: "квантовая телепортация"
+    note: "Исторический негатив из §15 — первый ручной тест поиска на этом самом эпизоде; сохранён, чтобы не потерять преемственность."
+  # --- obrecheny-startup --------------------------------------------------
+  - id: ob-q1
+    episode: obrecheny-startup
+    kind: quote
+    query: "бюрократический ужас"
+    at: ["11:19"]
+    note: "Единственное вхождение. В asr-варианте слова «бюрократического» нет вообще — промах base здесь ожидаем и оцифрован."
+  - id: ob-q2
+    episode: obrecheny-startup
+    kind: quote
+    query: "поделегировать технический момент"
+    at: ["14:40"]
+    note: "base сохранил редкое «поделегировать» (14:38) — контраст к ob-q1."
+  - id: ob-q3
+    episode: obrecheny-startup
+    kind: quote
+    query: "принудительное моргание"
+    at: ["57:07"]
+    note: "Про дипфейк-аватары. base пишет «принадлительные моргания» — лемма не совпадёт, промах на asr в цене модели."
+  - id: ob-q4
+    episode: obrecheny-startup
+    kind: quote
+    query: "пересказывание в Википедии"
+    at: ["25:36"]
+    note: "На 20:32 звучит «пересказами Википедии» — другая лемма (пересказ), окно не соберёт оба слова; эталон — только 25:36."
+  - id: ob-m1
+    episode: obrecheny-startup
+    kind: meaning
+    query: "где обсуждают, стоит ли увольняться ради своего дела"
+    at: ["3:47", "4:13"]
+    note: "Слово «увольняться» в эпизоде не звучит ни разу — говорят «делал свой продукт, работая в найме». Заголовочная тема выпуска, недостижимая лексическим поиском."
+  - id: ob-m2
+    episode: obrecheny-startup
+    kind: meaning
+    query: "где жалуются на токсичных комментаторов"
+    at: ["34:26", "35:11"]
+    note: "В тексте — «как они возмущаются», «ваши правила отстой»; ни «токсичный», ни «комментатор» не звучат."
+  - id: ob-m3
+    episode: obrecheny-startup
+    kind: meaning
+    query: "где ведущий стесняется публичности"
+    at: ["42:15", "42:28"]
+    note: "Сказано «я человек, не созданный для камеры, но желающий творческого выброса» — ни одного общего слова с запросом."
+  - id: ob-t1
+    episode: obrecheny-startup
+    kind: mention
+    query: "виталий"
+    at: ["2:49", "5:15", "8:30", "9:03", "9:20", "27:17", "36:00", "36:52", "38:34"]
+    note: "Сквозной герой выпуска. Часть упоминаний — «Виталик»: другая лемма, лексический поиск их не найдёт; в эталоне они есть сознательно."
+  - id: ob-t2
+    episode: obrecheny-startup
+    kind: mention
+    query: "заголовок"
+    at: ["2:31", "3:51", "5:11", "45:30", "58:23", "59:38"]
+    note: "Шесть разнесённых мест; лемма должна собрать «заголовок/заголовки/заголовке»."
+  - id: ob-n1
+    episode: obrecheny-startup
+    kind: negative
+    query: "феррари"
+    note: "Мечта айтишника — правдоподобный запрос; слово живёт в lora-spies (37×), здесь отсутствует в обоих вариантах."
+  - id: ob-n2
+    episode: obrecheny-startup
+    kind: negative
+    query: "днище"
+    note: "IT-сленг, правдоподобный для этого шоу; звучит только в lora-spies (28×). Первый кандидат был «данные» — и провалился: лемма запроса нормализуется в «данный», а «в данном случае» есть в любом часе разговора. Негатив обязан отличаться леммой, не формой."
+  - id: ob-n3
+    episode: obrecheny-startup
+    kind: negative
+    query: "информация"
+    note: "Отсутствует в обоих вариантах, при 14 вхождениях в остальной корзинке."
+  - id: ob-n4
+    episode: obrecheny-startup
+    kind: negative
+    query: "сигнал"
+    note: "Тема zapusk-neuro (16×); здесь не звучит."
+  # --- lora-spies ---------------------------------------------------------
+  - id: ls-q1
+    episode: lora-spies
+    kind: quote
+    query: "опростоволоситься"
+    at: ["33:35"]
+    note: "Один раз за эпизод. В asr-варианте слова нет — base его не расслышал, промах оцифрован."
+  - id: ls-q2
+    episode: lora-spies
+    kind: quote
+    query: "конспирологические тюнинги"
+    at: ["40:10"]
+    note: "base пишет «конспирологические тиблия» — второе слово потеряно, AND не соберётся."
+  - id: ls-q3
+    episode: lora-spies
+    kind: quote
+    query: "шарикоподшипники"
+    at: ["50:39"]
+    note: "Три вхождения в одной сцене (50:39–50:46), сливаются в один момент. В asr отсутствует."
+  - id: ls-q4
+    episode: lora-spies
+    kind: quote
+    query: "штраф 100 миллионов"
+    at: ["18:34", "44:47"]
+    note: "Сказано дважды: тизер в начале и сама развязка. Числа индексируются как токены."
+  - id: ls-m1
+    episode: lora-spies
+    kind: meaning
+    query: "кого поставили к стенке"
+    at: ["15:17", "15:34"]
+    note: "В тексте — «приговорили к смертной казни», «расстрелян»; идиома со «стенкой» не звучит."
+  - id: ls-m2
+    episode: lora-spies
+    kind: meaning
+    query: "где чья-то супруга спалилась в ксероксном салоне"
+    at: ["33:23", "33:45", "34:29"]
+    note: "Сказано «отправил свою жену… в копировальный центр»; ни «супруга», ни «ксерокс», ни «спалилась» в эпизоде нет."
+  - id: ls-m3
+    episode: lora-spies
+    kind: meaning
+    query: "где рассказывают про вражду двух напарников"
+    at: ["39:03", "39:29"]
+    note: "Сказано «пилоты, мягко говоря, не особо между собой ладили» — Алонсо против Хэмилтона; «вражда» и «напарник» не звучат."
+  - id: ls-t1
+    episode: lora-spies
+    kind: mention
+    query: "кофлан"
+    at: ["28:08", "31:59", "33:15", "34:29", "35:08", "35:41", "40:45", "41:18"]
+    note: "Фамилия вне словаря — pymorphy будет гадать на падежах. base пишет «Кофланд» в первом вхождении; на 34:25 даже large-v3 разрезал её в «Тру-ди-ко-флан»."
+  - id: ls-t2
+    episode: lora-spies
+    kind: mention
+    query: "колбаса"
+    at: ["12:31", "12:55", "13:17", "14:54", "15:40", "17:12", "56:21"]
+    note: "Сквозная шутка про немецкую колбасу; формы «колбасы/колбасой/колбаса» должна собрать лемма."
+  - id: ls-n1
+    episode: lora-spies
+    kind: negative
+    query: "нейросеть"
+    note: "45 вхождений в остальной корзинке, здесь — ни одного в обоих вариантах."
+  - id: ls-n2
+    episode: lora-spies
+    kind: negative
+    query: "стартап"
+    note: "Тема obrecheny-startup; в этом эпизоде не звучит."
+  - id: ls-n3
+    episode: lora-spies
+    kind: negative
+    query: "искусственный интеллект"
+    note: "Оба слова отсутствуют; фразовый негатив — AND обязан вернуть пустоту."
+  - id: ls-n4
+    episode: lora-spies
+    kind: negative
+    query: "подруга"
+    note: "Правдоподобное слово для этого шоу — и ни одной формы за 59 минут."
+  # --- zavarili-rituals ---------------------------------------------------
+  - id: zv-q1
+    episode: zavarili-rituals
+    kind: quote
+    query: "тральфамадор"
+    at: ["2:52"]
+    note: "Воннегутовская отсылка, один раз. В asr-варианте слова нет — base не справился с ним в полевой записи."
+  - id: zv-q2
+    episode: zavarili-rituals
+    kind: quote
+    query: "сфотографироваться на мотоцикле"
+    at: ["9:25"]
+    note: "base на 9:25 потерял «сфотографироваться» (осталось только «сфоткаться» в 8:00 — другая лемма), промах на asr оцифрован."
+  - id: zv-q3
+    episode: zavarili-rituals
+    kind: quote
+    query: "революционность"
+    at: ["9:10"]
+    note: "Один раз; base сохранил слово (9:06) — контраст к zv-q1 в той же записи."
+  - id: zv-q4
+    episode: zavarili-rituals
+    kind: quote
+    query: "секта лимона"
+    at: ["16:16", "22:03"]
+    note: "На 22:07 «наша секта расширялась» стоит в одном окне с лимонами — второй легитимный ответ. base на 16:16 «секту» потерял, а на 22:05 сохранил."
+  - id: zv-m1
+    episode: zavarili-rituals
+    kind: meaning
+    query: "где мечтают о собственной недвижимости"
+    at: ["0:30", "3:24"]
+    note: "В тексте — «взнос за квартиру», «долгожданное жилье»; слова «недвижимость» нет."
+  - id: zv-m2
+    episode: zavarili-rituals
+    kind: meaning
+    query: "где выбирают обряд на праздник"
+    at: ["13:36", "14:19"]
+    note: "Сказано «магией, ритуалами», «выбрать для себя ритуал, поджечь»; ни «обряд», ни «праздник» не звучат."
+  - id: zv-m3
+    episode: zavarili-rituals
+    kind: meaning
+    query: "где учат флиртовать"
+    at: ["23:14", "23:39"]
+    note: "Разговор про свидания и «зайти с козырей»; слова «флирт» в эпизоде нет."
+  - id: zv-t1
+    episode: zavarili-rituals
+    kind: mention
+    query: "лимон"
+    at: ["15:42", "16:02", "18:41", "19:18", "20:32", "21:28", "22:03"]
+    note: "Сцена с лимонным деревом. Рядом живут «лимошки», «лимонка», «лимончик» — другие леммы, лексический поиск их не обязан находить."
+  - id: zv-t2
+    episode: zavarili-rituals
+    kind: mention
+    query: "мотоцикл"
+    at: ["7:45", "8:00", "9:25", "9:49"]
+    note: "Сцена с полицейскими мотоциклами; в asr на 7:52 «в этот цикл» вместо «мотоцикл» — одна из точек потеряна base'ом."
+  - id: zv-n1
+    episode: zavarili-rituals
+    kind: negative
+    query: "нейросеть"
+    note: "Ни одной формы в обоих вариантах."
+  - id: zv-n2
+    episode: zavarili-rituals
+    kind: negative
+    query: "шпионаж"
+    note: "Тема lora-spies; здесь отсутствует."
+  - id: zv-n3
+    episode: zavarili-rituals
+    kind: negative
+    query: "команда"
+    note: "48 вхождений в остальной корзинке (в основном lora-spies), здесь — ноль."
+  - id: zv-n4
+    episode: zavarili-rituals
+    kind: negative
+    query: "чувак"
+    note: "Правдоподобно для разговорного шоу; отсутствует в обоих вариантах (в obrecheny — 15 раз)."
 
 # Filled in by the first green run and updated deliberately whenever a number
 # moves. The runner asserts no regression against these, not an absolute
 # quality bar — nobody knows in advance what hit@3 should be on these episodes,
 # and a threshold invented before the first measurement is a guess in a
 # requirement's clothes.
-baseline: {}
+baseline:
+  reference:
+    hit@1: 0.611
+    hit@3: 0.667
+    false_hit_rate: 0.0
+    median_error_s: 1.0
+  asr:
+    hit@1: 0.361
+    hit@3: 0.361
+    false_hit_rate: 0.0
+    median_error_s: 1.6
