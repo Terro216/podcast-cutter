@@ -497,15 +497,15 @@ difference on the decoder rather than on the feed.
    literally and `protein` does not find `proteins`. FTS5 ships `porter`, but a
    tokenizer is per table, so the fix is another column or another table.
    Deliberately still open: the EN basket exists to price it first.
-3. **A decoding loop survives quarantine.** Found while building the baskets,
-   not looked for. `obrecheny-startup` at 54:30 has a 448-character
-   «генегенеген…» with `compression_ratio` 24.08 — ten times the threshold —
-   and it is **indexed**, because `is_indexable` needs two signals and this
-   trips only `repetitive`. `looping` counts four-word phrases and the loop is
-   one token; `silence` and `unsure` need low confidence and the model reports
-   −0.06; `too_dense` counts words per second and this is one word. Same shape
-   in `lora-spies` at 20:58 («бззззз…», cr 6.06). Left unfixed on purpose so
-   the basket can price it before and after — see `ROADMAP.md` §16.
+3. ~~**A decoding loop survives quarantine.**~~ **Fixed, after the baskets
+   priced it**: a compression ratio beyond twice the threshold now counts as
+   a second signal (`runaway`), so the 448-character «генегенеген…» (cr
+   24.08) and lora-spies' «бззззз…» (cr 6.06) are excluded. The basket run
+   after the fix moved **no metric in any of the four runs** — the change
+   removed only hallucinated windows, and that is now a demonstrated fact
+   rather than a hope. `CHUNKER_VERSION` went 1 → 2, so production's warmed
+   transcripts are stale by design: the first search against each re-runs
+   transcription once.
 
 4. **Queues and abuse limits.** One heavy job per user exists; a per-user token
    bucket on input, a bounded queue with a visible position, and a ceiling on

@@ -176,6 +176,36 @@ class TestQuarantine:
         signals = quarantine_signals(utterance(0, 1, " ".join(["слово"] * 20)))
         assert "too_dense" in signals
 
+    def test_a_single_token_decoder_loop_is_excluded_on_ratio_alone(self):
+        """The real case from obrecheny-startup at 54:30: 448 characters of
+        «генегенеген…» inside one token, compression_ratio 24.08, and the model
+        confidently sure of itself (−0.06). Every other signal misses for a
+        structural reason — the loop has fewer than four words, high
+        confidence, one word per span — so an extreme ratio must convict on
+        its own or the two-signal rule protects exactly this."""
+        signals = quarantine_signals(
+            utterance(
+                0,
+                12,
+                "но не " + "гене" * 112,
+                avg_logprob=-0.06,
+                no_speech_prob=0.5,
+                compression_ratio=24.08,
+            )
+        )
+        assert "runaway" in signals
+        assert not is_indexable(signals)
+
+    def test_a_merely_repetitive_span_still_only_demotes(self):
+        """The conclusive threshold must not swallow the ordinary case: real
+        speech does trip the ratio alone occasionally, and one signal demoting
+        rather than excluding is the whole point of the two-signal rule."""
+        signals = quarantine_signals(
+            utterance(0, 8, "и так далее и так далее ну вот", compression_ratio=3.0)
+        )
+        assert signals == ["repetitive"]
+        assert is_indexable(signals)
+
     def test_missing_metrics_are_not_held_against_a_backend(self):
         """A cloud recogniser reporting none of these must not be quarantined
         for the silence of its metrics."""

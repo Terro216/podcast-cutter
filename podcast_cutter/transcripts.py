@@ -37,9 +37,11 @@ from .text import truncate
 
 logger = logging.getLogger(__name__)
 
-#: Bumped whenever windowing changes shape. Stored per transcript so a rebuilt
-#: index is distinguishable from one made by an older rule.
-CHUNKER_VERSION = 1
+#: Bumped whenever windowing changes shape — or whenever quarantine changes
+#: what is allowed into a window, which changes the index just as surely.
+#: Stored per transcript so a rebuilt index is distinguishable from one made
+#: by an older rule.
+CHUNKER_VERSION = 2
 #: Bumped whenever :func:`normalize` or :func:`lemmatize` changes what it
 #: produces, because that changes what the stored index *means*.
 NORMALIZER_VERSION = 2
@@ -57,6 +59,16 @@ CLUSTER_GAP_SECONDS = 15.0
 # every attempt failed — so the same numbers are re-checked here, where the
 # question is whether to let the text be searched at all.
 MAX_COMPRESSION_RATIO = 2.4
+#: Beyond twice the threshold the ratio stops being a suspicion and becomes a
+#: verdict. The case that forced this: a 448-character «генегенеген…» decoder
+#: loop with compression_ratio 24.08 — ten times the threshold — stayed in the
+#: index, because the loop lives inside a single token. `looping` counts
+#: four-word phrases and saw one word; `silence` and `unsure` want low
+#: confidence and the model reported −0.06; `too_dense` counts words per
+#: second and this was one enormous word. Every second signal misses for a
+#: structural reason, so an extreme first signal has to be able to convict on
+#: its own. Priced by the baskets before it was fixed (`ROADMAP.md` §16).
+CONCLUSIVE_COMPRESSION_RATIO = MAX_COMPRESSION_RATIO * 2
 MIN_AVG_LOGPROB = -1.0
 MAX_NO_SPEECH_PROB = 0.6
 #: A phrase repeated this many times in one utterance is a decoding loop.
@@ -217,6 +229,11 @@ def quarantine_signals(utterance: Utterance) -> list[str]:
         and utterance.compression_ratio > MAX_COMPRESSION_RATIO
     ):
         signals.append("repetitive")
+        # A second, independent-by-convention signal: this far past the
+        # threshold no real speech survives, and the two-signal rule must not
+        # protect a single-token decoder loop that no other metric can see.
+        if utterance.compression_ratio > CONCLUSIVE_COMPRESSION_RATIO:
+            signals.append("runaway")
 
     if repeated_phrase_count(utterance.text) > MAX_PHRASE_REPEATS:
         signals.append("looping")

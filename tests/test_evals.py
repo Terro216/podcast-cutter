@@ -30,7 +30,7 @@ from podcast_cutter.evals import (
     score,
     summarize,
 )
-from podcast_cutter.transcripts import Utterance, Word
+from podcast_cutter.transcripts import CHUNKER_VERSION, Utterance, Word
 
 
 def make_query(kind: str = "quote", at=(100.0,), text: str = "нейросети") -> Query:
@@ -404,7 +404,7 @@ def test_reading_provenance_does_not_require_reading_the_transcript(tmp_path):
     the fixture builder needs before deciding whether to transcribe at all."""
     path = tmp_path / "ep.reference.json"
     dump_utterances([], path, {"model": "large-v3"})
-    assert load_meta(path) == {"model": "large-v3", "chunker_version": 1}
+    assert load_meta(path) == {"model": "large-v3", "chunker_version": CHUNKER_VERSION}
 
 
 # ----------------------------------------------------------------------

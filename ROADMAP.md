@@ -899,14 +899,14 @@ signals and this trips only one. Each of the others misses for a reason:
 `lora-spies` has the same shape at 20:58 — «бззззззз…», `compression_ratio`
 6.06, one signal, indexed.
 
-**Not fixed here, deliberately.** A compression ratio ten times the threshold
-is arguably conclusive on its own, and that is the obvious one-line change. But
-changing what gets indexed changes every number the basket is about to produce,
-and this project's own rule is that the answer is a metric rather than a
-plausible fix applied blind. It goes in as a known defect, the basket prices
-it — the excerpt shown beside an answer is drawn from window text, so the
-visible cost is a moment quoted with «бззззззз» in it — and then it gets fixed
-against a baseline that can show the fix worked.
+**Not fixed until the baskets could price it — then fixed.** A compression
+ratio ten times the threshold is conclusive on its own, and the fix is exactly
+the obvious one: past `CONCLUSIVE_COMPRESSION_RATIO` (2× the threshold) the
+ratio counts as a second signal, and the two-signal rule convicts. The order
+mattered: with baselines committed first, the after-run could show that **no
+metric moved in any of the four runs** — the fix removed only hallucinated
+windows. That is the difference between "this change is safe" as a claim and
+as a measurement.
 
 Worth noting what this says about the method: the baskets caught something in
 their first hour of existence, and it was caught by the *drafting* tool, before
