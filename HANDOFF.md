@@ -19,6 +19,9 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
+| `1d255b9` | a transcription timeout journals as failure; README layout; bot-side findings |
+| `f9b84ce` | clip placement on the phrase; distinct moments no longer merge |
+| `6c02926` | an extreme compression ratio convicts on its own (the §16 decoder loop) |
 | `c02c7d2` | the answer key: 104 queries, first baselines, the base-model price measured |
 | `603dae4` | the regression guard could not fire below one query's wobble; fixed pre-baseline |
 | `116197d` | the eight reference transcripts |
