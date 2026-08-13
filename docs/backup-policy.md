@@ -88,23 +88,24 @@ backup runs well before any manual redeploy would.
 
 An untested backup is not a backup — the monthly drill exists for that.
 
-## Going live — one-time provisioning (not yet done)
+## Going live — done 2026-08-13
 
-The code, image and timers are committed and dry-run-verified against a local
-repo. Making it live needs secrets the repo must never carry:
+Provisioned and verified on big-one:
 
-1. **rclone config.** Reuse the shared Yandex token: copy an existing stack's
-   `rclone.conf` to `BACKUP_RCLONE_DIR` on big-one (default
-   `/home/me/.podcast-cutter/rclone/rclone.conf`), or `rclone config` a
-   `yadisk` remote there. Confirm with
-   `rclone lsd yadisk: --config <that file>`.
-2. **`.env`.** Set `BACKUP_PASSWORD` (generate; also store in Bitwarden),
-   `YANDEX_DISK_TARGET=rclone:yadisk:/backups/podcast-cutter`,
-   `BACKUP_STAGE=/srv/podcast-cutter-backup`, `BACKUP_RCLONE_DIR`, and the
-   `BACKUP_KEEP_*`. Optionally the gatus `BACKUP_PUSH_*` heartbeats.
-3. **First backup:** `scripts/backup.sh --build`. It initialises the repo on
-   the first run. Then `scripts/restore.sh validate` to prove the round trip.
-4. **Install the timers:** copy `deploy/systemd/*` to `/etc/systemd/system/`,
-   `systemctl daemon-reload`, then `systemctl enable --now
-   podcast-cutter-backup.timer podcast-cutter-backup-weekly.timer
-   podcast-cutter-backup-monthly.timer`.
+1. **rclone config.** The Yandex `[yadisk]` remote is **shared across all
+   stacks** — `~/.config/rclone/rclone.conf` and `/srv/arr/rclone/rclone.conf`
+   carry the identical token (checked by fingerprint). rclone issues one token
+   per (built-in app, user), so `rclone authorize` would have re-minted and
+   invalidated it for cinemarr and vaultwarden. The token was therefore
+   **reused, not re-issued**: a copy sits at
+   `/home/me/.podcast-cutter/rclone/rclone.conf` (`BACKUP_RCLONE_DIR`), its own
+   file so nothing couples to another stack's volume. A separate OAuth app is
+   the documented long-term un-sharing (accepted risk).
+2. **`.env`** carries `BACKUP_PASSWORD`, `YANDEX_DISK_TARGET`, `BACKUP_STAGE`,
+   `BACKUP_RCLONE_DIR`, `BACKUP_KEEP_*`, `TZ`. **The restic password's Bitwarden
+   copy is still owed** — without it the repository is unrecoverable.
+3. **First backup done:** snapshot `c01f794d` at
+   `yadisk:/backups/podcast-cutter`, and `scripts/restore.sh validate`
+   round-tripped it (restored counts matched the manifest).
+4. **Timers enabled** in `/etc/systemd/system/`: daily 04:57, weekly Sun 06:42,
+   monthly 1st Sat 08:00 (Europe/Moscow), all after cinemarr's windows.

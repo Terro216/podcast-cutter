@@ -9,8 +9,11 @@
 > @podcast_cutter_bot through the `media-proxy`, dense search and ASR ready, no
 > errors. Still true from the audit: the Compose service has **no Docker
 > healthcheck** (worth adding), and transient `Bad Gateway` from Telegram is
-> handled by PTB's retries. Offsite backups are built and dry-run-verified but
-> **not yet live** — see `docs/backup-policy.md` §"Going live".
+> handled by PTB's retries. Offsite backups to Yandex Disk are **live** as of
+> 2026-08-13: first snapshot `c01f794d` at `yadisk:/backups/podcast-cutter`,
+> restore round-trip validated, three systemd timers enabled (daily 04:57,
+> weekly Sun 06:42, monthly 1st Sat) — see `docs/backup-policy.md`. The restic
+> password is in `.env`; **its Bitwarden copy is still owed.**
 
 Working notes for whoever picks this up. `README.md` describes the project as
 it is, `ROADMAP.md` where it is going and why; this file records **where we
@@ -614,8 +617,15 @@ difference on the decoder rather than on the feed.
    transcription queues on its own slot and refuses when full. Not done:
    the queue lives in memory, so a restart loses waiting jobs (§7 wants it
    in SQLite), and a queued search says «queued», not its position number.
-5. **Backups.** Nothing is backed up. The transcripts are now the expensive
-   artifact — `sqlite3 .backup`, not `cp`, because WAL is on.
+5. ~~**Backups.** Nothing is backed up.~~ **Done and live (2026-08-13).**
+   Encrypted restic → rclone-native-yandex, the cinemarr/vaultwarden shape:
+   the SQLite database (`.backup`, verified against the live WAL, quick_check)
+   snapshotted daily to `yadisk:/backups/podcast-cutter`, weekly prune/check,
+   monthly read-data check + restore drill. Code in `backup/` and `scripts/`,
+   timers in `deploy/systemd/`, full policy in `docs/backup-policy.md`. The
+   Yandex token is the one already shared across stacks — re-authorising would
+   have invalidated it for cinemarr/vaultwarden, so it was reused, not
+   re-issued. **Owed:** the restic password's Bitwarden copy.
 6. **Avatar and inline placeholder** — the last two things only @BotFather can
    set (`/setuserpic`, `/setinline`); commands and both descriptions are
    published from `_on_startup` and overwrite anything set there by hand.
