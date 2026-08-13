@@ -68,5 +68,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Offsite backup to Yandex Disk, the same restic+rclone shape as the cinemarr
+  # and vaultwarden stacks. Behind a profile and depended on by nothing, so it
+  # is inert unless run explicitly (`scripts/backup.sh`) or by the systemd
+  # timers in deploy/systemd. It reads the data volume read-only, mounts a host
+  # staging dir and its own rclone config, and never gets the Docker socket.
+  backup:
+    profiles: ["backup"]
+    build:
+      # Only the backup image's own code; the repo's databases and scratch
+      # files must not even enter its build context.
+      context: ./backup
+      dockerfile: Dockerfile
+    image: podcast-cutter-backup:restic-0.19.1-rclone-1.74.4
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+    volumes:
+      - podcast-data:/sources/data:ro
+      - ${BACKUP_STAGE:-/srv/podcast-cutter-backup}:/backup
+      # rclone persists refreshed OAuth tokens, so this is read-write. Its own
+      # copy — tying the offsite path to another stack's volume is exactly the
+      # coupling the cinemarr notes warn against.
+      - ${BACKUP_RCLONE_DIR:-/home/me/.podcast-cutter/rclone}:/config/rclone
+      - .:/repo:ro
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   podcast-data:

@@ -16,6 +16,10 @@ eggs/
 .eggs/
 lib/
 lib64/
+# The Python-packaging `lib/` rule above is meant for a build artifact, not for
+# our shell helpers under scripts/lib — keep those tracked.
+!scripts/lib/
+!scripts/lib/**
 parts/
 sdist/
 var/

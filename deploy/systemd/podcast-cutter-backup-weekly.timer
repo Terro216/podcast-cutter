@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly podcast-cutter restic maintenance
+
+[Timer]
+# Sunday, well clear of cinemarr's own 06:00 weekly prune so the two do not
+# hold restic locks against the same account at the same time.
+OnCalendar=Sun *-*-* 06:40:00 Europe/Moscow
+RandomizedDelaySec=30min
+Persistent=true
+Unit=podcast-cutter-backup-weekly.service
+
+[Install]
+WantedBy=timers.target

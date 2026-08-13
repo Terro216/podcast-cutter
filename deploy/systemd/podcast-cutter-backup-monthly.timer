@@ -1,0 +1,14 @@
+[Unit]
+Description=Monthly podcast-cutter full check and restore drill
+
+[Timer]
+# First Saturday, after cinemarr's monthly drill window, so a read-data check
+# (which reads every pack back from Yandex) does not run against the account
+# while another stack is doing the same.
+OnCalendar=Sat *-*-01..07 08:00:00 Europe/Moscow
+RandomizedDelaySec=30min
+Persistent=true
+Unit=podcast-cutter-backup-monthly.service
+
+[Install]
+WantedBy=timers.target

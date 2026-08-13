@@ -1,5 +1,17 @@
 # Handoff — podcast-cutter, 2026-08-12
 
+> **Runtime note, 2026-08-13.** The 13 August audit's pre-deploy checklist has
+> been carried out: `podcast-data` snapshotted (`/data/backups/predeploy-*.db`,
+> quick_check ok), the test/lint suite rerun green (775 pass, ruff clean), and
+> the `harden-source-urls` branch deployed with `docker compose up -d --build`.
+> Verified after: the running image contains the `-max_redirects` guard
+> (`audio.py`) and the ASR-lock fix (`asr.py`), the bot came up as
+> @podcast_cutter_bot through the `media-proxy`, dense search and ASR ready, no
+> errors. Still true from the audit: the Compose service has **no Docker
+> healthcheck** (worth adding), and transient `Bad Gateway` from Telegram is
+> handled by PTB's retries. Offsite backups are built and dry-run-verified but
+> **not yet live** — see `docs/backup-policy.md` §"Going live".
+
 Working notes for whoever picks this up. `README.md` describes the project as
 it is, `ROADMAP.md` where it is going and why; this file records **where we
 stopped and what is already proven**.
