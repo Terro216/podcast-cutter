@@ -302,9 +302,11 @@ class Indexer:
         except asyncio.TimeoutError:
             # A bare TimeoutError is invisible to every `except
             # PodcastCutterError` upstream: the user got the generic crash
-            # reply and the journal recorded the search as ok. Known gap that
-            # remains: the worker thread cannot be cancelled and keeps
-            # decoding — see HANDOFF §5.
+            # reply and the journal recorded the search as ok. The recogniser
+            # holds its own lock until the uncancellable worker thread stops
+            # (see `LocalWhisper.transcribe`), so the retry that follows will
+            # not start a second decode on the same model.
+            decoded.unlink(missing_ok=True)
             raise ProcessingTimeout() from None
         finally:
             ticker.cancel()

@@ -167,12 +167,35 @@ class LocalWhisper:
         language: str | None = None,
         on_segment: Callable[[float], None] | None = None,
     ) -> tuple[list[Utterance], str | None]:
-        async with self._lock:
-            # to_thread because this pins a core for minutes, and the bot has
-            # to keep answering buttons while it does.
-            return await asyncio.to_thread(
-                self._transcribe, path, language, on_segment
-            )
+        # to_thread because this pins a core for minutes, and the bot has to
+        # keep answering buttons while it does.
+        #
+        # The lock has to outlive a *cancelled* await, which is why this is not
+        # a plain `async with`. A caller wrapping this in `wait_for` cancels us
+        # on timeout — but the worker thread cannot be cancelled and keeps
+        # using the model. `async with` would release the lock as it unwinds,
+        # and the retry that follows the timeout would then start a second
+        # transcription on the same WhisperModel, which is not safe to call
+        # concurrently. So on cancellation the lock is held until the thread
+        # actually finishes. See HANDOFF §5.
+        await self._lock.acquire()
+        worker = asyncio.ensure_future(
+            asyncio.to_thread(self._transcribe, path, language, on_segment)
+        )
+        try:
+            result = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            if worker.done():
+                self._lock.release()
+            else:
+                worker.add_done_callback(lambda _: self._lock.release())
+            raise
+        except BaseException:
+            self._lock.release()
+            raise
+        else:
+            self._lock.release()
+            return result
 
 
 class SpeechKit:
