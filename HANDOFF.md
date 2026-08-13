@@ -7,9 +7,10 @@
 > Verified after: the running image contains the `-max_redirects` guard
 > (`audio.py`) and the ASR-lock fix (`asr.py`), the bot came up as
 > @podcast_cutter_bot through the `media-proxy`, dense search and ASR ready, no
-> errors. Still true from the audit: the Compose service has **no Docker
-> healthcheck** (worth adding), and transient `Bad Gateway` from Telegram is
-> handled by PTB's retries. Offsite backups to Yandex Disk are **live** as of
+> errors. The audit's **no-healthcheck** gap is now closed: a heartbeat-based
+> Docker healthcheck is live (`e3b5785`), container reports `healthy`. Transient
+> `Bad Gateway` from Telegram is handled by PTB's retries. Offsite backups to
+> Yandex Disk are **live** as of
 > 2026-08-13: first snapshot `c01f794d` at `yadisk:/backups/podcast-cutter`,
 > restore round-trip validated, three systemd timers enabled (daily 04:57,
 > weekly Sun 06:42, monthly 1st Sat) — see `docs/backup-policy.md`. The restic
