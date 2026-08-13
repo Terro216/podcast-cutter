@@ -220,29 +220,41 @@ Today: a global semaphore of 2 cuts, one job per user, and PTB's
 flood. Handing out `src_`-tagged links across podcast chats will find every one
 of these:
 
-- **A separate pool for transcription.** Cutting takes seconds, transcription
-  minutes. Sharing one semaphore lets a single transcription stall all cutting.
-- **Deduplicate by episode.** Ten people from one chat asking for the same
-  popular episode must produce one job and ten waiters.
-- **Queue in SQLite, not memory.** Transcription is expensive; losing it on a
-  restart is painful. The table and a schema we control already exist.
-- **Visible position and ETA**, or people press the button again and multiply
-  the load.
-- **A cap on queue length**, refusing politely instead of growing memory
-  quietly.
-- **A per-user token bucket on input**: N searches/min, M cuts/hour, K
-  transcriptions/day. Search hits Podcast Index, where the risk is not our load
-  but our key getting banned.
-- **A ceiling on source duration and size.** `MAX_CUT_SECONDS` bounds the
-  *clip*, not the *source*: an 8-hour episode is still downloaded whole on the
-  fallback path, and with ASR attached that is hours of work.
-- **Limits must apply to inline mode**, which needs no `/start` and is
-  therefore the way around everything above.
-- **A kill switch** — one variable that disables transcription under load while
-  cutting stays alive.
+- ~~**A separate pool for transcription.**~~ **Done** — its own single slot,
+  apart from the cut pool.
+- ~~**Deduplicate by episode.**~~ **Done** — in `Indexer._in_flight` for
+  concurrent callers, and now in the queue itself: the line is of episodes, so
+  ten people wanting one episode are one job and ten waiters.
+- ~~**Queue in SQLite, not memory.**~~ **Done** — `asr_jobs` in `store.py`,
+  drained by the single worker in `listening.py`. A row is a waiter; a restart
+  requeues whatever was mid-flight and finishes it. Deliberately **not** a
+  `SCHEMA_VERSION` bump: the migration path rebuilds `_DERIVED_TABLES`, which
+  includes `transcripts`, so bumping it to add an unrelated table would have
+  cost production every warmed transcript it holds.
+- ~~**Visible position**~~ **Done** — `2nd in line`, counted in episodes.
+  **ETA is not**: an estimate needs the queue's own history of how long an
+  episode of a given length actually took, which `measured_rtf` has for the
+  running job but not for the ones behind it.
+- ~~**A cap on queue length**~~ **Done** — `MAX_ASR_QUEUE` episodes, and
+  joining an episode already in line is free because it adds no work.
+- ~~**A per-user token bucket on input**: N searches/min, M cuts/hour, K
+  transcriptions/day.~~ **Done** — `RATE_INPUT_PER_MINUTE`,
+  `RATE_CUTS_PER_HOUR`, `RATE_ASR_PER_DAY`; 0 disables, admins exempt,
+  refusals journalled as `action=limit`.
+- ~~**A ceiling on source duration and size.**~~ **Done** —
+  `MAX_SOURCE_SECONDS` and `MAX_SOURCE_BYTES`, checked before transcription as
+  well as before a cut.
+- ~~**Limits must apply to inline mode**~~ **Done** — the inline handler
+  charges the same input budget and answers empty when it is spent, keeping
+  the "open the bot" button so the polite path stays available.
+- ~~**A kill switch**~~ **Done** — `ASR_ENABLED=false` stops transcription
+  without stopping the bot.
 
 Cache size is a non-issue: ~50 KB of text and ~0.8 MB of embeddings per
 episode. Add LRU eviction anyway.
+
+**What is left here**: an ETA beside the position, and LRU eviction. Neither
+is load-bearing — the section's actual failure modes are closed.
 
 ---
 
@@ -320,7 +332,8 @@ internet fails more often than anyone plans for.
    backend in `asr.py`, all four variants fixtured and guarded by CI, table
    and verdict in `HANDOFF.md` §3b. Remaining from §4: the spend ceiling,
    without which the cloud path stays an operator's manual choice.
-5. Queues, limits, source ceiling, backups.
+5. ~~Queues, limits, source ceiling, backups.~~ **Done** — §7 is closed but
+   for an ETA and LRU eviction; backups are live (§8, `docs/backup-policy.md`).
 6. Video notes with presets and subtitles.
 7. CI, public repo, `src_` links seeded.
 

@@ -7,12 +7,13 @@ including when the answer is "nothing".
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import replace
 
 import pytest
 
-from conftest import FakeUpdate, make_episode
+from conftest import FakeContext, FakeUpdate, make_episode
 from podcast_cutter import keyboards as kb
 from podcast_cutter import screens
 from podcast_cutter.handlers import PodcastCutterBot
@@ -279,6 +280,86 @@ class TestSearching:
         await text(bot, context, "белков")
 
         assert indexer.recognizer.calls == 1
+
+
+class TestWaitingInLine:
+    """What a second person sees. «Queued» was the whole message before, and a
+    wait with no number is indistinguishable from a hang — at which point
+    people press the button again and make the line longer."""
+
+    @staticmethod
+    def _asking(bot, episode_id: str, phrase: str, user_id: int):
+        """One person, mid-search, on their own session."""
+        own = FakeContext()
+        session = get_session(own.user_data)
+        session.select_episode(make_episode(episode_id))
+        session.go(Screen.INTERVAL)
+        session.awaiting = Awaiting.PHRASE
+        update = FakeUpdate(text=phrase, user_id=user_id)
+        return update, asyncio.create_task(bot.on_text(update, own))
+
+    @staticmethod
+    async def _until(predicate, tries: int = 300) -> bool:
+        for _ in range(tries):
+            if predicate():
+                return True
+            await asyncio.sleep(0.01)
+        return False
+
+    async def test_the_place_in_line_is_a_number(self, bot):
+        held = asyncio.Event()
+
+        async def slow(path, language=None, on_segment=None):
+            await held.wait()
+            return [], "ru"
+
+        bot.indexer.recognizer.transcribe = slow
+        _, first = self._asking(bot, "10", "фолдинг", user_id=1)
+        assert await self._until(lambda: bot.listening._running == "10")
+
+        second, waiting = self._asking(bot, "11", "белков", user_id=2)
+
+        def said() -> list[str]:
+            children = second.effective_message.children
+            return [t for t, _ in children[-1].edits] if children else []
+
+        shown = await self._until(lambda: any("in line" in t for t in said()))
+        # Read before the answer overwrites it: the progress message is edited
+        # in place, so the waiting screen only exists while the wait does.
+        waited = said()
+
+        held.set()
+        await asyncio.gather(first, waiting)
+        assert shown
+        assert any("2nd in line" in text for text in waited)
+
+    async def test_the_line_is_full_of_episodes_not_of_people(
+        self, bot, context, store
+    ):
+        """Ten people wanting one episode is one job. Refusing the tenth
+        would be refusing them nothing."""
+        episode = make_episode("10")
+        for user in range(1, 9):
+            await bot.listening.submit(episode, user_id=user, chat_id=user)
+
+        assert await bot.listening.depth() == 1
+        await bot.listening.stop()
+
+    async def test_a_full_queue_refuses_a_new_episode(self, bot, context):
+        from podcast_cutter.handlers import MAX_ASR_QUEUE
+
+        for index in range(MAX_ASR_QUEUE):
+            await bot.listening.submit(
+                make_episode(f"9{index}"), user_id=index, chat_id=index
+            )
+        await bot.listening.stop()
+
+        session, _ = await at_the_editor(bot, context)
+        await tap(bot, context, kb.ACTION_FIND)
+        update = await text(bot, context, "фолдинг")
+
+        assert "queue is full" in update.shown
+        assert session.current.screen is not Screen.MOMENTS
 
 
 class TestHowAnswersRead:

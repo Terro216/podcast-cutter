@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from telegram import (
+    Bot,
     InlineQueryResultArticle,
     InlineQueryResultsButton,
     InputTextMessageContent,
@@ -38,6 +39,7 @@ from .config import Settings
 from .errors import NotFoundError, PodcastCutterError
 from .indexer import Indexer, TranscriptionDisabled
 from .limits import Budget
+from .listening import QUEUED, TranscriptionQueue
 from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
@@ -95,6 +97,15 @@ _LISTENING_STAGES = {
     "index": "🧭 Indexing what was said…",
 }
 
+#: What "you are Nth in line" reads as. Numbers, not "queued": a wait with no
+#: number is indistinguishable from a hang, and the first thing someone does
+#: about a hang is press the button again.
+_ORDINALS = ("", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th")
+
+
+def _ordinal(place: int) -> str:
+    return _ORDINALS[place] if place < len(_ORDINALS) else f"{place}th"
+
 #: Rotated under the bar while recognition runs, one every few edits.
 #:
 #: Each says something true about what is happening or why it is worth the
@@ -119,9 +130,11 @@ _WAITING_NOTES = (
 #: as soon as there is one.
 DEFAULT_RTF = 0.09
 
-#: How many first-time transcriptions may hold or wait on the listening slot
-#: at once — one running plus three in line. Beyond that the wait is tens of
-#: minutes, and an honest refusal beats a queue position that means "tonight".
+#: How many *episodes* may be in the listening queue at once — one being
+#: listened to plus three in line. Beyond that the wait is tens of minutes, and
+#: an honest refusal beats a queue position that means "tonight". Counted in
+#: episodes rather than in people because that is what the wait is made of:
+#: the tenth person to want an episode already queued adds no work at all.
 MAX_ASR_QUEUE = 4
 
 #: How long each waiting note stays on screen.
@@ -224,6 +237,15 @@ def _listening_text(stage, started: float, estimate: int) -> str:
     work actually done so far rather than from the opening estimate, so it
     stops being a promise the moment reality disagrees with it.
     """
+    if stage.stage == QUEUED:
+        place = int(stage.done)
+        ahead = place - 1
+        return (
+            f"⏳ <b>{_ordinal(place)} in line</b>\n\n"
+            f"<i>{ahead} episode{'' if ahead == 1 else 's'} ahead of this one. "
+            "Listening starts on its own — nothing to press.</i>"
+        )
+
     lines = [_LISTENING_STAGES.get(stage.stage, "🎧 Working…")]
 
     fraction = stage.fraction
@@ -279,19 +301,24 @@ class PodcastCutterBot:
         #: case the bot behaves exactly as it did before searching existed.
         self.indexer = indexer
         self.bot_username = ""
+        #: Set at startup. The queue needs a way to reach a chat whose session
+        #: is gone — a job that outlived the request has nothing else to
+        #: answer through.
+        self.telegram: Bot | None = None
         #: Shared by every cut: the breaker state is the point, so one cut
         #: discovering a dead proxy spares the rest the same wait.
         self.media_proxy = MediaProxy(settings)
         self._job_slots = asyncio.Semaphore(settings.max_concurrent_jobs)
-        #: Transcription has its own single slot, apart from the cut pool:
-        #: sharing one semaphore let a single first-search occupy a cut slot
-        #: for minutes, and the recogniser serialises on its own lock anyway,
-        #: so more than one slot here would only hide the queue.
-        self._asr_slots = asyncio.Semaphore(1)
-        #: How many searches are waiting on that slot right now. A semaphore
-        #: keeps no public count, and the count is the difference between
-        #: "queued behind one episode" and a queue that should refuse.
-        self._asr_waiting = 0
+        #: Transcription has its own line, apart from the cut pool: sharing one
+        #: semaphore let a single first-search occupy a cut slot for minutes,
+        #: and the recogniser serialises on its own lock anyway, so more than
+        #: one at a time would only hide the queue. It is in SQLite rather than
+        #: in memory because a redeploy used to throw away everything waiting.
+        self.listening: TranscriptionQueue | None = (
+            TranscriptionQueue(settings, store, indexer, notify=self.notify_listened)
+            if store is not None and indexer is not None
+            else None
+        )
         #: User ids with a cut in flight — one heavy job per person. Checked
         #: and set with no await in between, or two quick taps both pass.
         self._busy_users: set[int] = set()
@@ -731,7 +758,14 @@ class PodcastCutterBot:
                     "Episodes the bot already knows still search instantly.",
                 )
                 return
-            if self._asr_waiting >= MAX_ASR_QUEUE:
+            # Joining a line that already holds this episode is free: it is one
+            # transcription either way, and refusing the tenth person to ask
+            # about a popular episode would be refusing them nothing.
+            if (
+                self.listening is not None
+                and not await self.listening.position(episode.id)
+                and await self.listening.depth() >= MAX_ASR_QUEUE
+            ):
                 await self._log(update, "limit", outcome="asr_queue")
                 await self._show_failure(
                     update,
@@ -766,9 +800,6 @@ class PodcastCutterBot:
                 f"\n\n<i>About {format_duration(estimate)} for this one — "
                 "it only happens once per episode.</i>"
             )
-        if indexed is None and self._asr_slots.locked():
-            opening += "\n\n⏳ <i>Queued behind another episode…</i>"
-
         progress = StatusEditor(
             await update.effective_message.reply_text(opening, parse_mode="HTML")
         )
@@ -790,31 +821,24 @@ class PodcastCutterBot:
         # anticipate still reaches the journal as a failure, not as a search
         # that worked. `_perform_cut` learned this first.
         outcome = "failed"
-        job_dir = self.settings.work_dir / f"asr-{episode.id}"
         try:
-            async def acquire_transcript() -> int:
-                return await self.indexer.transcript_id(
+            if indexed is not None or self.listening is None:
+                # Already searchable: milliseconds, and it must not stand in
+                # line behind somebody else's half-hour first listen. (The
+                # queue is also absent when there is no store to hold it, in
+                # which case this is the only path there is.)
+                transcript = await self.indexer.transcript_id(
                     episode.id,
                     episode.enclosure_url,
-                    job_dir,
+                    self.settings.work_dir / f"asr-{episode.id}",
                     on_progress,
                     meta={
                         "episode_title": episode.title,
                         "feed_title": episode.feed_title,
                     },
                 )
-
-            if indexed is not None:
-                # Already searchable: milliseconds, and it must not stand in
-                # line behind somebody else's half-hour first listen.
-                transcript = await acquire_transcript()
             else:
-                self._asr_waiting += 1
-                try:
-                    async with self._asr_slots:
-                        transcript = await acquire_transcript()
-                finally:
-                    self._asr_waiting -= 1
+                transcript = await self._wait_in_line(update, episode, on_progress)
             session.moments = await self.indexer.search(transcript, phrase)
             outcome = "ok" if session.moments else "empty"
         except PodcastCutterError as exc:
@@ -824,7 +848,6 @@ class PodcastCutterBot:
             await self._show_failure(update, session, exc.user_message)
             return
         finally:
-            shutil.rmtree(job_dir, ignore_errors=True)
             await self._log(
                 update,
                 "search_audio",
@@ -839,6 +862,68 @@ class PodcastCutterBot:
         session.awaiting = Awaiting.NOTHING
         session.go(Screen.MOMENTS)
         await progress.show(self.view_for(session))
+
+    async def _wait_in_line(self, update: Update, episode: Episode, on_progress) -> int:
+        """Queue this episode for a first listen and wait for the transcript.
+
+        The wait is given up on release, not the work: the job belongs to the
+        queue now, so a caller that goes away — this handler cancelled, the
+        process restarted — leaves an episode that still gets listened to and
+        an answer that arrives as a message instead.
+        """
+        user = update.effective_user
+        chat = update.effective_message.chat_id if update.effective_message else 0
+        ticket = await self.listening.submit(
+            episode, user.id if user else 0, chat, on_progress
+        )
+        try:
+            return await ticket.done
+        finally:
+            self.listening.release(ticket)
+
+    async def notify_listened(self, job, transcript_id: int | None) -> None:
+        """Tell someone their episode is ready, when nothing else can.
+
+        Reached only when the asker is no longer waiting — in practice, when
+        the bot restarted while their episode was in line. Their session is
+        gone with the process (sessions are a two-minute working set and are
+        deliberately not persisted), so this cannot put the moments back on
+        screen. It can say the expensive part is done and hand over a link
+        that reopens the episode, where the search is now instant.
+        """
+        if self.telegram is None:
+            return
+        title = truncate(job.episode_title or "that episode", 80)
+        if transcript_id is None:
+            text = (
+                f"⚠️ I could not finish listening to <b>{esc(title)}</b>. "
+                "Ask again and I will retry it."
+            )
+            markup = None
+        else:
+            text = (
+                f"✅ I have finished listening to <b>{esc(title)}</b> — "
+                "searching inside it is instant now.\n\n"
+                "<i>Your place in the chat was lost when I restarted, so open "
+                "it again and ask for the phrase.</i>"
+            )
+            markup = kb.open_episode(self.episode_link(job.episode_id))
+        with contextlib.suppress(TelegramError):
+            await self.telegram.send_message(
+                job.chat_id, text, parse_mode="HTML", reply_markup=markup
+            )
+        if self.store is not None:
+            await self.store.record(
+                Event(
+                    action="listened",
+                    user_id=job.user_id,
+                    outcome="ok" if transcript_id is not None else "failed",
+                    episode_id=job.episode_id,
+                    episode_title=job.episode_title,
+                    feed_title=job.feed_title,
+                    detail="resumed",
+                )
+            )
 
     async def _open_moment(
         self, update: Update, session: Session, start: int

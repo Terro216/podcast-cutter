@@ -109,17 +109,21 @@ def sweep_work_dir(settings: Settings) -> None:
     """Delete job directories left behind by a crash or a kill.
 
     Each cut cleans up after itself, but a hard stop mid-job leaks one
-    directory, and nothing else would ever remove it.
+    directory, and nothing else would ever remove it. Transcription directories
+    are swept too, and they are the expensive kind: one holds a whole episode.
+    A queued job resumed after the restart re-downloads into the same path, so
+    a half-finished download is worth removing rather than inheriting.
     """
     work_dir = settings.work_dir
     if not work_dir.is_dir():
         return
 
     removed = 0
-    for leftover in work_dir.glob("cut-*"):
-        if leftover.is_dir():
-            shutil.rmtree(leftover, ignore_errors=True)
-            removed += 1
+    for pattern in ("cut-*", "asr-*"):
+        for leftover in work_dir.glob(pattern):
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+                removed += 1
     if removed:
         logger.info("Removed %d leftover job director%s",
                     removed, "y" if removed == 1 else "ies")
@@ -196,6 +200,7 @@ async def _on_startup(application: Application) -> None:
             purged,
             settings.log_retention_days,
         )
+    await store.purge_asr_jobs(settings.log_retention_days)
 
     await _report_media_proxy(bot, store, settings)
 
@@ -205,6 +210,13 @@ async def _on_startup(application: Application) -> None:
         bot.bot_username = me.username or ""
     except TelegramError as exc:
         logger.warning("Could not read the bot's own username: %s", exc)
+
+    # After the username, because a resumed job answers with a deep link that
+    # needs it, and before polling starts, so the line is already moving when
+    # the first new request arrives.
+    if bot.listening is not None:
+        bot.telegram = application.bot
+        await bot.listening.resume()
 
     try:
         await application.bot.set_my_commands(
@@ -244,6 +256,11 @@ async def _on_startup(application: Application) -> None:
 
 
 async def _on_shutdown(application: Application) -> None:
+    bot: PodcastCutterBot = application.bot_data["bot"]
+    if bot.listening is not None:
+        # Stopped, not drained: a job in progress stays `running` in the
+        # database, which is exactly what the next start looks for.
+        await bot.listening.stop()
     client: PodcastIndexClient = application.bot_data["api_client"]
     await client.aclose()
     store: Store = application.bot_data["store"]

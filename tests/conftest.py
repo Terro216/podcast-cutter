@@ -42,8 +42,11 @@ def make_episode(
 class FakeMessage:
     """Records what the bot said instead of sending it."""
 
-    def __init__(self, text: str = ""):
+    def __init__(self, text: str = "", chat_id: int = 500):
         self.text = text
+        #: Carried because the listening queue records it: a job that outlives
+        #: the request has nothing but a chat id to answer through.
+        self.chat_id = chat_id
         self.replies: list[tuple[str, dict]] = []
         self.edits: list[tuple[str, dict]] = []
         #: Messages sent in reply to this one, in order.

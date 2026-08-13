@@ -35,6 +35,11 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
+| _this_ | the listening queue moves into SQLite; a wait has a number |
+| `e3b5785` | a Docker healthcheck that catches a wedged event loop |
+| `c6eaf56` | offsite backup to Yandex Disk, the arr/vaultwarden shape |
+| `e3bef37` | a transcription timeout no longer frees the model mid-decode |
+| `7483267` | ffmpeg no longer follows a redirect the address check never saw |
 | `fd7efcc` | small/speechkit baselines guarded by CI; the one honest 6.2% false hit |
 | `b414df8` | the small and speechkit fixtures; make_fixtures passes the basket's language |
 | `1ccc566` | SpeechKit as the second recogniser behind the one-method door |
@@ -59,7 +64,7 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**772 tests pass, ruff clean** (8 hybrid basket rows skip unless
+**792 tests pass, ruff clean** (8 hybrid basket rows skip unless
 `EMBED_MODEL_DIR` points at the converted model — §6 has the command).
 The answer key exists, the baselines are committed for all four transcript
 variants, and the model comparison table is done — see §3b.
@@ -319,7 +324,8 @@ maintainer needs in front of them.
 behind it. `transcripts.py` is everything between recognised speech and an
 answer — quarantine, 30 s windows at a 15 s stride, clustering, placement —
 and holds no model, so it runs in milliseconds. `indexer.py` is the pipeline
-and the search. `store.py` gained schema 3.
+and the search. `listening.py` is the durable queue in front of it — one
+episode at a time, from a line kept in SQLite. `store.py` gained schema 3.
 
 **A transcript belongs to the audio, not the episode.** Its identity is
 `(source_sha256, backend, model, chunker_version)`. Feeds insert
@@ -615,13 +621,34 @@ difference on the decoder rather than on the feed.
    kilobytes~~ — fixed; the bar now takes a unit renderer, and the
    embedding stage got a real bar of its own. (g) `MAX_CUT_SECONDS` below 60
    passes validation but the default clip is a fixed 60. (h)
-   `sweep_work_dir` removes only `cut-*`, so a crash mid-transcription
-   leaks an `asr-<id>` directory with a full episode in it.
-4. **Queues and abuse limits — largely done, two pieces remain.** Per-user
-   budgets on input/cuts/first-listens exist (see 3a), inline is covered,
-   transcription queues on its own slot and refuses when full. Not done:
-   the queue lives in memory, so a restart loses waiting jobs (§7 wants it
-   in SQLite), and a queued search says «queued», not its position number.
+   ~~`sweep_work_dir` removes only `cut-*`, so a crash mid-transcription
+   leaks an `asr-<id>` directory with a full episode in it.~~ **Fixed** with
+   the SQLite queue: the sweep covers `asr-*` too, which also stops a resumed
+   job from inheriting a half-finished download at the same path.
+4. ~~**Queues and abuse limits — largely done, two pieces remain.**~~
+   **Done.** Per-user budgets on input/cuts/first-listens exist (see 3a),
+   inline is covered, transcription has its own slot and refuses when full.
+   The last two pieces are now closed: the queue lives in `asr_jobs` in
+   SQLite, drained by a single worker (`listening.py`), and a waiting search
+   is told `2nd in line` rather than «queued». Three things about it worth
+   not rediscovering:
+   - **The line is of episodes, not of people.** Ten people wanting one
+     episode are one job and ten waiters, so a position number counts
+     episodes ahead and `MAX_ASR_QUEUE` caps episodes — joining a queued
+     episode is free, because it adds no work.
+   - **No `SCHEMA_VERSION` bump.** `_migrate` rebuilds `_DERIVED_TABLES`,
+     which includes `transcripts`; bumping 4→5 to add an unrelated table
+     would have thrown away every warmed transcript on production. The new
+     table arrives through `CREATE TABLE IF NOT EXISTS` instead, and it is
+     deliberately *not* in `_DERIVED_TABLES` — a future bump must not drop
+     the pending work this exists to protect.
+   - **A restart resumes the transcript, not the screen.** Sessions are not
+     persisted (§4), so a job that outlives its request finishes and sends a
+     message with a `?start=ep_…` link; the search after it is instant. Two
+     failed attempts and an episode is given up on, so one bad episode
+     cannot become a boot loop that re-downloads it every start. Still open
+     here: an **ETA** beside the position, which needs per-length history the
+     queue does not keep, and LRU eviction of old transcripts.
 5. ~~**Backups.** Nothing is backed up.~~ **Done and live (2026-08-13).**
    Encrypted restic → rclone-native-yandex, the cinemarr/vaultwarden shape:
    the SQLite database (`.backup`, verified against the live WAL, quick_check)

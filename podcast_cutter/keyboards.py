@@ -295,6 +295,16 @@ def result_keyboard(share_query: str) -> InlineKeyboardMarkup:
     )
 
 
+def open_episode(link: str) -> InlineKeyboardMarkup:
+    """One button, on a message the bot sent unprompted.
+
+    A deep link rather than callback data on purpose: the message it sits under
+    may outlive the session, the process, or both, and a `?start=ep_…` link is
+    the one route back into an episode that needs neither.
+    """
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🎧 Open it", url=link)]])
+
+
 def error_keyboard() -> InlineKeyboardMarkup:
     """Shown when a cut fails: retrying is usually worth one tap."""
     return InlineKeyboardMarkup(

@@ -198,6 +198,7 @@ podcast_cutter/
   asr.py                   the recogniser interface, faster-whisper behind it
   transcripts.py           quarantine, windowing, clustering, placement
   indexer.py               transcription pipeline and the search
+  listening.py             the durable queue of first listens
   evals.py                 the basket runner — how often search is wrong
   screens.py               pure state → (text, keyboard) renderers
   keyboards.py             menus, pagination, callback-data vocabulary
@@ -283,6 +284,22 @@ Transcription is minutes of CPU where a cut is seconds. `ASR_ENABLED=false`
 switches it off without stopping the bot, `cpuset` in `docker-compose.yml` pins
 it to physical cores of one socket, and everyone asking about the same episode
 shares one job rather than starting another.
+
+**The queue of first listens lives in SQLite, and it is a queue of episodes.**
+One episode is listened to at a time; everybody waiting on that one is served
+by the single job, so the position a person is shown — `2nd in line` rather
+than a bare "queued" — counts episodes ahead of theirs and not people. Being
+in the database rather than in memory is what makes a redeploy survivable:
+waiting jobs used to be discarded with the process, which threw away the most
+expensive thing the bot does in the operation it performs most often. On the
+way back up, anything left mid-flight is picked up from the front of the line.
+
+What a restart cannot restore is the screen. Sessions are a two-minute working
+set and are deliberately not persisted, so a job that outlives the request that
+made it finishes the transcript and says so in the chat, with a link back into
+the episode — where the search is now instant. An episode that fails twice in a
+row is given up on rather than retried forever, so one bad episode cannot turn
+into a boot loop that re-downloads it on every start.
 
 ### Where an episode URL is allowed to point
 

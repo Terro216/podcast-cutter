@@ -78,6 +78,42 @@ CREATE TABLE IF NOT EXISTS recents (
 );
 CREATE INDEX IF NOT EXISTS recents_user_at ON recents (user_id, at DESC);
 
+-- The first-listen queue.
+--
+-- Transcription is minutes of CPU, so a restart that forgets who was waiting
+-- throws away work nobody can see was lost. A row here is one *waiter*: the
+-- queue itself is of episodes, and everyone waiting on the same one is served
+-- by a single job, which is why `episode_id` is not unique.
+--
+-- `chat_id` is what makes a resumed job deliverable. A session does not
+-- survive a restart on purpose (no PicklePersistence — see HANDOFF §4), so a
+-- job that outlives the coroutine that asked for it finishes the transcript
+-- and says so in the chat; the search that follows is instant.
+--
+-- Note for whoever changes this table's shape: it is *not* in
+-- `_DERIVED_TABLES`, so the rebuild path in `_migrate` will not recreate it.
+-- It holds pending work rather than derived data, and dropping it would lose
+-- exactly what it exists to protect.
+CREATE TABLE IF NOT EXISTS asr_jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id    TEXT    NOT NULL,
+    audio_url     TEXT    NOT NULL,
+    episode_title TEXT,
+    feed_title    TEXT,
+    user_id       INTEGER NOT NULL,
+    chat_id       INTEGER NOT NULL,
+    -- queued → running → done | failed | abandoned
+    state         TEXT    NOT NULL DEFAULT 'queued',
+    -- Counted so a job that kills the bot cannot be retried forever: a crash
+    -- loop that re-downloads an episode every boot is worse than one lost job.
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    at            REAL    NOT NULL,
+    started_at    REAL,
+    finished_at   REAL,
+    outcome       TEXT
+);
+CREATE INDEX IF NOT EXISTS asr_jobs_state ON asr_jobs (state, id);
+
 -- Transcripts.
 --
 -- Keyed on the SHA-256 of the bytes actually fetched, not on the episode id.
@@ -254,6 +290,51 @@ class Event:
     size_bytes: int | None = None
     ms: int | None = None
     detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AsrJob:
+    """One person waiting for one episode to be listened to."""
+
+    id: int
+    episode_id: str
+    audio_url: str
+    episode_title: str | None
+    feed_title: str | None
+    user_id: int
+    chat_id: int
+    attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class AsrBatch:
+    """One transcription and everyone it will answer."""
+
+    episode_id: str
+    jobs: list[AsrJob]
+
+    @property
+    def head(self) -> AsrJob:
+        """The waiter whose request describes the work — they all agree on the
+        episode, and the first one asked."""
+        return self.jobs[0]
+
+    @property
+    def ids(self) -> list[int]:
+        return [job.id for job in self.jobs]
+
+
+def _as_job(row: sqlite3.Row) -> AsrJob:
+    return AsrJob(
+        id=int(row["id"]),
+        episode_id=row["episode_id"],
+        audio_url=row["audio_url"],
+        episode_title=row["episode_title"],
+        feed_title=row["feed_title"],
+        user_id=int(row["user_id"]),
+        chat_id=int(row["chat_id"]),
+        attempts=int(row["attempts"]),
+    )
 
 
 @dataclass
@@ -742,6 +823,156 @@ class Store:
                 )
             )
         return result
+
+    # ------------------------------------------------------------------
+    # The first-listen queue
+    # ------------------------------------------------------------------
+
+    async def enqueue_asr_job(
+        self, episode: Episode, user_id: int, chat_id: int
+    ) -> int:
+        """Record that this person is waiting for this episode.
+
+        The episode is copied in rather than referenced, because the job has to
+        be runnable by a process that never saw the session it came from.
+        """
+        rows = await self._run(
+            """
+            INSERT INTO asr_jobs (
+                episode_id, audio_url, episode_title, feed_title,
+                user_id, chat_id, state, at
+            ) VALUES (?,?,?,?,?,?, 'queued', ?)
+            RETURNING id
+            """,
+            (
+                episode.id,
+                episode.enclosure_url,
+                _clip(episode.title),
+                _clip(episode.feed_title),
+                user_id,
+                chat_id,
+                time.time(),
+            ),
+        )
+        return int(rows[0]["id"])
+
+    async def claim_asr_batch(self, max_attempts: int = 2) -> AsrBatch | None:
+        """Take the oldest queued episode, with everyone waiting on it.
+
+        One episode, not one row: ten people asking about the same popular
+        episode must produce one transcription and ten waiters, and a queue
+        that made them ten jobs would report a ten-deep line for one episode's
+        worth of work.
+
+        Called only from the single worker, so the read and the update need no
+        transaction beyond the connection's own.
+        """
+        head = await self._run(
+            """
+            SELECT episode_id FROM asr_jobs
+            WHERE state = 'queued' AND attempts < ?
+            ORDER BY id LIMIT 1
+            """,
+            (max_attempts,),
+        )
+        if not head:
+            return None
+        episode_id = head[0]["episode_id"]
+
+        await self._run(
+            """
+            UPDATE asr_jobs
+            SET state = 'running', attempts = attempts + 1, started_at = ?
+            WHERE state = 'queued' AND episode_id = ?
+            """,
+            (time.time(), episode_id),
+        )
+        rows = await self._run(
+            "SELECT * FROM asr_jobs WHERE state = 'running' AND episode_id = ? "
+            "ORDER BY id",
+            (episode_id,),
+        )
+        return AsrBatch(
+            episode_id=episode_id,
+            jobs=[_as_job(row) for row in rows],
+        )
+
+    async def finish_asr_jobs(
+        self, job_ids: Iterable[int], state: str, outcome: str | None = None
+    ) -> None:
+        ids = list(job_ids)
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        await self._run(
+            f"UPDATE asr_jobs SET state = ?, finished_at = ?, outcome = ? "
+            f"WHERE id IN ({placeholders})",
+            (state, time.time(), outcome, *ids),
+        )
+
+    async def requeue_running_asr_jobs(self) -> int:
+        """Put jobs interrupted by a restart back in line.
+
+        A `running` row at startup means the process died holding it — nothing
+        else can write that state — so it is picked up again from the top. The
+        attempt counter already charged for the first try, which is what stops
+        an episode that crashes the bot from doing it forever.
+        """
+        rows = await self._run(
+            "UPDATE asr_jobs SET state = 'queued' WHERE state = 'running' "
+            "RETURNING id"
+        )
+        return len(rows)
+
+    async def abandon_exhausted_asr_jobs(self, max_attempts: int = 2) -> list[AsrJob]:
+        """Jobs that have used up their retries, taken out of the queue."""
+        rows = await self._run(
+            "SELECT * FROM asr_jobs WHERE state = 'queued' AND attempts >= ? "
+            "ORDER BY id",
+            (max_attempts,),
+        )
+        jobs = [_as_job(row) for row in rows]
+        await self.finish_asr_jobs(
+            (job.id for job in jobs), "abandoned", "attempts"
+        )
+        return jobs
+
+    async def asr_queue_episodes(self) -> list[str]:
+        """Episodes in the queue right now, in the order they will be served.
+
+        Distinct, because that is what a position number has to count: being
+        told "third in line" when the two ahead are the same episode as each
+        other is a wrong number, not a rounded one.
+        """
+        rows = await self._run(
+            """
+            SELECT episode_id, min(id) AS head FROM asr_jobs
+            WHERE state IN ('queued', 'running')
+            GROUP BY episode_id ORDER BY head
+            """
+        )
+        return [row["episode_id"] for row in rows]
+
+    async def asr_jobs_for(self, episode_id: str) -> list[AsrJob]:
+        """Everyone currently waiting on one episode."""
+        rows = await self._run(
+            "SELECT * FROM asr_jobs WHERE episode_id = ? "
+            "AND state IN ('queued', 'running') ORDER BY id",
+            (episode_id,),
+        )
+        return [_as_job(row) for row in rows]
+
+    async def purge_asr_jobs(self, older_than_days: int) -> int:
+        """Drop finished queue rows. Shares the journal's retention window."""
+        if older_than_days <= 0:
+            return 0
+        cutoff = time.time() - older_than_days * 86400
+        rows = await self._run(
+            "DELETE FROM asr_jobs WHERE state NOT IN ('queued', 'running') "
+            "AND at < ? RETURNING id",
+            (cutoff,),
+        )
+        return len(rows)
 
     # ------------------------------------------------------------------
     # Recent episodes
