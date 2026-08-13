@@ -536,17 +536,22 @@ difference on the decoder rather than on the feed.
    and mention `distinct` undercounting; (b) `locate_phrase` places the clip
    on the first occurrence of *any* query word, including «в»/"to", and also
    searches quarantined utterances — a query with a common word can open up
-   to a window early; (c) an ASR timeout in `indexer._transcribe` releases
-   `LocalWhisper._lock` while the un-cancellable `to_thread` worker is still
-   decoding, so a retry runs two transcriptions on one `WhisperModel`; (d)
-   `NORMALIZER_VERSION` is written to the row but never compared at search
-   time, so bumping it (or losing pymorphy3 in one environment) silently
-   splits the lemma index and the lemma query into different languages; (e)
-   `Indexer.transcript_id`'s episode-id fast path never re-checks the audio
-   hash, which is the one place the dynamic-ad guarantee does not hold
-   end-to-end; (f) two episode ids serving identical bytes can race into an
-   `IntegrityError` after a full transcription; temp files leak on the
-   timeout path. Fix (a) and (b) first — the baskets will show both moving.
+   to a window early; ~~(c) an ASR timeout releases `LocalWhisper._lock`
+   while the worker still decodes~~ **fixed** (`e3bef37`): the lock is held
+   until the worker thread actually finishes, so a post-timeout retry waits
+   rather than starting a second decode on the same model; a test drives the
+   sequence; (d) `NORMALIZER_VERSION` is written to the row but never compared
+   at search time, so bumping it (or losing pymorphy3 in one environment)
+   silently splits the lemma index and the lemma query into different
+   languages; (e) `Indexer.transcript_id`'s episode-id fast path never
+   re-checks the audio hash, which is the one place the dynamic-ad guarantee
+   does not hold end-to-end — note the honest fix (re-fetch + re-hash every
+   search) would cost the instant-search property, so this is a tradeoff to
+   decide, not a bug to squash; (f) two episode ids serving identical bytes
+   can race into an `IntegrityError` after a full transcription; ~~temp files
+   leak on the timeout path~~ **fixed** in `e3bef37` (the decoded WAV is
+   unlinked on the timeout path too). Fix (a) and (b) next — the baskets will
+   show both moving.
 2. **English morphology — the lemma column is inert, not inaccurate.** Checked
    rather than assumed: `lemmatize("proteins folding rapidly")` returns the
    string unchanged, and so do `investors`, `companies`, `studies`. pymorphy3's
@@ -573,11 +578,15 @@ difference on the decoder rather than on the feed.
    `RATE_INPUT_PER_MINUTE` / `RATE_CUTS_PER_HOUR` / `RATE_ASR_PER_DAY`,
    0 = off, admins exempt, refusals journalled as `action=limit`. Still
    open from the same review: (b) the SSRF guard checks addresses before
-   the cut, but
-   the ffmpeg fetch that follows can follow an HTTP redirect to anywhere —
-   a host that answers the probe politely can 302 ffmpeg into
-   `169.254.169.254`; DNS rebinding gives the same result without the
-   redirect. (c) ~~feeds pagination re-rendering page 1~~ — fixed: a page
+   the cut. The **redirect half is fixed** (`7483267`): `-max_redirects 0`
+   on every remote ffmpeg/ffprobe input, so a host that answers resolution
+   politely can no longer 302 ffmpeg into `169.254.169.254` after the check
+   passed — reproduced on ffmpeg 7.1.5 (a default ffprobe *did* connect to
+   the metadata address) and pinned by a test that probes a redirecting URL
+   directly. **Still open: DNS rebinding** — the same host resolving public
+   for the guard and private for ffmpeg's own second resolution; closing it
+   needs the validated address pinned into the fetch, fragile for https, so
+   it is a separate phase. (c) ~~feeds pagination re-rendering page 1~~ — fixed: a page
    flip on FEEDS now fetches that page through `_search_feeds`. (d)
    `‹ Back` restores a prompt screen without restoring `awaiting`, so
    typing into a restored "send a phrase" prompt runs a podcast-name
