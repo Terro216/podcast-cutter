@@ -241,6 +241,17 @@ def _protocol_args(source: str | Path) -> list[str]:
     rather than a fix for an open one. Placed before ``-i``, it constrains the
     input only: the output is still written through the file protocol, which
     was verified rather than assumed.
+
+    ``-max_redirects 0`` is the SSRF lock that the address check alone cannot
+    provide. :func:`ensure_safe_source` validates every hop of the chain that
+    *httpx* follows and hands ffmpeg the final resolved URL — but ffmpeg would
+    otherwise follow redirects of its own, which nothing validated. Measured on
+    this host's ffmpeg 7.1.5: a source answering ``302 Location:
+    169.254.169.254`` made a default ffprobe connect straight to the metadata
+    address; with ``0`` it refuses the redirect instead. The resolved URL is
+    already past every redirect httpx saw, so a well-behaved host serves it 200
+    and this costs nothing; a host that still redirects fails attempt 1 and
+    falls to the download path, where httpx re-validates the new hop.
     """
     if str(source).startswith(("http://", "https://")):
         return [
@@ -248,6 +259,8 @@ def _protocol_args(source: str | Path) -> list[str]:
             _BROWSERISH_USER_AGENT,
             "-protocol_whitelist",
             _REMOTE_PROTOCOLS,
+            "-max_redirects",
+            "0",
         ]
     return ["-protocol_whitelist", _LOCAL_PROTOCOLS]
 

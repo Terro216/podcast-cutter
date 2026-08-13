@@ -136,6 +136,15 @@ class _AudioHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        # A host that answers httpx's resolution politely but 302s the fetch
+        # that follows — the SSRF vector `-max_redirects 0` closes. The target
+        # is an absolute off-limits URL so following it would be the bug.
+        if path.startswith("evil-redirect/"):
+            self.send_response(302)
+            self.send_header("Location", "http://169.254.169.254/latest/")
+            self.end_headers()
+            return
+
         target = self._directory / path
         if not target.is_file():
             self.send_error(404, "Not Found")
@@ -322,6 +331,19 @@ class TestCutting:
         # Podcast CDNs almost always front the audio with tracking redirects.
         result = cut(f"{audio_server}/redirect/a.mp3", 0, 5, tmp_path / "redir")
         assert result.size > 0
+
+    def test_ffmpeg_itself_does_not_follow_a_redirect(self, audio_server):
+        """The SSRF lock, at the layer it has to hold.
+
+        httpx resolves the redirect chain and validates every hop, then hands
+        ffmpeg the *final* URL. If ffmpeg followed redirects of its own — as it
+        does by default — a host could 302 it to the metadata address after the
+        address check had already passed. `probe` is called directly here,
+        bypassing httpx resolution, so what it exercises is ffmpeg's own
+        behaviour: with `-max_redirects 0` it must refuse rather than follow.
+        """
+        info = asyncio.run(probe(f"{audio_server}/evil-redirect/a.mp3", timeout=30))
+        assert info.codec is None
 
     def test_falls_back_to_transcoding_when_no_container_fits(
         self, audio_server, tmp_path, monkeypatch
