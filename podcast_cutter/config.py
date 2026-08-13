@@ -191,6 +191,17 @@ class Settings:
         return self.data_dir / "logs" / "bot.log"
 
     @property
+    def heartbeat_path(self) -> Path:
+        """A liveness marker the running bot keeps fresh.
+
+        A repeating job rewrites it on the event loop, so a stale file means
+        the loop has wedged — which is exactly what a `pgrep`-style healthcheck
+        cannot tell apart from a healthy idle bot. On the volume so the
+        healthcheck, which runs in the same container, can read it.
+        """
+        return self.data_dir / "health" / "heartbeat"
+
+    @property
     def asr_model_dir(self) -> Path:
         """Where recognition models live.
 

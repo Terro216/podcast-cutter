@@ -13,6 +13,16 @@ services:
       - podcast-data:/data
     environment:
       DATA_DIR: /data
+    # Liveness by heartbeat, not by `pgrep`: the bot rewrites
+    # /data/health/heartbeat from a job on the event loop, and this fails once
+    # it goes stale — the one thing a process-alive check cannot see is a
+    # wedged loop. start_period covers model loading on a cold start.
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     # Transcription is the only thing here that can take a machine. This host
     # is shared and dual-socket, and `--cpus`-style quotas let threads wander
     # between sockets and onto SMT siblings of cores already in use; pinning to

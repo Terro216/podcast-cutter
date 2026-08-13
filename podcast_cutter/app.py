@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from logging.handlers import RotatingFileHandler
 
 from telegram import BotCommand, MenuButtonCommands, Update
@@ -19,6 +20,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
+    ContextTypes,
     InlineQueryHandler,
     MessageHandler,
     filters,
@@ -160,6 +162,28 @@ async def _report_media_proxy(
     )
 
 
+#: How often the liveness heartbeat is rewritten. The healthcheck allows a few
+#: missed beats before declaring the container unhealthy — see
+#: docker-compose.yml — so this is comfortably shorter than that window.
+HEARTBEAT_INTERVAL = 60
+
+
+def _touch_heartbeat(settings: Settings) -> None:
+    """Rewrite the liveness marker. Never raises into the event loop: a bot
+    that cannot write its heartbeat should keep answering, and the healthcheck
+    going stale is itself the signal."""
+    try:
+        path = settings.heartbeat_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(time.time()))
+    except OSError as exc:
+        logger.debug("Could not write heartbeat: %s", exc)
+
+
+async def _heartbeat_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    _touch_heartbeat(context.application.bot_data["settings"])
+
+
 async def _on_startup(application: Application) -> None:
     bot: PodcastCutterBot = application.bot_data["bot"]
     store: Store = application.bot_data["store"]
@@ -201,6 +225,20 @@ async def _on_startup(application: Application) -> None:
         )
     except TelegramError as exc:
         logger.warning("Could not publish the bot's description: %s", exc)
+
+    # Write one immediately so the container is healthy the moment startup
+    # finishes, then keep it fresh from the event loop. A wedged loop stops
+    # rewriting it, which is the failure a process-alive check cannot see.
+    _touch_heartbeat(settings)
+    if application.job_queue is not None:
+        application.job_queue.run_repeating(
+            _heartbeat_job,
+            interval=HEARTBEAT_INTERVAL,
+            first=HEARTBEAT_INTERVAL,
+            name="heartbeat",
+        )
+    else:
+        logger.warning("No job queue available; liveness heartbeat is disabled")
 
     logger.info("Bot started as @%s", bot.bot_username or "unknown")
 

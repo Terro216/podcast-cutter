@@ -33,6 +33,9 @@ RUN poetry install --only main --no-root --no-ansi \
 # Copy just what the bot runs, rather than the whole context.
 COPY podcast_cutter/ ./podcast_cutter/
 COPY main.py ./
+# The Docker healthcheck runs inside this image; it needs the script but
+# nothing else under scripts/ (those are dev/ops tools that run elsewhere).
+COPY scripts/healthcheck.py ./scripts/healthcheck.py
 
 # Scratch space for in-flight cuts, and the mount point for durable state.
 # /data must exist and be owned by `bot` in the image: a named volume inherits
