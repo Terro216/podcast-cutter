@@ -543,15 +543,19 @@ difference on the decoder rather than on the feed.
    fully-corrected episodes from §16's method have not happened. Until then a
    reference timestamp is only as good as large-v3's text. `scripts/
    draft_queries.py --verify` prints exactly what to listen to.
-1a. **A full review (2026-08-12) left documented defects in the search path,
-   deliberately unfixed until the baselines above could price them.** In value
-   order: (a) `cluster()` compares window *edges*, not moment positions, so
-   two genuinely distinct moments 40–75 s apart chain into one cluster and
-   the weaker one becomes unfindable — visible today as `ls-t1` ranking 3rd
-   and mention `distinct` undercounting; (b) `locate_phrase` places the clip
-   on the first occurrence of *any* query word, including «в»/"to", and also
-   searches quarantined utterances — a query with a common word can open up
-   to a window early; ~~(c) an ASR timeout releases `LocalWhisper._lock`
+1a. **A full review (2026-08-12) left documented defects in the search path.**
+   In value order: ~~(a) `cluster()` compares window *edges*, not moment
+   positions~~ and ~~(b) `locate_phrase` places the clip on the first
+   occurrence of *any* query word and searches quarantined utterances~~ —
+   **both already fixed in `f9b84ce`** (cluster compares starts; placement
+   filters to indexable utterances and to words ≥3 chars). The `ls-t1`
+   ranking-3rd symptom attributed to (a) was **misdiagnosed**: a 2026-08-13
+   diagnostic showed clustering working (20 raw hits → 15 distinct moments),
+   and the two top moments it "misses" (42:15, 46:46) are *real* «Кофлан»
+   mentions — the word is spoken 13× in the reference but `ls-t1`'s `at:`
+   lists only 8. That is answer-key incompleteness (the owed by-ear pass,
+   item 1), not a search bug. Still genuinely open: ~~(c) an ASR timeout
+   releases `LocalWhisper._lock`
    while the worker still decodes~~ **fixed** (`e3bef37`): the lock is held
    until the worker thread actually finishes, so a post-timeout retry waits
    rather than starting a second decode on the same model; a test drives the
