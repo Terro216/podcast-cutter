@@ -13,6 +13,8 @@ __pycache__
 .ruff_cache
 tests
 scripts
+# …except the one script the runtime image needs: the Docker healthcheck.
+!scripts/healthcheck.py
 docs
 *.md
 !README.md
