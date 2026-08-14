@@ -908,9 +908,18 @@ class PodcastCutterBot:
                 "it again and ask for the phrase.</i>"
             )
             markup = kb.open_episode(self.episode_link(job.episode_id))
-        with contextlib.suppress(TelegramError):
+        try:
             await self.telegram.send_message(
                 job.chat_id, text, parse_mode="HTML", reply_markup=markup
+            )
+        except TelegramError as exc:
+            # Logged rather than swallowed: this is the only message the bot
+            # ever sends unprompted, so a chat that blocks it is the one case
+            # where a finished transcript reaches nobody, and silence here
+            # would make that indistinguishable from a queue that never ran.
+            logger.warning(
+                "Could not tell %s that %s is ready: %s", job.chat_id,
+                job.episode_id, exc,
             )
         if self.store is not None:
             await self.store.record(
