@@ -205,6 +205,73 @@ class TestWhenNobodyIsWaiting:
         assert await store.transcript_for_episode("10") is not None
 
 
+class TestTellingSomebodyAfterARestart:
+    """The delivery path itself, not a stand-in for it. Everything here — the
+    bot's own username, the deep link, the markup — is only assembled when a
+    job outlives its request, which is to say on the one path nobody exercises
+    by hand."""
+
+    class FakeTelegram:
+        def __init__(self):
+            self.sent: list[tuple[int, str, dict]] = []
+
+        async def send_message(self, chat_id, text, **kwargs):
+            self.sent.append((chat_id, text, kwargs))
+
+    async def test_the_message_carries_a_link_back_into_the_episode(
+        self, bot, store
+    ):
+        telegram = self.FakeTelegram()
+        bot.telegram = telegram
+        await store.enqueue_asr_job(make_episode("10"), user_id=7, chat_id=99)
+        batch = await store.claim_asr_batch()
+
+        await bot.notify_listened(batch.head, transcript_id=1)
+
+        chat_id, text, options = telegram.sent[0]
+        assert chat_id == 99
+        assert "Episode 10" in text
+        button = options["reply_markup"].inline_keyboard[0][0]
+        # A deep link, not callback data: the session it would have needed is
+        # what the restart destroyed.
+        assert button.url == "https://t.me/podcast_cutter_bot?start=ep_10"
+
+    async def test_a_failure_says_so_and_offers_no_link(self, bot, store):
+        telegram = self.FakeTelegram()
+        bot.telegram = telegram
+        await store.enqueue_asr_job(make_episode("10"), user_id=7, chat_id=99)
+        batch = await store.claim_asr_batch()
+
+        await bot.notify_listened(batch.head, transcript_id=None)
+
+        _, text, options = telegram.sent[0]
+        assert "could not" in text
+        assert options["reply_markup"] is None
+
+    async def test_it_is_journalled(self, bot, store):
+        bot.telegram = self.FakeTelegram()
+        await store.enqueue_asr_job(make_episode("10"), user_id=7, chat_id=99)
+        batch = await store.claim_asr_batch()
+
+        await bot.notify_listened(batch.head, transcript_id=1)
+
+        rows = store._execute(
+            "SELECT user_id, outcome, detail FROM events WHERE action = 'listened'"
+        )
+        assert rows[0]["user_id"] == 7
+        assert rows[0]["outcome"] == "ok"
+        assert rows[0]["detail"] == "resumed"
+
+    async def test_no_bot_to_talk_through_is_survivable(self, bot, store):
+        """Reached if a job finishes before startup finished wiring things up.
+        Losing the message is a shame; crashing the worker is worse."""
+        bot.telegram = None
+        await store.enqueue_asr_job(make_episode("10"), user_id=7, chat_id=99)
+        batch = await store.claim_asr_batch()
+
+        await bot.notify_listened(batch.head, transcript_id=1)
+
+
 class TestFailure:
     async def test_the_reason_reaches_the_person_who_asked(
         self, settings, store, indexer, notes
