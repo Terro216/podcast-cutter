@@ -35,6 +35,18 @@
 > upload timeout — a 120 s read timeout expired once; the bot already uses
 > 300. Renders run in the cut pool (`_job_slots`), not in the listening
 > queue, by decision — the reasoning is recorded in ROADMAP §6.
+>
+> **Runtime note, 2026-08-14, night (`cc97ad8`).** User feedback landed and
+> was right: the first layout died at the circle's edge — clients crop a
+> note to the inscribed circle, and the title and full-width progress bar
+> lost their ends. Reworked: a dedicated round layout (verified by rendering
+> frames and viewing them under a `geq` circle mask — technique worth
+> keeping), the circle and the square video split into two user-picked
+> formats with no silent conversion, and three meme skins (party / VHS /
+> matrix; `fscale=log` on matrix is load-bearing — see ROADMAP §6).
+> Redeployed with a fresh snapshot, container healthy; a round VHS note
+> from the warmed episode rendered in 7.6 s / 5.6 MB and arrived as
+> message_id 1107. 844 tests, ruff clean.
 
 Working notes for whoever picks this up. `README.md` describes the project as
 it is, `ROADMAP.md` where it is going and why; this file records **where we
