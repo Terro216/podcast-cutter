@@ -233,9 +233,13 @@ def _canvas(
         # ``fscale=log`` matters more than it looks: speech lives below
         # ~4 kHz, and on a linear axis the whole picture huddles in the
         # bottom rows — which the circle crop then cuts off entirely.
+        # ``drange`` is the calm: the default 120 dB window renders the noise
+        # floor as flickering speckle over the whole frame, and 48 dB keeps
+        # the speech bands while the background stays black.
         graph = (
             f"[0:a]showspectrum=s={size}x{size}:mode=combined"
-            ":color=intensity:scale=sqrt:fscale=log:slide=scroll[sp];"
+            ":color=intensity:scale=sqrt:fscale=log:slide=scroll"
+            ":drange=48[sp];"
             "[sp]colorchannelmixer=rr=0:bb=0[canvas];"
         )
         return graph, "0x33ff66@0.9", "0x33ff66", False
@@ -243,8 +247,11 @@ def _canvas(
     background, viz, bar_color, title_color = {
         SKIN_BARS: (
             "0x0d0d1a",
+            # ``averaging`` is what keeps the bars from twitching at frame
+            # rate: raw per-frame spectra jump so hard the picture reads as
+            # glitching rather than dancing.
             f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
-            ":colors=0x00e07c|0xffcc00",
+            ":averaging=8:colors=0x00e07c|0xffcc00",
             "0xffcc00@0.9",
             "white",
         ),
@@ -264,10 +271,10 @@ def _canvas(
         SKIN_PARTY: (
             "0x14001f",
             f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
-            # The hue cycles through the wheel every three seconds; applied
-            # to the visualiser only, so the text stays readable while the
-            # bars strobe.
-            ":colors=0xff4dd2|0x4dd2ff,hue=H=2*PI*t/3",
+            # The hue drifts through the wheel once every eight seconds —
+            # three felt like a strobe — and only on the visualiser, so the
+            # text stays readable while the bars cycle.
+            ":averaging=8:colors=0xff4dd2|0x4dd2ff,hue=H=2*PI*t/8",
             "0xff4dd2@0.9",
             "white",
         ),
@@ -275,8 +282,11 @@ def _canvas(
             "0x0b0b12",
             # sqrt lifts quiet passages: a waveform of ordinary speech on a
             # linear scale is a thin line pretending the tape is blank.
+            # tmix is the phosphor: three frames averaged turn the raw
+            # per-frame waveform — which jumps too hard to follow — into a
+            # trailing glow that reads as a CRT instead of a glitch.
             f"showwaves=s={viz_w}x{viz_h}:mode=cline:scale=sqrt"
-            ":colors=0xd8d8f0",
+            ":colors=0xd8d8f0,tmix=frames=3",
             "white@0.8",
             "white",
         ),
@@ -290,10 +300,13 @@ def _canvas(
     if skin == SKIN_VHS:
         # Tape damage goes on before the text, so the title stays legible
         # over the static, the scanlines and the smeared chroma.
+        # Tape damage, at a strength that reads as texture rather than a
+        # blizzard: the first cut used alls=17 and a 4-pixel chroma smear,
+        # and the verdict from the person watching was «слишком шумят».
         graph += (
-            "[canvas0]noise=alls=17:allf=t+u,"
+            "[canvas0]noise=alls=8:allf=t,"
             f"drawgrid=w={size}:h=3:t=1:c=black@0.3,"
-            "chromashift=crh=4:cbh=-4[canvas];"
+            "chromashift=crh=2:cbh=-2[canvas];"
         )
     else:
         graph += "[canvas0]null[canvas];"
