@@ -14,9 +14,10 @@ from telegram import InlineKeyboardMarkup
 from . import keyboards as kb
 from .api import Episode
 from .config import Settings
-from .states import Screen, Session
+from .states import FORMAT_NOTE, Screen, Session
 from .text import esc, format_duration, human_bytes, truncate
 from .transcripts import excerpt
+from .video import MAX_VIDEO_SECONDS, VIDEO_NOTE_SECONDS
 
 #: Separator used in the breadcrumb line.
 CRUMB = " › "
@@ -267,6 +268,22 @@ def interval(session: Session, settings: Settings) -> View:
         f"<code>12:30-14:00</code> for an exact range."
     )
 
+    # Telegram's limits on a video note change what is honest to promise, so
+    # the screen says which of the three cases the current length is in
+    # before the cut button finds out.
+    if session.send_as == FORMAT_NOTE:
+        if session.clip_length > MAX_VIDEO_SECONDS:
+            body += (
+                f"\n\n⚠️ <i>Video is capped at "
+                f"{format_duration(MAX_VIDEO_SECONDS)} — shorten the clip "
+                "or switch back to audio.</i>"
+            )
+        elif session.clip_length > VIDEO_NOTE_SECONDS:
+            body += (
+                "\n\n<i>A round video note fits one minute; this longer clip "
+                "will arrive as a square video instead.</i>"
+            )
+
     # Arriving from a search replaces the list of moments with this screen, so
     # say where the others went. `‹ Back` already returns to them; without this
     # line the only way to know is to try it, and a person who found three
@@ -282,7 +299,8 @@ def interval(session: Session, settings: Settings) -> View:
         kb.interval_keyboard(
             session.clip_length,
             max_length=settings.max_cut_seconds,
-            as_voice=session.as_voice,
+            send_as=session.send_as,
+            skin=session.skin,
             can_search=settings.asr_enabled,
         ),
     )

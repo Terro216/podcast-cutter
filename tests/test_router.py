@@ -277,10 +277,35 @@ class TestClipEditingCallbacks:
         assert (session.clip_start, session.clip_length) == (585, 60)
 
     async def test_the_format_toggle_flips(self, bot, context):
+        # The pre-video-note toggle; keyboards no longer offer it, but it
+        # lives on buttons on scrolled-past messages, which outlive keyboards.
         session = await self._open(bot, context)
         assert session.as_voice is False
         await tap(bot, context, kb.ACTION_TOGGLE_VOICE)
         assert session.as_voice is True
+
+    async def test_choosing_a_format(self, bot, context):
+        session = await self._open(bot, context)
+        await tap(bot, context, f"{kb.FORMAT_PREFIX}:note")
+        assert session.send_as == "note"
+        await tap(bot, context, f"{kb.FORMAT_PREFIX}:audio")
+        assert session.send_as == "audio"
+
+    async def test_an_unknown_format_changes_nothing(self, bot, context):
+        session = await self._open(bot, context)
+        await tap(bot, context, f"{kb.FORMAT_PREFIX}:hologram")
+        assert session.send_as == "audio"
+        assert session.current.screen is Screen.INTERVAL
+
+    async def test_choosing_a_skin(self, bot, context):
+        session = await self._open(bot, context)
+        await tap(bot, context, f"{kb.SKIN_PREFIX}:scope")
+        assert session.skin == "scope"
+
+    async def test_an_unknown_skin_changes_nothing(self, bot, context):
+        session = await self._open(bot, context)
+        await tap(bot, context, f"{kb.SKIN_PREFIX}:vaporwave")
+        assert session.skin == "bars"
 
     async def test_a_malformed_number_is_survived(self, bot, context):
         session = await self._open(bot, context)

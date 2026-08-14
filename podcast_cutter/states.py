@@ -31,6 +31,14 @@ _MAX_HISTORY = 12
 #: How many episodes the "Recent" list remembers.
 MAX_RECENTS = 10
 
+#: What a cut is delivered as. Strings rather than an enum because they ride
+#: in callback payloads (``fmt:note``) and the journal, where an enum's name
+#: would be serialised back to exactly this anyway.
+FORMAT_AUDIO = "audio"
+FORMAT_VOICE = "voice"
+FORMAT_NOTE = "note"
+FORMATS = (FORMAT_AUDIO, FORMAT_VOICE, FORMAT_NOTE)
+
 
 class Screen(Enum):
     """Where the user is."""
@@ -104,7 +112,13 @@ class Session:
     # -- clip --------------------------------------------------------------
     clip_start: int = 0
     clip_length: int = 60
-    as_voice: bool = False
+    #: One of :data:`FORMATS`. The old boolean grew a third value when video
+    #: notes arrived; ``as_voice`` below keeps the boolean question answerable.
+    send_as: str = FORMAT_AUDIO
+    #: Video-note skin. The value is a key of ``keyboards.SKIN_LABELS`` and of
+    #: ``video.SKINS`` — a test holds those two sets equal, so a bare string
+    #: here cannot quietly drift from either.
+    skin: str = "bars"
 
     # -- searching inside an episode ---------------------------------------
     #: The phrase last looked for, kept so the results screen can say what it
@@ -236,6 +250,17 @@ class Session:
     @property
     def clip_end(self) -> int:
         return self.clip_start + self.clip_length
+
+    @property
+    def as_voice(self) -> bool:
+        """Whether the clip goes out as a voice note. Kept as a property so
+        the journal's ``as_voice`` column and the delivery code did not have
+        to learn three-valued logic when the note format arrived."""
+        return self.send_as == FORMAT_VOICE
+
+    @as_voice.setter
+    def as_voice(self, value: bool) -> None:
+        self.send_as = FORMAT_VOICE if value else FORMAT_AUDIO
 
     # ------------------------------------------------------------------
     # Paging helpers

@@ -16,10 +16,11 @@ import pytest
 from conftest import FakeInlineUpdate, FakeUpdate, make_episode
 from podcast_cutter import handlers as handlers_mod
 from podcast_cutter import keyboards as kb
+from podcast_cutter import video as video_mod
 from podcast_cutter.audio import CutResult
 from podcast_cutter.errors import AudioError, TooLargeError
 from podcast_cutter.proxy import DIRECT, PROXY
-from podcast_cutter.states import Awaiting, Screen, get_session
+from podcast_cutter.states import FORMAT_NOTE, Awaiting, Screen, get_session
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,6 +52,18 @@ def stub_cut(
         return CutResult(path=path, size=size, transcoded=False, route=route)
 
     monkeypatch.setattr(handlers_mod, "cut_episode", fake_cut)
+
+
+def stub_render(monkeypatch, *, size=2048, record=None):
+    async def fake_render(audio, workdir, **kwargs):
+        if record is not None:
+            record.update(kwargs)
+            record["audio"] = audio
+        path = workdir / "note.mp4"
+        path.write_bytes(b"v" * size)
+        return path
+
+    monkeypatch.setattr(video_mod, "render_clip", fake_render)
 
 
 class TestDelivery:
@@ -91,6 +104,131 @@ class TestDelivery:
         await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
 
         assert record["voice"] is True
+
+    async def test_sends_a_video_note_when_asked(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_NOTE
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+
+        await bot.on_callback(update, context)
+
+        sent = update.effective_message.sent_video_note
+        assert sent is not None
+        assert sent["duration"] == 60
+        assert sent["length"] == video_mod.NOTE_SIZE
+        assert update.effective_message.sent_audio is None
+
+    async def test_a_clip_over_a_minute_arrives_as_a_square_video(
+        self, bot, context, ready, monkeypatch
+    ):
+        # Telegram refuses notes past sixty seconds; the clip still goes out,
+        # square, with its attribution in the caption.
+        ready.send_as = FORMAT_NOTE
+        ready.set_clip(600, 90)
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+
+        await bot.on_callback(update, context)
+
+        sent = update.effective_message.sent_video
+        assert sent is not None
+        assert sent["width"] == sent["height"] == video_mod.NOTE_SIZE
+        assert "Episode 10" in sent["caption"]
+        assert update.effective_message.sent_video_note is None
+
+    async def test_a_clip_past_the_video_cap_is_refused_before_any_work(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_NOTE
+        ready.set_clip(600, video_mod.MAX_VIDEO_SECONDS + 1)
+        record: dict = {}
+        stub_cut(monkeypatch, record=record)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+
+        await bot.on_callback(update, context)
+
+        assert "capped" in update.shown
+        assert record == {}
+
+    async def test_the_journal_records_the_note_and_its_skin(
+        self, bot, context, ready, monkeypatch, store
+    ):
+        ready.send_as = FORMAT_NOTE
+        ready.skin = "scope"
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch)
+
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+        row = store._execute(
+            "SELECT outcome, detail, as_voice FROM events WHERE action = 'cut'"
+        )[0]
+        assert (row["outcome"], row["detail"]) == ("ok", "note:scope")
+        assert not row["as_voice"]
+
+    async def test_no_transcript_means_no_subtitles_not_a_transcription(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_NOTE
+        record: dict = {}
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch, record=record)
+
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+        assert record["subtitles"] is None
+
+    async def test_a_warmed_transcript_becomes_subtitles(
+        self, bot, context, ready, monkeypatch, store
+    ):
+        from podcast_cutter.store import TranscriptKey
+        from podcast_cutter.transcripts import Utterance, build
+
+        await store.save_transcript(
+            TranscriptKey(
+                episode_id="10",
+                source_sha256="abc",
+                asr_backend="fake",
+                asr_model="test",
+                chunker_version=2,
+            ),
+            {"source_url": "u"},
+            build([Utterance(start=610, end=615, text="про фолдинг белков")]),
+        )
+        ready.send_as = FORMAT_NOTE
+        record: dict = {}
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch, record=record)
+
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+        lines = record["subtitles"]
+        assert lines and lines[0].text == "про фолдинг белков"
+        assert lines[0].start == pytest.approx(10.0)
+
+    async def test_a_render_failure_is_a_failed_cut_not_a_crash(
+        self, bot, context, ready, monkeypatch, store
+    ):
+        ready.send_as = FORMAT_NOTE
+        stub_cut(monkeypatch)
+
+        async def broken_render(audio, workdir, **kwargs):
+            raise AudioError("Could not render the video for this clip.")
+
+        monkeypatch.setattr(video_mod, "render_clip", broken_render)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+
+        await bot.on_callback(update, context)
+
+        assert "render" in update.shown
+        row = store._execute(
+            "SELECT outcome FROM events WHERE action = 'cut'"
+        )[0]
+        assert row["outcome"] == "audio_failed"
 
     async def test_tags_the_clip_with_its_own_metadata(
         self, bot, context, ready, monkeypatch

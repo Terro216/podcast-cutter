@@ -124,7 +124,7 @@ class TestChoiceKeyboard:
 
 class TestIntervalKeyboard:
     def test_offers_presets_moves_and_a_cut(self):
-        markup = kb.interval_keyboard(60, max_length=900, as_voice=False)
+        markup = kb.interval_keyboard(60, max_length=900)
         data = payloads(markup)
 
         assert f"{kb.LENGTH_PREFIX}:30" in data
@@ -133,7 +133,7 @@ class TestIntervalKeyboard:
         assert kb.ACTION_CUT in data
 
     def test_the_cut_button_is_the_primary_action(self):
-        markup = kb.interval_keyboard(60, max_length=900, as_voice=False)
+        markup = kb.interval_keyboard(60, max_length=900)
         cut = next(
             b
             for row in markup.inline_keyboard
@@ -143,7 +143,7 @@ class TestIntervalKeyboard:
         assert cut.style == kb.STYLE_PRIMARY
 
     def test_the_current_length_is_marked(self):
-        markup = kb.interval_keyboard(60, max_length=900, as_voice=False)
+        markup = kb.interval_keyboard(60, max_length=900)
         selected = [
             b
             for row in markup.inline_keyboard
@@ -154,24 +154,54 @@ class TestIntervalKeyboard:
 
     def test_presets_longer_than_the_limit_are_hidden(self):
         # Offering a button that always errors is worse than not offering it.
-        markup = kb.interval_keyboard(30, max_length=60, as_voice=False)
+        markup = kb.interval_keyboard(30, max_length=60)
         data = payloads(markup)
         assert f"{kb.LENGTH_PREFIX}:30" in data
         assert f"{kb.LENGTH_PREFIX}:300" not in data
 
-    @pytest.mark.parametrize("as_voice", [True, False])
-    def test_the_format_toggle_shows_the_current_choice(self, as_voice):
-        markup = kb.interval_keyboard(60, max_length=900, as_voice=as_voice)
-        toggle = next(
+    def test_offers_all_three_delivery_formats(self):
+        markup = kb.interval_keyboard(60, max_length=900)
+        data = payloads(markup)
+        for fmt in ("audio", "voice", "note"):
+            assert f"{kb.FORMAT_PREFIX}:{fmt}" in data
+
+    @pytest.mark.parametrize("send_as", ["audio", "voice", "note"])
+    def test_the_active_format_is_marked(self, send_as):
+        markup = kb.interval_keyboard(60, max_length=900, send_as=send_as)
+        active = next(
             b
             for row in markup.inline_keyboard
             for b in row
-            if b.callback_data == kb.ACTION_TOGGLE_VOICE
+            if b.callback_data == f"{kb.FORMAT_PREFIX}:{send_as}"
         )
-        assert ("voice" in toggle.text) is as_voice
+        assert active.text.startswith("●")
+        assert active.style == kb.STYLE_SUCCESS
+
+    def test_skins_appear_only_when_video_is_chosen(self):
+        # A permanent second row of decoration would bury the cut button
+        # under choices that mean nothing for audio.
+        audio = payloads(kb.interval_keyboard(60, max_length=900))
+        note = payloads(
+            kb.interval_keyboard(60, max_length=900, send_as="note")
+        )
+        assert not any(p.startswith(f"{kb.SKIN_PREFIX}:") for p in audio)
+        for skin in kb.SKIN_LABELS:
+            assert f"{kb.SKIN_PREFIX}:{skin}" in note
+
+    def test_the_active_skin_is_marked(self):
+        markup = kb.interval_keyboard(
+            60, max_length=900, send_as="note", skin="scope"
+        )
+        active = next(
+            b
+            for row in markup.inline_keyboard
+            for b in row
+            if b.callback_data == f"{kb.SKIN_PREFIX}:scope"
+        )
+        assert active.text.startswith("●")
 
     def test_always_offers_a_way_back(self):
-        markup = kb.interval_keyboard(60, max_length=900, as_voice=False)
+        markup = kb.interval_keyboard(60, max_length=900)
         assert kb.NAV_BACK in payloads(markup)
 
 
@@ -209,7 +239,7 @@ class TestStyles:
     def test_only_values_telegram_accepts_are_used(self):
         allowed = {None, "primary", "success", "danger"}
         markups = [
-            kb.interval_keyboard(60, max_length=900, as_voice=False),
+            kb.interval_keyboard(60, max_length=900),
             kb.result_keyboard("x"),
             kb.error_keyboard(),
             kb.menu_keyboard(has_recent=True),

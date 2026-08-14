@@ -53,6 +53,8 @@ class FakeMessage:
         self.children: list[FakeMessage] = []
         self.sent_audio: dict | None = None
         self.sent_voice: dict | None = None
+        self.sent_video_note: dict | None = None
+        self.sent_video: dict | None = None
 
     async def reply_text(self, text, **kwargs):
         self.replies.append((text, kwargs))
@@ -74,6 +76,14 @@ class FakeMessage:
 
     async def reply_voice(self, **kwargs):
         self.sent_voice = kwargs
+        return FakeMessage()
+
+    async def reply_video_note(self, **kwargs):
+        self.sent_video_note = kwargs
+        return FakeMessage()
+
+    async def reply_video(self, **kwargs):
+        self.sent_video = kwargs
         return FakeMessage()
 
     @property

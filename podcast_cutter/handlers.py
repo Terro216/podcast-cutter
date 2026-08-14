@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 
 from telegram import (
@@ -32,17 +33,19 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 from . import keyboards as kb
-from . import screens
+from . import screens, video
 from .api import Episode, PodcastIndexClient
 from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
-from .errors import NotFoundError, PodcastCutterError
+from .errors import NotFoundError, PodcastCutterError, TooLargeError
 from .indexer import Indexer, TranscriptionDisabled
 from .limits import Budget
 from .listening import QUEUED, TranscriptionQueue
 from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
+    FORMAT_NOTE,
+    FORMATS,
     MAX_RECENTS,
     Awaiting,
     Screen,
@@ -1152,7 +1155,21 @@ class PodcastCutterBot:
             await self.render(update, session)
             return
 
+        if prefix == kb.FORMAT_PREFIX:
+            if value in FORMATS:
+                session.send_as = value
+            await self.render(update, session)
+            return
+
+        if prefix == kb.SKIN_PREFIX:
+            if value in kb.SKIN_LABELS:
+                session.skin = value
+            await self.render(update, session)
+            return
+
         if data == kb.ACTION_TOGGLE_VOICE:
+            # Only reachable from a message rendered before the format row
+            # existed; behaves as it always did.
             session.as_voice = not session.as_voice
             await self.render(update, session)
             return
@@ -1260,6 +1277,24 @@ class PodcastCutterBot:
             )
             return
 
+        if (
+            session.send_as == FORMAT_NOTE
+            and session.clip_length > video.MAX_VIDEO_SECONDS
+        ):
+            # Refused before any work or budget is charged: the editor screen
+            # already warned, but a button on a scrolled-past message may
+            # carry a length the warning never saw.
+            await self.show(
+                update,
+                View(
+                    "⚠️ Video is capped at "
+                    f"{format_duration(video.MAX_VIDEO_SECONDS)} — "
+                    "shorten the clip or switch back to audio.",
+                    self.view_for(session).keyboard,
+                ),
+            )
+            return
+
         if not self._budget_allows(self._cut_budget, update):
             await self.show(
                 update,
@@ -1338,16 +1373,18 @@ class PodcastCutterBot:
                     proxy=self.media_proxy,
                 )
 
+                if session.send_as == FORMAT_NOTE:
+                    await status.set("🎨 Painting the sound…", force=True)
+                    result = await self._render_video(
+                        session, episode, interval, result, workdir
+                    )
+
                 await status.set(
                     f"📤 Uploading {human_bytes(result.size)}…", force=True
                 )
                 if chat is not None:
                     with contextlib.suppress(TelegramError):
-                        await chat.send_action(
-                            ChatAction.UPLOAD_VOICE
-                            if session.as_voice
-                            else ChatAction.UPLOAD_DOCUMENT
-                        )
+                        await chat.send_action(self._upload_action(session, interval))
 
                 await self._deliver(
                     message, session, episode, interval, result
@@ -1356,11 +1393,23 @@ class PodcastCutterBot:
                 session.replace(Screen.RESULT)
                 await status.show(screens.result(session, self.bot_username))
                 outcome, size_bytes = "ok", result.size
+                details = []
+                if session.send_as == FORMAT_NOTE:
+                    # `note` fits the circle; `video` means the clip outgrew a
+                    # minute and went out square. The distinction is the first
+                    # thing to ask the journal once real people press this.
+                    kind = (
+                        "note"
+                        if interval.duration <= video.VIDEO_NOTE_SECONDS
+                        else "video"
+                    )
+                    details.append(f"{kind}:{session.skin}")
                 if result.route == PROXY:
                     # Recorded on the cut row itself rather than as its own
                     # event, so "how many episodes is the detour earning?" is
                     # one query and the action vocabulary stays as it was.
-                    detail = "route=proxy"
+                    details.append("route=proxy")
+                detail = " ".join(details) or None
 
             except PodcastCutterError as exc:
                 # The stable code, not the class name: grouping failures in SQL
@@ -1403,6 +1452,82 @@ class PodcastCutterBot:
         self.settings.work_dir.mkdir(parents=True, exist_ok=True)
         return self.settings.work_dir
 
+    def _upload_action(self, session: Session, interval: Interval) -> ChatAction:
+        if session.send_as == FORMAT_NOTE:
+            return (
+                ChatAction.UPLOAD_VIDEO_NOTE
+                if interval.duration <= video.VIDEO_NOTE_SECONDS
+                else ChatAction.UPLOAD_VIDEO
+            )
+        return (
+            ChatAction.UPLOAD_VOICE
+            if session.as_voice
+            else ChatAction.UPLOAD_DOCUMENT
+        )
+
+    async def _render_video(
+        self,
+        session: Session,
+        episode: Episode,
+        interval: Interval,
+        result,
+        workdir: Path,
+    ):
+        """The video half of a note job, run inside the same cut slot.
+
+        Deliberately *not* a queued task of its own: a render measured
+        seconds on this host — the cost class of the cut that feeds it, not
+        of a transcription — and it cannot start before that cut exists
+        anyway. The durable queue earns its complexity protecting minutes of
+        CPU across a redeploy; a lost render costs one more tap.
+        """
+        subtitles = None
+        if self.store is not None:
+            # The same transcript the search runs on. Nothing is transcribed
+            # for a video: an episode nobody has searched simply gets no
+            # subtitles, because minutes of CPU for a caption is the wrong
+            # trade until somebody asks for the words.
+            transcript = await self.store.transcript_for_episode(episode.id)
+            if transcript is not None:
+                utterances = await self.store.utterances_for(transcript)
+                subtitles = (
+                    video.subtitle_lines(
+                        utterances, interval.start, interval.end
+                    )
+                    or None
+                )
+
+        cover = None
+        if session.skin == video.SKIN_COVER and episode.image:
+            cover = await video.fetch_cover(
+                episode.image, workdir, self.settings
+            )
+
+        path = await video.render_clip(
+            result.path,
+            workdir,
+            skin=session.skin,
+            duration=float(interval.duration),
+            title=truncate(
+                one_line(f"{episode.feed_title} — {episode.title}"), 44
+            ),
+            span=(
+                f"{format_duration(interval.start)}–"
+                f"{format_duration(interval.end)}"
+            ),
+            subtitles=subtitles,
+            cover=cover,
+            settings=self.settings,
+        )
+        size = path.stat().st_size
+        if size > self.settings.max_upload_bytes:
+            raise TooLargeError(
+                f"The video is {size // (1024 * 1024)} MB, above the "
+                f"{self.settings.max_upload_bytes // (1024 * 1024)} MB "
+                "Telegram limit. Please pick a shorter interval."
+            )
+        return replace(result, path=path, size=size, transcoded=True)
+
     async def _deliver(
         self,
         message: Message,
@@ -1423,7 +1548,27 @@ class PodcastCutterBot:
         }
 
         with result.path.open("rb") as handle:
-            if session.as_voice:
+            if session.send_as == FORMAT_NOTE:
+                if interval.duration <= video.VIDEO_NOTE_SECONDS:
+                    # sendVideoNote has no caption parameter at all, so the
+                    # attribution lives on the result screen that follows.
+                    await message.reply_video_note(
+                        video_note=handle,
+                        duration=interval.duration,
+                        length=video.NOTE_SIZE,
+                        **timeouts,
+                    )
+                else:
+                    await message.reply_video(
+                        video=handle,
+                        duration=interval.duration,
+                        width=video.NOTE_SIZE,
+                        height=video.NOTE_SIZE,
+                        caption=caption,
+                        parse_mode="HTML",
+                        **timeouts,
+                    )
+            elif session.as_voice:
                 await message.reply_voice(
                     voice=handle,
                     duration=interval.duration,

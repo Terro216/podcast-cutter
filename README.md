@@ -19,8 +19,13 @@ Telegram bot: https://t.me/podcast_cutter_bot
 - **Pick the moment without arithmetic.** Send `12:30` for a clip starting
   there, or `12:30-14:00` for an exact range, then nudge it with `◀ −15s` /
   `+1m ▶` buttons until it's right. Length presets are one tap.
-- **Send as an audio file or a voice note** — voice notes play inline in chat,
-  which is what you want for a short quote.
+- **Send as an audio file, a voice note or a video note** — voice notes play
+  inline in chat, which is what you want for a short quote, and a video note
+  is the round clip that plays right in the conversation: the sound drawn as
+  animated bars, a spectrum, an oscilloscope or the episode's cover art, with
+  a title, a progress bar — and subtitles, when the episode has already been
+  listened to for search. Notes fit a minute (Telegram's rule); a longer clip
+  arrives as a square video, up to five minutes.
 - **Nudge after the fact.** The result offers `↺ 15s earlier` / `15s later ↻`
   and re-cuts, so finding the exact line is a couple of taps.
 - **Share from anywhere.** Type `@podcast_cutter_bot some words` in any chat to
@@ -192,6 +197,7 @@ podcast_cutter/
   audio.py                 interval parsing, ffprobe, ffmpeg cutting
   urls.py                  where an episode URL is allowed to point
   proxy.py                 the media detour: routes, fallback, breaker
+  video.py                 the video note: skins, subtitles, the render
   text.py                  escaping, filenames, progress bars
   states.py                screen stack and the per-user session
   store.py                 SQLite journal, transcripts and the FTS index
@@ -234,6 +240,21 @@ ignore them and render the default style, so they are decoration, never meaning.
 The output container follows the source codec (AAC lands in `.m4a`, not `.mp3`),
 and the result is verified with ffprobe before being sent, because ffmpeg can
 exit successfully having written an unplayable fragment.
+
+### How a video note is made
+
+A video note is the cut audio drawn by an ffmpeg visualiser under a skin —
+title, time span, a progress bar, and subtitles from the stored transcript
+when the episode has been listened to for search (quarantined spans are
+excluded there too: an invented line must not be burned into a video). The
+render is a couple of seconds for a one-minute note, so it runs as the tail
+of the same cut job, in the same concurrency slot. Telegram accepts notes of
+at most sixty seconds and only by upload; a longer clip goes out as a square
+video with the attribution in its caption, and past five minutes the cut
+button refuses up front. Cover art comes from the episode's own artwork URL,
+is checked by the same source-address rules as audio, and is test-decoded
+before use — a corrupt image would otherwise hang the encoder rather than
+fail it.
 
 ### How searching inside an episode works
 

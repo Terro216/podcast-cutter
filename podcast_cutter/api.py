@@ -68,6 +68,10 @@ class Episode:
     feed_title: str
     enclosure_url: str
     duration: int | None
+    #: Episode (or, failing that, feed) artwork. Empty when the API offered
+    #: none — and for episodes rebuilt from the recents table, which predates
+    #: the field; everything using it treats missing artwork as normal.
+    image: str = ""
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> Episode | None:
@@ -86,12 +90,17 @@ class Episode:
         if duration is not None and duration <= 0:
             duration = None
 
+        image = (raw.get("image") or raw.get("feedImage") or "").strip()
+        if not image.startswith(("http://", "https://")):
+            image = ""
+
         return cls(
             id=str(episode_id),
             title=one_line(raw.get("title"), "Untitled episode"),
             feed_title=one_line(raw.get("feedTitle"), "Podcast"),
             enclosure_url=url,
             duration=duration,
+            image=image,
         )
 
 

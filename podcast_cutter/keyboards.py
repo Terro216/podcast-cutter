@@ -18,6 +18,7 @@ from typing import TypeVar
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+from .states import FORMAT_AUDIO, FORMAT_NOTE, FORMAT_VOICE
 from .text import button_label, format_duration
 
 T = TypeVar("T")
@@ -86,9 +87,32 @@ NAV_NOOP = f"{NAV_PREFIX}:noop"
 
 ACTION_CUT = "act:cut"
 ACTION_RETRY = "act:retry"
+#: The pre-video-note format toggle. No keyboard offers it any more, but
+#: buttons on scrolled-past messages outlive keyboards, so the router still
+#: answers it.
 ACTION_TOGGLE_VOICE = "act:voice"
 ACTION_NEW_CLIP = "act:new"
 ACTION_FIND = "act:find"
+
+#: Delivery format and video-note skin choices on the clip editor.
+FORMAT_PREFIX = "fmt"
+SKIN_PREFIX = "skin"
+
+_FORMAT_LABELS = (
+    (FORMAT_AUDIO, "🎵 Audio"),
+    (FORMAT_VOICE, "🎤 Voice"),
+    (FORMAT_NOTE, "⭕ Video"),
+)
+
+#: Skin key → button label. The keys must equal ``video.SKINS`` — a test
+#: holds them together — but the labels live here because this module is the
+#: UI vocabulary and must not import the ffmpeg half of the world.
+SKIN_LABELS = {
+    "bars": "🎚 Bars",
+    "spectrum": "🌈 Spectrum",
+    "scope": "🟢 Scope",
+    "cover": "🖼 Cover",
+}
 
 #: A found moment, carried as its start in seconds rather than an index into a
 #: list: the list lives in a session, and a button on a scrolled-past message
@@ -217,7 +241,12 @@ def _move_label(delta: int) -> str:
 
 
 def interval_keyboard(
-    length: int, *, max_length: int, as_voice: bool, can_search: bool = False
+    length: int,
+    *,
+    max_length: int,
+    send_as: str = FORMAT_AUDIO,
+    skin: str = "bars",
+    can_search: bool = False,
 ) -> InlineKeyboardMarkup:
     """The clip editor: pick a length, slide the window, then cut."""
     presets = [
@@ -241,11 +270,27 @@ def interval_keyboard(
     rows.append(
         [
             _button(
-                "🎤 Send as voice" if as_voice else "🎵 Send as audio",
-                ACTION_TOGGLE_VOICE,
+                f"● {label}" if key == send_as else label,
+                f"{FORMAT_PREFIX}:{key}",
+                STYLE_SUCCESS if key == send_as else None,
             )
+            for key, label in _FORMAT_LABELS
         ]
     )
+    if send_as == FORMAT_NOTE:
+        # The skins only matter once video is chosen; a permanent second row
+        # of decoration would bury the cut button under choices that mean
+        # nothing for audio.
+        rows.append(
+            [
+                _button(
+                    f"● {label}" if key == skin else label,
+                    f"{SKIN_PREFIX}:{key}",
+                    STYLE_SUCCESS if key == skin else None,
+                )
+                for key, label in SKIN_LABELS.items()
+            ]
+        )
     rows.append([_button("✂️ Cut it", ACTION_CUT, STYLE_PRIMARY)])
     if can_search:
         rows.append([_button("🔎 Find a moment by what was said", ACTION_FIND)])

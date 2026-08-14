@@ -186,10 +186,11 @@ CI and count as engineering quality, not as a slide.
 
 ---
 
-## 6. Shareable clips: the video note
+## 6. Done: shareable clips, the video note
 
 Emotion, cheaply, and every note posted in someone else's chat advertises the
-bot.
+bot. **Shipped**: a third delivery format on the clip editor, four skins on a
+button, subtitles burned in from the transcript when one exists.
 
 **Measured render, 60 s at 384×384, `--cpus 4`:**
 
@@ -199,17 +200,50 @@ bot.
 | `showcqt` (spectrum, prettier) | 3 s | 1.7 MB |
 | `avectorscope` (oscilloscope) | 4 s | 797 KB |
 
+Re-measured in the production image with the final graphs — title, span,
+progress bar and subtitles on top of the visualiser, eight pinned cores:
+bars 2.5 s / 3.3 MB, spectrum 1.5 s / 0.9 MB, scope 1.9 s / 0.8 MB, cover
+2.7 s / 0.9 MB. The image needed nothing added: Debian's ffmpeg ships libx264,
+every visualiser, `drawtext` with the DejaVu fonts, and libass.
+
 **Telegram constraints that drive the design:** a video note is a square MPEG4
 **of at most one minute**, and **cannot be sent by URL** — upload only. So
-server-side rendering is mandatory, and clips longer than 60 s cannot be notes;
-they need an ordinary square video or an offer to trim.
+server-side rendering is mandatory, and clips longer than 60 s cannot be notes.
+Between one and five minutes the same render goes out as an ordinary square
+video with the attribution in its caption (`sendVideoNote` has no caption
+parameter at all, so for a note the attribution lives on the result screen);
+past five minutes the cut button refuses before any work is spent — encode
+time and upload size both scale with length, and the busiest skin measures
+~3.3 MB a minute.
 
-**Skins** are overlays on the visualiser: `drawbox` for the frame, a PNG skin,
-`drawtext` in the right face. Four presets on a button — Winamp, WMP-ish,
-oscilloscope, plain cover art. Subtitles come from the same transcript, which
-ties the two headline features into one story and one very good demo shot.
+**Skins** are overlays on the visualiser — a title, the time span, a progress
+strip slid across by `overlay`'s `t` expression. Four presets on a button:
+bars, spectrum, oscilloscope, cover art. Everything textual reaches ffmpeg
+through files (`textfile=`, an `.ass` script), never inline in the graph,
+because episode titles contain every character that is an operator to the
+graph parser. Subtitles come from the same transcript the search runs on —
+and pass the same quarantine, because a decoder loop kept out of the index
+has no business burned into a video. An episode nobody has searched gets no
+subtitles rather than a transcription: minutes of CPU for a caption is the
+wrong trade until someone asks for the words.
 
-Rendering is an encode, not a stream copy: it belongs in the queue (§7).
+**Found on the way: a corrupt cover image does not fail the render, it hangs
+it.** ffmpeg 7.1.5 given an undecodable second input prints `Invalid data`
+and then sits until the timeout — reproduced on the host. So artwork is
+test-decoded (one frame to `null`, `-map 0:v:0` so a video stream is
+mandatory) before it is allowed near a render, and a render that still fails
+quickly with artwork is retried once without it. Artwork is decoration: it
+may be dropped, it may never cost the clip.
+
+~~Rendering is an encode, not a stream copy: it belongs in the queue (§7).~~
+**Decided the other way, on the numbers.** A render is 1.5–2.7 s — the cost
+class of the cut that feeds it, not of a transcription — and it cannot start
+before that cut exists, so it runs inside the same `_job_slots` slot as the
+cut, as a few more seconds of the same job. The durable SQLite queue earns
+its complexity protecting minutes of CPU across a redeploy; a render lost to
+a redeploy costs one more tap of the same button. Generalising the
+episode-keyed listening queue for a per-clip task would have bought nothing
+but states to maintain.
 
 ---
 
@@ -334,7 +368,10 @@ internet fails more often than anyone plans for.
    without which the cloud path stays an operator's manual choice.
 5. ~~Queues, limits, source ceiling, backups.~~ **Done** — §7 is closed but
    for an ETA and LRU eviction; backups are live (§8, `docs/backup-policy.md`).
-6. Video notes with presets and subtitles.
+6. ~~Video notes with presets and subtitles.~~ **Done** — §6: four skins,
+   subtitles from the warmed transcript, notes up to a minute and square
+   video up to five, rendered in the cut pool by decision rather than by
+   default.
 7. CI, public repo, `src_` links seeded.
 
 The video note is tempting to pull forward — it is fast and it is the wow. But

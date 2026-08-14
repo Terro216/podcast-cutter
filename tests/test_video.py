@@ -1,0 +1,225 @@
+"""The video-note renderer: the pure half, and one real render.
+
+The graph builder and the subtitle machinery are pure functions, so most of
+this runs without ffmpeg. The one test that encodes for real is the same
+deal as ``test_cut_integration.py``: it skips where ffmpeg is absent and is
+the only proof the graph text actually parses.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import shutil
+import subprocess
+
+import pytest
+
+from podcast_cutter import keyboards as kb
+from podcast_cutter import video
+from podcast_cutter.errors import AudioError
+from podcast_cutter.transcripts import Utterance
+
+
+def make_utterance(start, end, text, **metrics):
+    return Utterance(start=start, end=end, text=text, **metrics)
+
+
+class TestSubtitleLines:
+    def test_keeps_only_what_overlaps_the_clip(self):
+        utterances = [
+            make_utterance(0, 5, "before"),
+            make_utterance(9, 14, "inside"),
+            make_utterance(40, 45, "after"),
+        ]
+        lines = video.subtitle_lines(utterances, 10.0, 30.0)
+        assert [line.text for line in lines] == ["inside"]
+
+    def test_times_are_relative_to_the_clip_and_clamped(self):
+        lines = video.subtitle_lines(
+            [make_utterance(9, 14, "spans the start")], 10.0, 30.0
+        )
+        assert lines[0].start == 0.0
+        assert lines[0].end == pytest.approx(4.0)
+
+    def test_quarantined_speech_is_not_burned_in(self):
+        # A decoder loop kept out of the search index has no business in a
+        # video either — and a video cannot be corrected after the fact.
+        loop = make_utterance(
+            12, 13, "генегене " * 60, compression_ratio=24.0
+        )
+        lines = video.subtitle_lines(
+            [loop, make_utterance(15, 18, "real speech")], 10.0, 30.0
+        )
+        assert [line.text for line in lines] == ["real speech"]
+
+    def test_whitespace_is_collapsed(self):
+        lines = video.subtitle_lines(
+            [make_utterance(11, 14, "  two\n words ")], 10.0, 30.0
+        )
+        assert lines[0].text == "two words"
+
+    def test_a_sliver_of_a_line_is_dropped(self):
+        lines = video.subtitle_lines(
+            [make_utterance(9.0, 10.1, "barely there")], 10.0, 30.0
+        )
+        assert lines == []
+
+
+class TestAssDocument:
+    def test_times_are_ass_shaped(self):
+        assert video._ass_time(0) == "0:00:00.00"
+        assert video._ass_time(61.5) == "0:01:01.50"
+        assert video._ass_time(3600.25) == "1:00:00.25"
+
+    def test_braces_cannot_open_override_tags(self):
+        # ``{\b1}`` in recognised text would style itself instead of showing.
+        document = video.ass_document(
+            [video.SubtitleLine(0, 2, "a {weird} span")]
+        )
+        assert "{weird}" not in document
+        assert "(weird)" in document
+
+    def test_the_canvas_size_is_declared(self):
+        document = video.ass_document([video.SubtitleLine(0, 2, "x")], size=384)
+        assert "PlayResX: 384" in document
+        assert "PlayResY: 384" in document
+
+
+class TestBuildGraph:
+    def build(self, skin, tmp_path, **kwargs):
+        options = {
+            "duration": 60.0,
+            "title_file": tmp_path / "t.txt",
+            "span_file": tmp_path / "s.txt",
+            "subs_file": None,
+            "with_cover": False,
+        }
+        options.update(kwargs)
+        return video.build_graph(skin, **options)
+
+    def test_every_skin_builds_and_ends_in_out(self, tmp_path):
+        for skin in video.SKINS:
+            graph = self.build(skin, tmp_path)
+            assert graph.endswith("[out]")
+
+    def test_an_unknown_skin_is_refused(self, tmp_path):
+        with pytest.raises(ValueError):
+            self.build("winamp2000", tmp_path)
+
+    def test_subtitles_join_the_chain_only_when_given(self, tmp_path):
+        without = self.build("bars", tmp_path)
+        with_subs = self.build(
+            "bars", tmp_path, subs_file=tmp_path / "subs.ass"
+        )
+        assert "subtitles=" not in without
+        assert "subtitles=" in with_subs
+
+    def test_cover_art_is_used_when_present_and_not_faked_when_absent(
+        self, tmp_path
+    ):
+        with_art = self.build("cover", tmp_path, with_cover=True)
+        without = self.build("cover", tmp_path, with_cover=False)
+        assert "[1:v]" in with_art
+        assert "[1:v]" not in without
+
+    def test_skin_keys_match_the_keyboard_labels(self):
+        # The render behaviour lives in this module and the button labels in
+        # keyboards, which must not import the ffmpeg half of the world; this
+        # is the seam that keeps the two sets from drifting apart.
+        assert set(video.SKINS) == set(kb.SKIN_LABELS)
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg/ffprobe not installed",
+)
+class TestRealRender:
+    def test_renders_a_playable_square_video_with_subtitles(
+        self, tmp_path, settings
+    ):
+        audio = tmp_path / "clip.m4a"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                "-c:a", "aac", str(audio),
+            ],
+            check=True,
+        )
+
+        output = asyncio.run(
+            video.render_clip(
+                audio,
+                tmp_path,
+                skin="bars",
+                duration=3.0,
+                title="Show — Episode",
+                span="00:10–00:13",
+                subtitles=[video.SubtitleLine(0.5, 2.5, "hello there")],
+                cover=None,
+                settings=settings,
+            )
+        )
+
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height",
+                "-of", "csv=p=0", str(output),
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        codec, width, height = probe.stdout.strip().split(",")
+        assert codec == "h264"
+        assert width == height == str(video.NOTE_SIZE)
+
+    def test_a_corrupt_cover_loses_the_picture_not_the_clip(
+        self, tmp_path, settings
+    ):
+        audio = tmp_path / "clip.m4a"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                "-c:a", "aac", str(audio),
+            ],
+            check=True,
+        )
+        bad_cover = tmp_path / "cover.img"
+        bad_cover.write_bytes(b"this is not an image")
+
+        output = asyncio.run(
+            video.render_clip(
+                audio,
+                tmp_path,
+                skin="cover",
+                duration=2.0,
+                title="Show",
+                span="00:00–00:02",
+                subtitles=None,
+                cover=bad_cover,
+                settings=settings,
+            )
+        )
+        assert output.exists() and output.stat().st_size > 0
+
+    def test_unreadable_audio_raises_the_audio_error(
+        self, tmp_path, settings
+    ):
+        broken = tmp_path / "broken.m4a"
+        broken.write_bytes(b"nothing decodable")
+
+        with pytest.raises(AudioError):
+            asyncio.run(
+                video.render_clip(
+                    broken,
+                    tmp_path,
+                    skin="bars",
+                    duration=2.0,
+                    title="Show",
+                    span="00:00–00:02",
+                    subtitles=None,
+                    cover=None,
+                    settings=settings,
+                )
+            )
