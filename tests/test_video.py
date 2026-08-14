@@ -84,6 +84,26 @@ class TestAssDocument:
         assert "PlayResX: 384" in document
         assert "PlayResY: 384" in document
 
+    def test_the_round_layout_pulls_the_text_inside_the_circle(self):
+        # A note is cropped to the inscribed circle; margins that fit the
+        # square frame leave the first and last words invisible.
+        lines = [video.SubtitleLine(0, 2, "x")]
+        square = video.ass_document(lines)
+        round_ = video.ass_document(lines, round_frame=True)
+        assert square != round_
+
+        def margins(document):
+            style = next(
+                line for line in document.splitlines()
+                if line.startswith("Style:")
+            )
+            return [int(field) for field in style.split(",")[-3:]]
+
+        square_l, _, square_v = margins(square)
+        round_l, _, round_v = margins(round_)
+        assert round_l > square_l
+        assert round_v > square_v
+
 
 class TestBuildGraph:
     def build(self, skin, tmp_path, **kwargs):
@@ -99,8 +119,17 @@ class TestBuildGraph:
 
     def test_every_skin_builds_and_ends_in_out(self, tmp_path):
         for skin in video.SKINS:
-            graph = self.build(skin, tmp_path)
-            assert graph.endswith("[out]")
+            for round_frame in (False, True):
+                graph = self.build(skin, tmp_path, round_frame=round_frame)
+                assert graph.endswith("[out]")
+
+    def test_the_round_progress_bar_is_a_short_centred_track(self, tmp_path):
+        # At the frame's bottom edge the circle leaves ~140 px of visible
+        # chord, so the full-width square bar would show only its middle.
+        square = self.build("bars", tmp_path)
+        round_ = self.build("bars", tmp_path, round_frame=True)
+        assert f"s={video.NOTE_SIZE}x6" in square
+        assert f"s={video.NOTE_SIZE}x6" not in round_
 
     def test_an_unknown_skin_is_refused(self, tmp_path):
         with pytest.raises(ValueError):
@@ -134,8 +163,12 @@ class TestBuildGraph:
     reason="ffmpeg/ffprobe not installed",
 )
 class TestRealRender:
+    @pytest.mark.parametrize(
+        ("skin", "round_frame"),
+        [("bars", True), ("vhs", True), ("matrix", False), ("party", False)],
+    )
     def test_renders_a_playable_square_video_with_subtitles(
-        self, tmp_path, settings
+        self, tmp_path, settings, skin, round_frame
     ):
         audio = tmp_path / "clip.m4a"
         subprocess.run(
@@ -151,13 +184,14 @@ class TestRealRender:
             video.render_clip(
                 audio,
                 tmp_path,
-                skin="bars",
+                skin=skin,
                 duration=3.0,
                 title="Show — Episode",
                 span="00:10–00:13",
                 subtitles=[video.SubtitleLine(0.5, 2.5, "hello there")],
                 cover=None,
                 settings=settings,
+                round_frame=round_frame,
             )
         )
 

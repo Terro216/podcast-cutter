@@ -288,6 +288,8 @@ class TestClipEditingCallbacks:
         session = await self._open(bot, context)
         await tap(bot, context, f"{kb.FORMAT_PREFIX}:note")
         assert session.send_as == "note"
+        await tap(bot, context, f"{kb.FORMAT_PREFIX}:video")
+        assert session.send_as == "video"
         await tap(bot, context, f"{kb.FORMAT_PREFIX}:audio")
         assert session.send_as == "audio"
 

@@ -208,24 +208,43 @@ every visualiser, `drawtext` with the DejaVu fonts, and libass.
 
 **Telegram constraints that drive the design:** a video note is a square MPEG4
 **of at most one minute**, and **cannot be sent by URL** — upload only. So
-server-side rendering is mandatory, and clips longer than 60 s cannot be notes.
-Between one and five minutes the same render goes out as an ordinary square
-video with the attribution in its caption (`sendVideoNote` has no caption
-parameter at all, so for a note the attribution lives on the result screen);
-past five minutes the cut button refuses before any work is spent — encode
-time and upload size both scale with length, and the busiest skin measures
-~3.3 MB a minute.
+server-side rendering is mandatory. The circle and the square video are **two
+formats on the editor, chosen by the user** — a circle past a minute is
+refused with a pointer at the video format, never silently converted, and a
+video past five minutes is refused too: encode time and upload size both
+scale with length, and the busiest skin measures ~3.3 MB a minute.
+`sendVideoNote` has no caption parameter at all, so a note's attribution
+lives on the result screen; the square video carries it in its caption.
 
-**Skins** are overlays on the visualiser — a title, the time span, a progress
-strip slid across by `overlay`'s `t` expression. Four presets on a button:
-bars, spectrum, oscilloscope, cover art. Everything textual reaches ffmpeg
-through files (`textfile=`, an `.ass` script), never inline in the graph,
-because episode titles contain every character that is an operator to the
-graph parser. Subtitles come from the same transcript the search runs on —
-and pass the same quarantine, because a decoder loop kept out of the index
-has no business burned into a video. An episode nobody has searched gets no
-subtitles rather than a transcription: minutes of CPU for a caption is the
-wrong trade until someone asks for the words.
+**The circle dictated its own layout, and the frames proved it.** Clients
+crop a note to the circle inscribed in the square: at 384 px, a centred line
+at the top edge has ~200 px of visible chord and the bottom edge barely
+140 px, so the square layout's title and full-width progress bar simply lose
+their ends. Caught by rendering frames and viewing them under a circle mask
+(one `geq` ring, worth keeping as a technique) before any user saw it. The
+round layout moves all text inside the circle, trims the title to the chord
+(~26 bold Cyrillic characters at size 14 — drawtext neither wraps nor
+ellipsises, so the renderer trims by layout), widens the subtitle margins
+and shrinks the progress bar to a centred track. The fill is clipped by
+compositing it *inside* a track-sized overlay — `crop` evaluates its width
+once at configuration time, so a bar growing by `t` is not available the
+obvious way.
+
+**Skins**: seven presets on two rows — bars, spectrum, oscilloscope, cover
+art, and the meme shelf: **party** (bars strobing through the colour wheel,
+`hue=H=2*PI*t/3` on the visualiser only, so the text stays readable),
+**VHS** (`showwaves` over static, scanlines and smeared chroma — tape damage
+applied *under* the text), **matrix** (a full-frame scrolling spectrogram,
+intensity greyscale with red and blue zeroed to phosphor green; `fscale=log`
+is load-bearing, because speech lives below ~4 kHz and on a linear axis the
+whole picture huddles in the rows the circle crops off). Everything textual
+reaches ffmpeg through files (`textfile=`, an `.ass` script), never inline
+in the graph, because episode titles contain every character that is an
+operator to the graph parser. Subtitles come from the same transcript the
+search runs on — and pass the same quarantine, because a decoder loop kept
+out of the index has no business burned into a video. An episode nobody has
+searched gets no subtitles rather than a transcription: minutes of CPU for a
+caption is the wrong trade until someone asks for the words.
 
 **Found on the way: a corrupt cover image does not fail the render, it hangs
 it.** ffmpeg 7.1.5 given an undecodable second input prints `Invalid data`

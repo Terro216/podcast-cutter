@@ -14,7 +14,7 @@ from telegram import InlineKeyboardMarkup
 from . import keyboards as kb
 from .api import Episode
 from .config import Settings
-from .states import FORMAT_NOTE, Screen, Session
+from .states import FORMAT_NOTE, FORMAT_VIDEO, Screen, Session
 from .text import esc, format_duration, human_bytes, truncate
 from .transcripts import excerpt
 from .video import MAX_VIDEO_SECONDS, VIDEO_NOTE_SECONDS
@@ -268,21 +268,21 @@ def interval(session: Session, settings: Settings) -> View:
         f"<code>12:30-14:00</code> for an exact range."
     )
 
-    # Telegram's limits on a video note change what is honest to promise, so
-    # the screen says which of the three cases the current length is in
-    # before the cut button finds out.
-    if session.send_as == FORMAT_NOTE:
-        if session.clip_length > MAX_VIDEO_SECONDS:
-            body += (
-                f"\n\n⚠️ <i>Video is capped at "
-                f"{format_duration(MAX_VIDEO_SECONDS)} — shorten the clip "
-                "or switch back to audio.</i>"
-            )
-        elif session.clip_length > VIDEO_NOTE_SECONDS:
-            body += (
-                "\n\n<i>A round video note fits one minute; this longer clip "
-                "will arrive as a square video instead.</i>"
-            )
+    # Telegram's limits change what is honest to promise per format, so the
+    # screen says where the current length stands before the cut button
+    # finds out. Nothing is switched behind the user's back: a circle that
+    # cannot fit stays a refusal with a way out, not a silent square video.
+    if session.send_as == FORMAT_NOTE and session.clip_length > VIDEO_NOTE_SECONDS:
+        body += (
+            "\n\n⚠️ <i>A circle fits one minute — Telegram's rule. Shorten "
+            "the clip, or pick 🎬 Video to send it square and full-length.</i>"
+        )
+    if session.send_as == FORMAT_VIDEO and session.clip_length > MAX_VIDEO_SECONDS:
+        body += (
+            f"\n\n⚠️ <i>Video is capped at "
+            f"{format_duration(MAX_VIDEO_SECONDS)} — shorten the clip "
+            "or switch back to audio.</i>"
+        )
 
     # Arriving from a search replaces the list of moments with this screen, so
     # say where the others went. `‹ Back` already returns to them; without this

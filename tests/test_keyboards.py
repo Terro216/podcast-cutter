@@ -159,13 +159,13 @@ class TestIntervalKeyboard:
         assert f"{kb.LENGTH_PREFIX}:30" in data
         assert f"{kb.LENGTH_PREFIX}:300" not in data
 
-    def test_offers_all_three_delivery_formats(self):
+    def test_offers_all_four_delivery_formats(self):
         markup = kb.interval_keyboard(60, max_length=900)
         data = payloads(markup)
-        for fmt in ("audio", "voice", "note"):
+        for fmt in ("audio", "voice", "note", "video"):
             assert f"{kb.FORMAT_PREFIX}:{fmt}" in data
 
-    @pytest.mark.parametrize("send_as", ["audio", "voice", "note"])
+    @pytest.mark.parametrize("send_as", ["audio", "voice", "note", "video"])
     def test_the_active_format_is_marked(self, send_as):
         markup = kb.interval_keyboard(60, max_length=900, send_as=send_as)
         active = next(
@@ -177,16 +177,24 @@ class TestIntervalKeyboard:
         assert active.text.startswith("●")
         assert active.style == kb.STYLE_SUCCESS
 
-    def test_skins_appear_only_when_video_is_chosen(self):
-        # A permanent second row of decoration would bury the cut button
-        # under choices that mean nothing for audio.
+    def test_skins_appear_only_when_a_video_format_is_chosen(self):
+        # A permanent block of decoration would bury the cut button under
+        # choices that mean nothing for audio.
         audio = payloads(kb.interval_keyboard(60, max_length=900))
-        note = payloads(
-            kb.interval_keyboard(60, max_length=900, send_as="note")
-        )
         assert not any(p.startswith(f"{kb.SKIN_PREFIX}:") for p in audio)
-        for skin in kb.SKIN_LABELS:
-            assert f"{kb.SKIN_PREFIX}:{skin}" in note
+        for fmt in ("note", "video"):
+            offered = payloads(
+                kb.interval_keyboard(60, max_length=900, send_as=fmt)
+            )
+            for skin in kb.SKIN_LABELS:
+                assert f"{kb.SKIN_PREFIX}:{skin}" in offered
+
+    def test_every_skin_sits_in_some_row(self):
+        # The rows are hand-split for width; a skin added to the labels but
+        # not to a row would silently never be offered.
+        assert {key for row in kb._SKIN_ROWS for key in row} == set(
+            kb.SKIN_LABELS
+        )
 
     def test_the_active_skin_is_marked(self):
         markup = kb.interval_keyboard(

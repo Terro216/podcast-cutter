@@ -45,6 +45,7 @@ from .proxy import PROXY, MediaProxy
 from .screens import View
 from .states import (
     FORMAT_NOTE,
+    FORMAT_VIDEO,
     FORMATS,
     MAX_RECENTS,
     Awaiting,
@@ -1277,21 +1278,31 @@ class PodcastCutterBot:
             )
             return
 
+        # Refused before any work or budget is charged: the editor screen
+        # already warned, but a button on a scrolled-past message may carry a
+        # length the warning never saw. A circle that cannot fit is a refusal
+        # with a way out, never a silent switch to another format.
+        refusal = None
         if (
             session.send_as == FORMAT_NOTE
+            and session.clip_length > video.VIDEO_NOTE_SECONDS
+        ):
+            refusal = (
+                "⚠️ A circle fits one minute — Telegram's rule. Shorten the "
+                "clip, or pick 🎬 Video to send it square and full-length."
+            )
+        if (
+            session.send_as == FORMAT_VIDEO
             and session.clip_length > video.MAX_VIDEO_SECONDS
         ):
-            # Refused before any work or budget is charged: the editor screen
-            # already warned, but a button on a scrolled-past message may
-            # carry a length the warning never saw.
+            refusal = (
+                "⚠️ Video is capped at "
+                f"{format_duration(video.MAX_VIDEO_SECONDS)} — "
+                "shorten the clip or switch back to audio."
+            )
+        if refusal is not None:
             await self.show(
-                update,
-                View(
-                    "⚠️ Video is capped at "
-                    f"{format_duration(video.MAX_VIDEO_SECONDS)} — "
-                    "shorten the clip or switch back to audio.",
-                    self.view_for(session).keyboard,
-                ),
+                update, View(refusal, self.view_for(session).keyboard)
             )
             return
 
@@ -1373,7 +1384,7 @@ class PodcastCutterBot:
                     proxy=self.media_proxy,
                 )
 
-                if session.send_as == FORMAT_NOTE:
+                if session.send_as in (FORMAT_NOTE, FORMAT_VIDEO):
                     await status.set("🎨 Painting the sound…", force=True)
                     result = await self._render_video(
                         session, episode, interval, result, workdir
@@ -1394,16 +1405,10 @@ class PodcastCutterBot:
                 await status.show(screens.result(session, self.bot_username))
                 outcome, size_bytes = "ok", result.size
                 details = []
-                if session.send_as == FORMAT_NOTE:
-                    # `note` fits the circle; `video` means the clip outgrew a
-                    # minute and went out square. The distinction is the first
-                    # thing to ask the journal once real people press this.
-                    kind = (
-                        "note"
-                        if interval.duration <= video.VIDEO_NOTE_SECONDS
-                        else "video"
-                    )
-                    details.append(f"{kind}:{session.skin}")
+                if session.send_as in (FORMAT_NOTE, FORMAT_VIDEO):
+                    # Which format and which skin — the first thing to ask
+                    # the journal once real people press this.
+                    details.append(f"{session.send_as}:{session.skin}")
                 if result.route == PROXY:
                     # Recorded on the cut row itself rather than as its own
                     # event, so "how many episodes is the detour earning?" is
@@ -1454,11 +1459,9 @@ class PodcastCutterBot:
 
     def _upload_action(self, session: Session, interval: Interval) -> ChatAction:
         if session.send_as == FORMAT_NOTE:
-            return (
-                ChatAction.UPLOAD_VIDEO_NOTE
-                if interval.duration <= video.VIDEO_NOTE_SECONDS
-                else ChatAction.UPLOAD_VIDEO
-            )
+            return ChatAction.UPLOAD_VIDEO_NOTE
+        if session.send_as == FORMAT_VIDEO:
+            return ChatAction.UPLOAD_VIDEO
         return (
             ChatAction.UPLOAD_VOICE
             if session.as_voice
@@ -1508,9 +1511,9 @@ class PodcastCutterBot:
             workdir,
             skin=session.skin,
             duration=float(interval.duration),
-            title=truncate(
-                one_line(f"{episode.feed_title} — {episode.title}"), 44
-            ),
+            # The renderer fits this to the layout — how many characters
+            # survive is a property of the circle, not of the episode.
+            title=one_line(f"{episode.feed_title} — {episode.title}"),
             span=(
                 f"{format_duration(interval.start)}–"
                 f"{format_duration(interval.end)}"
@@ -1518,6 +1521,7 @@ class PodcastCutterBot:
             subtitles=subtitles,
             cover=cover,
             settings=self.settings,
+            round_frame=session.send_as == FORMAT_NOTE,
         )
         size = path.stat().st_size
         if size > self.settings.max_upload_bytes:
@@ -1549,25 +1553,31 @@ class PodcastCutterBot:
 
         with result.path.open("rb") as handle:
             if session.send_as == FORMAT_NOTE:
-                if interval.duration <= video.VIDEO_NOTE_SECONDS:
-                    # sendVideoNote has no caption parameter at all, so the
-                    # attribution lives on the result screen that follows.
-                    await message.reply_video_note(
-                        video_note=handle,
-                        duration=interval.duration,
-                        length=video.NOTE_SIZE,
-                        **timeouts,
-                    )
-                else:
-                    await message.reply_video(
-                        video=handle,
-                        duration=interval.duration,
-                        width=video.NOTE_SIZE,
-                        height=video.NOTE_SIZE,
-                        caption=caption,
-                        parse_mode="HTML",
-                        **timeouts,
-                    )
+                # sendVideoNote has no caption parameter at all, so the
+                # attribution lives on the result screen that follows.
+                await message.reply_video_note(
+                    video_note=handle,
+                    duration=interval.duration,
+                    length=video.NOTE_SIZE,
+                    **timeouts,
+                )
+            elif session.send_as == FORMAT_VIDEO:
+                await message.reply_video(
+                    video=handle,
+                    duration=interval.duration,
+                    width=video.NOTE_SIZE,
+                    height=video.NOTE_SIZE,
+                    caption=caption,
+                    parse_mode="HTML",
+                    filename=safe_filename(
+                        episode.feed_title,
+                        episode.title,
+                        f"{format_duration(interval.start)}"
+                        f"-{format_duration(interval.end)}".replace(":", "."),
+                        ext=".mp4",
+                    ),
+                    **timeouts,
+                )
             elif session.as_voice:
                 await message.reply_voice(
                     voice=handle,

@@ -31,6 +31,7 @@ import httpx
 from .audio import _protocol_args, _run, probe
 from .config import Settings
 from .errors import AudioError
+from .text import truncate
 from .transcripts import Utterance, is_indexable, quarantine_signals
 from .urls import ensure_safe_source, redirect_guard
 
@@ -53,11 +54,22 @@ SKIN_BARS = "bars"
 SKIN_SPECTRUM = "spectrum"
 SKIN_SCOPE = "scope"
 SKIN_COVER = "cover"
+SKIN_PARTY = "party"
+SKIN_VHS = "vhs"
+SKIN_MATRIX = "matrix"
 
 #: Render behaviour lives here; the matching button labels live in
 #: :mod:`keyboards`, which must not import the ffmpeg half of the world. A
 #: test holds the two key sets equal.
-SKINS = (SKIN_BARS, SKIN_SPECTRUM, SKIN_SCOPE, SKIN_COVER)
+SKINS = (
+    SKIN_BARS,
+    SKIN_SPECTRUM,
+    SKIN_SCOPE,
+    SKIN_COVER,
+    SKIN_PARTY,
+    SKIN_VHS,
+    SKIN_MATRIX,
+)
 
 #: Refuse cover images beyond this. Artwork is decoration; a feed offering a
 #: 100 MB "image" is not a feed to indulge.
@@ -114,12 +126,20 @@ def _ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}"
 
 
-def ass_document(lines: list[SubtitleLine], size: int = NOTE_SIZE) -> str:
+def ass_document(
+    lines: list[SubtitleLine], size: int = NOTE_SIZE, round_frame: bool = False
+) -> str:
     """An ASS script libass renders bottom-centred with an outline.
 
     ``{`` and ``}`` open override tags in ASS, so they are defused; a
     recogniser has produced stranger things than braces.
+
+    ``round_frame`` widens the side margins and lifts the block: a video
+    note is shown cropped to the circle inscribed in the square, so text
+    near the frame's edge is text the viewer never sees.
     """
+    side = size // 6 if round_frame else size // 32
+    bottom = int(size * 0.31) if round_frame else int(size * 0.115)
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -130,8 +150,8 @@ def ass_document(lines: list[SubtitleLine], size: int = NOTE_SIZE) -> str:
         "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
         "BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, "
         "MarginV\n"
-        f"Style: Default,DejaVu Sans,{max(14, size // 19)},&H00FFFFFF,"
-        "&H00000000,&H80000000,0,2,0,2,12,12,44\n"
+        f"Style: Default,DejaVu Sans,{max(14, size // 21)},&H00FFFFFF,"
+        f"&H00000000,&H80000000,0,2,0,2,{side},{side},{bottom}\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Text\n"
@@ -180,6 +200,106 @@ def _drawtext(
     return "drawtext=" + ":".join(parts)
 
 
+def _canvas(
+    skin: str, *, size: int, dur: float, with_cover: bool
+) -> tuple[str, str, str, bool]:
+    """The skin's picture, ending in ``[canvas]``.
+
+    Returns ``(graph, bar_color, title_color, title_box)``. Visualiser skins
+    share one geometry — a full-frame background with the visualiser inset —
+    so the presets read as variations of one design; ``matrix`` and ``cover``
+    paint the whole frame themselves.
+    """
+    pad = 8
+    viz_w, viz_h = size - 2 * pad, size - 144
+    viz_y = 72
+
+    if skin == SKIN_COVER:
+        if with_cover:
+            graph = (
+                f"[1:v]scale={size}:{size}:force_original_aspect_ratio="
+                f"increase,crop={size}:{size},eq=brightness=-0.15[canvas];"
+            )
+        else:
+            # No artwork came with the episode; an honest dark card keeps the
+            # title and subtitles rather than pretending another skin was
+            # asked for.
+            graph = f"color=c=0x1a1a2e:s={size}x{size}:d={dur}[canvas];"
+        return graph, "white@0.85", "white", True
+
+    if skin == SKIN_MATRIX:
+        # The spectrogram scrolls across the whole frame; intensity greyscale
+        # with red and blue zeroed out is the phosphor green of the meme.
+        # ``fscale=log`` matters more than it looks: speech lives below
+        # ~4 kHz, and on a linear axis the whole picture huddles in the
+        # bottom rows — which the circle crop then cuts off entirely.
+        graph = (
+            f"[0:a]showspectrum=s={size}x{size}:mode=combined"
+            ":color=intensity:scale=sqrt:fscale=log:slide=scroll[sp];"
+            "[sp]colorchannelmixer=rr=0:bb=0[canvas];"
+        )
+        return graph, "0x33ff66@0.9", "0x33ff66", False
+
+    background, viz, bar_color, title_color = {
+        SKIN_BARS: (
+            "0x0d0d1a",
+            f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
+            ":colors=0x00e07c|0xffcc00",
+            "0xffcc00@0.9",
+            "white",
+        ),
+        SKIN_SPECTRUM: (
+            "0x0a0a14",
+            f"showcqt=s={viz_w}x{viz_h}:count=2:bar_g=2:sono_g=4"
+            ":sono_h=0:axis_h=0",
+            "white@0.7",
+            "white",
+        ),
+        SKIN_SCOPE: (
+            "0x001100",
+            f"avectorscope=s={viz_w}x{viz_h}:draw=line:zoom=1.5",
+            "0x33ff66@0.8",
+            "0x33ff66",
+        ),
+        SKIN_PARTY: (
+            "0x14001f",
+            f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
+            # The hue cycles through the wheel every three seconds; applied
+            # to the visualiser only, so the text stays readable while the
+            # bars strobe.
+            ":colors=0xff4dd2|0x4dd2ff,hue=H=2*PI*t/3",
+            "0xff4dd2@0.9",
+            "white",
+        ),
+        SKIN_VHS: (
+            "0x0b0b12",
+            # sqrt lifts quiet passages: a waveform of ordinary speech on a
+            # linear scale is a thin line pretending the tape is blank.
+            f"showwaves=s={viz_w}x{viz_h}:mode=cline:scale=sqrt"
+            ":colors=0xd8d8f0",
+            "white@0.8",
+            "white",
+        ),
+    }[skin]
+
+    graph = (
+        f"color=c={background}:s={size}x{size}:d={dur}[bg];"
+        f"[0:a]{viz}[viz];"
+        f"[bg][viz]overlay={pad}:{viz_y}:shortest=1[canvas0];"
+    )
+    if skin == SKIN_VHS:
+        # Tape damage goes on before the text, so the title stays legible
+        # over the static, the scanlines and the smeared chroma.
+        graph += (
+            "[canvas0]noise=alls=17:allf=t+u,"
+            f"drawgrid=w={size}:h=3:t=1:c=black@0.3,"
+            "chromashift=crh=4:cbh=-4[canvas];"
+        )
+    else:
+        graph += "[canvas0]null[canvas];"
+    return graph, bar_color, title_color, False
+
+
 def build_graph(
     skin: str,
     *,
@@ -189,75 +309,60 @@ def build_graph(
     subs_file: Path | None,
     with_cover: bool,
     size: int = NOTE_SIZE,
+    round_frame: bool = False,
 ) -> str:
     """The whole filter graph for one skin, ending in ``[out]``.
 
-    Layout is shared across skins so the presets read as variations of one
-    design rather than four unrelated screens: title on top, visualiser in the
-    middle, the time span above a progress bar along the bottom edge. The
-    progress bar is a strip slid across by ``overlay``'s ``t`` — drawbox can
-    animate too, but overlay's expressions are the documented, boring path.
+    Two layouts share the code. The square one uses the full frame: title at
+    the top edge, time span and a frame-wide progress bar along the bottom.
+    ``round_frame`` is for a video note, which Telegram crops to the circle
+    inscribed in the square — at 384 px, a centred line at the very top has
+    barely 200 px of visible chord — so everything textual moves inside the
+    circle and the progress bar becomes a short centred track.
+
+    The progress fill is a strip slid across by ``overlay``'s ``t``
+    expression *inside* a track-sized composition, which clips it: overlay's
+    output takes the first input's size, so the strip cannot poke out of the
+    track while it slides. (``crop`` evaluates ``w`` once at configuration,
+    so a bar that grows by ``t`` is not available that way; drawbox can
+    animate but overlay is the documented, boring path.)
     """
     if skin not in SKINS:
         raise ValueError(f"Unknown skin {skin!r}")
 
-    pad = 8
-    viz_w, viz_h = size - 2 * pad, size - 144
-    viz_y = 72
     dur = max(0.1, duration)
-
-    if skin == SKIN_COVER:
-        if with_cover:
-            base = (
-                f"[1:v]scale={size}:{size}:force_original_aspect_ratio="
-                f"increase,crop={size}:{size},eq=brightness=-0.15[canvas];"
-            )
-        else:
-            # No artwork came with the episode; an honest dark card keeps the
-            # title and subtitles rather than pretending another skin was
-            # asked for.
-            base = f"color=c=0x1a1a2e:s={size}x{size}:d={dur}[canvas];"
-        bar_color = "white@0.85"
-        title_box = True
+    if round_frame:
+        title_y, title_size = int(size * 0.13), 14
+        span_y, span_size = int(size * 0.8125), 12
+        bar_w, bar_h = int(size * 0.39), 5
+        bar_y = int(size * 0.875)
     else:
-        viz = {
-            SKIN_BARS: (
-                "0x0d0d1a",
-                f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
-                ":colors=0x00e07c|0xffcc00",
-            ),
-            SKIN_SPECTRUM: (
-                "0x0a0a14",
-                f"showcqt=s={viz_w}x{viz_h}:count=2:bar_g=2:sono_g=4"
-                ":sono_h=0:axis_h=0",
-            ),
-            SKIN_SCOPE: (
-                "0x001100",
-                f"avectorscope=s={viz_w}x{viz_h}:draw=line:zoom=1.5",
-            ),
-        }[skin]
-        base = (
-            f"color=c={viz[0]}:s={size}x{size}:d={dur}[bg];"
-            f"[0:a]{viz[1]}[viz];"
-            f"[bg][viz]overlay={pad}:{viz_y}:shortest=1[canvas];"
-        )
-        bar_color = "0xffcc00@0.9" if skin == SKIN_BARS else "white@0.7"
-        title_box = False
+        title_y, title_size = 16, 15
+        span_y, span_size = size - 34, 13
+        bar_w, bar_h = size, 6
+        bar_y = size - 14
+    bar_x = (size - bar_w) // 2
 
-    title_color = "0x33ff66" if skin == SKIN_SCOPE else "white"
+    base, bar_color, title_color, title_box = _canvas(
+        skin, size=size, dur=dur, with_cover=with_cover
+    )
+
     chain = (
         base
-        + f"color=c={bar_color}:s={size}x6:d={dur}[bar];"
-        + f"[canvas][bar]overlay=x='-W+W*t/{dur}':y={size - 14}"
+        + f"color=c=white@0.18:s={bar_w}x{bar_h}:d={dur}[track];"
+        + f"color=c={bar_color}:s={bar_w}x{bar_h}:d={dur}[fill];"
+        + f"[track][fill]overlay=x='-{bar_w}+{bar_w}*t/{dur}':y=0"
+        + ":shortest=1[bar];"
+        + f"[canvas][bar]overlay=x={bar_x}:y={bar_y}"
         + (":shortest=1" if skin == SKIN_COVER and with_cover else "")
         + "[timed];"
         + "[timed]"
         + _drawtext(
-            title_file, y=16, fontsize=15, color=title_color, bold=True,
-            box=title_box,
+            title_file, y=title_y, fontsize=title_size, color=title_color,
+            bold=True, box=title_box,
         )
         + ","
-        + _drawtext(span_file, y=size - 34, fontsize=13, color="0xaaaaaa")
+        + _drawtext(span_file, y=span_y, fontsize=span_size, color="0xaaaaaa")
     )
     if subs_file is not None:
         chain += f",subtitles=filename='{subs_file}'"
@@ -335,6 +440,7 @@ async def render_clip(
     subtitles: list[SubtitleLine] | None,
     cover: Path | None,
     settings: Settings,
+    round_frame: bool = False,
 ) -> Path:
     """Render the cut audio into a square video, verified before it is sent.
 
@@ -346,13 +452,23 @@ async def render_clip(
     """
     title_file = workdir / "title.txt"
     span_file = workdir / "span.txt"
-    title_file.write_text(title, encoding="utf-8")
+    # Fitted here, not by the caller, because how many characters survive is
+    # a property of the layout: drawtext neither wraps nor ellipsises, and a
+    # centred line wider than the frame — or, in a note, wider than the
+    # circle's chord at title height — is simply cropped at both ends.
+    # Verified against rendered frames: ~26 characters of bold Cyrillic at
+    # size 14 fill the round title chord, ~40 at size 15 fill the square.
+    title_file.write_text(
+        truncate(title, 26 if round_frame else 40), encoding="utf-8"
+    )
     span_file.write_text(span, encoding="utf-8")
 
     subs_file: Path | None = None
     if subtitles:
         subs_file = workdir / "subs.ass"
-        subs_file.write_text(ass_document(subtitles), encoding="utf-8")
+        subs_file.write_text(
+            ass_document(subtitles, round_frame=round_frame), encoding="utf-8"
+        )
 
     if cover is not None and not await _cover_usable(cover):
         logger.info("Cover art is not decodable; rendering without it.")
@@ -366,7 +482,7 @@ async def render_clip(
             audio, output,
             skin=skin, duration=duration, title_file=title_file,
             span_file=span_file, subs_file=subs_file, cover=attempt_cover,
-            timeout=settings.ffmpeg_timeout,
+            round_frame=round_frame, timeout=settings.ffmpeg_timeout,
         )
         if reason is None:
             return output
@@ -389,6 +505,7 @@ async def _render_once(
     span_file: Path,
     subs_file: Path | None,
     cover: Path | None,
+    round_frame: bool,
     timeout: float,
 ) -> str | None:
     """One render attempt. ``None`` on success, else the reason it failed."""
@@ -402,6 +519,7 @@ async def _render_once(
         span_file=span_file,
         subs_file=subs_file,
         with_cover=cover is not None,
+        round_frame=round_frame,
     )
     cmd = [
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",

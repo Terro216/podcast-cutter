@@ -20,7 +20,13 @@ from podcast_cutter import video as video_mod
 from podcast_cutter.audio import CutResult
 from podcast_cutter.errors import AudioError, TooLargeError
 from podcast_cutter.proxy import DIRECT, PROXY
-from podcast_cutter.states import FORMAT_NOTE, Awaiting, Screen, get_session
+from podcast_cutter.states import (
+    FORMAT_NOTE,
+    FORMAT_VIDEO,
+    Awaiting,
+    Screen,
+    get_session,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -121,12 +127,25 @@ class TestDelivery:
         assert sent["length"] == video_mod.NOTE_SIZE
         assert update.effective_message.sent_audio is None
 
-    async def test_a_clip_over_a_minute_arrives_as_a_square_video(
+    async def test_the_circle_is_rendered_round_and_the_video_square(
         self, bot, context, ready, monkeypatch
     ):
-        # Telegram refuses notes past sixty seconds; the clip still goes out,
-        # square, with its attribution in the caption.
-        ready.send_as = FORMAT_NOTE
+        # The two formats share the renderer but not the layout: a note is
+        # cropped to a circle by every client, a video file is not.
+        for send_as, round_frame in ((FORMAT_NOTE, True), (FORMAT_VIDEO, False)):
+            ready.send_as = send_as
+            record: dict = {}
+            stub_cut(monkeypatch)
+            stub_render(monkeypatch, record=record)
+
+            await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+            assert record["round_frame"] is round_frame
+
+    async def test_sends_a_square_video_file_when_asked(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_VIDEO
         ready.set_clip(600, 90)
         stub_cut(monkeypatch)
         stub_render(monkeypatch)
@@ -138,12 +157,30 @@ class TestDelivery:
         assert sent is not None
         assert sent["width"] == sent["height"] == video_mod.NOTE_SIZE
         assert "Episode 10" in sent["caption"]
+        assert sent["filename"].endswith(".mp4")
         assert update.effective_message.sent_video_note is None
 
-    async def test_a_clip_past_the_video_cap_is_refused_before_any_work(
+    async def test_a_circle_over_a_minute_is_refused_not_silently_squared(
         self, bot, context, ready, monkeypatch
     ):
+        # Which format arrives is the user's choice; the refusal names the
+        # way out instead of switching formats behind their back.
         ready.send_as = FORMAT_NOTE
+        ready.set_clip(600, 90)
+        record: dict = {}
+        stub_cut(monkeypatch, record=record)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+
+        await bot.on_callback(update, context)
+
+        assert "one minute" in update.shown
+        assert "Video" in update.shown
+        assert record == {}
+
+    async def test_a_video_past_the_cap_is_refused_before_any_work(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_VIDEO
         ready.set_clip(600, video_mod.MAX_VIDEO_SECONDS + 1)
         record: dict = {}
         stub_cut(monkeypatch, record=record)

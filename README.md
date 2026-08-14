@@ -19,13 +19,16 @@ Telegram bot: https://t.me/podcast_cutter_bot
 - **Pick the moment without arithmetic.** Send `12:30` for a clip starting
   there, or `12:30-14:00` for an exact range, then nudge it with `◀ −15s` /
   `+1m ▶` buttons until it's right. Length presets are one tap.
-- **Send as an audio file, a voice note or a video note** — voice notes play
-  inline in chat, which is what you want for a short quote, and a video note
-  is the round clip that plays right in the conversation: the sound drawn as
-  animated bars, a spectrum, an oscilloscope or the episode's cover art, with
-  a title, a progress bar — and subtitles, when the episode has already been
-  listened to for search. Notes fit a minute (Telegram's rule); a longer clip
-  arrives as a square video, up to five minutes.
+- **Send as audio, a voice note, a circle or a video** — four formats on one
+  row. Voice notes play inline, which is what you want for a short quote. The
+  circle is the round video note that plays right in the conversation; the
+  video is the same picture as a square file with a caption, for clips longer
+  than the minute Telegram allows a circle. Both draw the sound in one of
+  seven skins — bars, spectrum, oscilloscope, cover art, and the fun ones:
+  party (the bars strobe through the colour wheel), VHS (static, scanlines
+  and smeared chroma) and matrix (a scrolling phosphor-green spectrogram) —
+  with a title, a progress bar, and subtitles when the episode has already
+  been listened to for search.
 - **Nudge after the fact.** The result offers `↺ 15s earlier` / `15s later ↻`
   and re-cuts, so finding the exact line is a couple of taps.
 - **Share from anywhere.** Type `@podcast_cutter_bot some words` in any chat to
@@ -243,18 +246,26 @@ exit successfully having written an unplayable fragment.
 
 ### How a video note is made
 
-A video note is the cut audio drawn by an ffmpeg visualiser under a skin —
-title, time span, a progress bar, and subtitles from the stored transcript
-when the episode has been listened to for search (quarantined spans are
-excluded there too: an invented line must not be burned into a video). The
-render is a couple of seconds for a one-minute note, so it runs as the tail
-of the same cut job, in the same concurrency slot. Telegram accepts notes of
-at most sixty seconds and only by upload; a longer clip goes out as a square
-video with the attribution in its caption, and past five minutes the cut
-button refuses up front. Cover art comes from the episode's own artwork URL,
-is checked by the same source-address rules as audio, and is test-decoded
-before use — a corrupt image would otherwise hang the encoder rather than
-fail it.
+A circle or a video is the cut audio drawn by an ffmpeg visualiser under a
+skin — title, time span, a progress bar, and subtitles from the stored
+transcript when the episode has been listened to for search (quarantined
+spans are excluded there too: an invented line must not be burned into a
+video). The render is a couple of seconds for a one-minute clip, so it runs
+as the tail of the same cut job, in the same concurrency slot.
+
+The two formats share the renderer but not the layout. Telegram crops a note
+to the circle inscribed in the square — at 384 px a centred line at the top
+edge has barely 200 px of visible chord — so the round layout moves every
+piece of text inside the circle, shortens the title to what the chord fits,
+and shrinks the progress bar to a centred track. The square video uses the
+full frame and carries the attribution in its caption; a note cannot
+(`sendVideoNote` has no caption), so there it lives on the result screen.
+A circle past one minute is refused with a pointer at the video format,
+never silently converted; a video past five minutes is refused too.
+
+Cover art comes from the episode's own artwork URL, is checked by the same
+source-address rules as audio, and is test-decoded before use — a corrupt
+image would otherwise hang the encoder rather than fail it.
 
 ### How searching inside an episode works
 

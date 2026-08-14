@@ -18,7 +18,7 @@ from typing import TypeVar
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from .states import FORMAT_AUDIO, FORMAT_NOTE, FORMAT_VOICE
+from .states import FORMAT_AUDIO, FORMAT_NOTE, FORMAT_VIDEO, FORMAT_VOICE
 from .text import button_label, format_duration
 
 T = TypeVar("T")
@@ -101,7 +101,8 @@ SKIN_PREFIX = "skin"
 _FORMAT_LABELS = (
     (FORMAT_AUDIO, "🎵 Audio"),
     (FORMAT_VOICE, "🎤 Voice"),
-    (FORMAT_NOTE, "⭕ Video"),
+    (FORMAT_NOTE, "⭕ Circle"),
+    (FORMAT_VIDEO, "🎬 Video"),
 )
 
 #: Skin key → button label. The keys must equal ``video.SKINS`` — a test
@@ -112,7 +113,13 @@ SKIN_LABELS = {
     "spectrum": "🌈 Spectrum",
     "scope": "🟢 Scope",
     "cover": "🖼 Cover",
+    "party": "🪩 Party",
+    "vhs": "📼 VHS",
+    "matrix": "💊 Matrix",
 }
+
+#: The skin rows split so seven choices do not become seven slivers.
+_SKIN_ROWS = (("bars", "spectrum", "scope", "cover"), ("party", "vhs", "matrix"))
 
 #: A found moment, carried as its start in seconds rather than an index into a
 #: list: the list lives in a session, and a button on a scrolled-past message
@@ -277,20 +284,22 @@ def interval_keyboard(
             for key, label in _FORMAT_LABELS
         ]
     )
-    if send_as == FORMAT_NOTE:
-        # The skins only matter once video is chosen; a permanent second row
-        # of decoration would bury the cut button under choices that mean
-        # nothing for audio.
-        rows.append(
-            [
-                _button(
-                    f"● {label}" if key == skin else label,
-                    f"{SKIN_PREFIX}:{key}",
-                    STYLE_SUCCESS if key == skin else None,
-                )
-                for key, label in SKIN_LABELS.items()
-            ]
-        )
+    if send_as in (FORMAT_NOTE, FORMAT_VIDEO):
+        # The skins only matter once a video format is chosen; a permanent
+        # block of decoration would bury the cut button under choices that
+        # mean nothing for audio.
+        for group in _SKIN_ROWS:
+            rows.append(
+                [
+                    _button(
+                        f"● {SKIN_LABELS[key]}" if key == skin
+                        else SKIN_LABELS[key],
+                        f"{SKIN_PREFIX}:{key}",
+                        STYLE_SUCCESS if key == skin else None,
+                    )
+                    for key in group
+                ]
+            )
     rows.append([_button("✂️ Cut it", ACTION_CUT, STYLE_PRIMARY)])
     if can_search:
         rows.append([_button("🔎 Find a moment by what was said", ACTION_FIND)])

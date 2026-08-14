@@ -36,8 +36,14 @@ MAX_RECENTS = 10
 #: would be serialised back to exactly this anyway.
 FORMAT_AUDIO = "audio"
 FORMAT_VOICE = "voice"
+#: The round video note, cropped to a circle by every client and capped at a
+#: minute by the API.
 FORMAT_NOTE = "note"
-FORMATS = (FORMAT_AUDIO, FORMAT_VOICE, FORMAT_NOTE)
+#: An ordinary square video file — the same render, full-frame layout, sent
+#: with a caption. Its own format rather than a fallback of the note: which
+#: one arrives is the user's choice, not a side effect of the clip's length.
+FORMAT_VIDEO = "video"
+FORMATS = (FORMAT_AUDIO, FORMAT_VOICE, FORMAT_NOTE, FORMAT_VIDEO)
 
 
 class Screen(Enum):
