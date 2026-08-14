@@ -22,6 +22,19 @@
 > `user_version` still 4 and every warmed transcript intact, container
 > `healthy`, and the resume-after-restart path exercised against a real
 > episode on the host — numbers in §5.4.
+>
+> **Runtime note, 2026-08-14, evening.** Video notes (ROADMAP §6) are built
+> and deployed: pre-deploy snapshot `predeploy-20260814-223445.db`
+> (quick_check ok), 835 tests + 8 skips, ruff clean, container `healthy` on
+> the first start (the service was named in the `up` command). Proven live
+> from the production container: a 60 s cut of warmed episode `58980719790`
+> (3.8 s, direct route), **15 subtitle lines from its stored transcript**,
+> bars-skin render **4.0 s / 3.7 MB**, and `sendVideoNote` through the
+> tunnel accepted it (message_id 1106). One measurement from that check
+> worth keeping: the 3.7 MB upload through the tunnel needs the bot's 300 s
+> upload timeout — a 120 s read timeout expired once; the bot already uses
+> 300. Renders run in the cut pool (`_job_slots`), not in the listening
+> queue, by decision — the reasoning is recorded in ROADMAP §6.
 
 Working notes for whoever picks this up. `README.md` describes the project as
 it is, `ROADMAP.md` where it is going and why; this file records **where we
@@ -42,6 +55,8 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
+| `e4ea82a` | the clip becomes a video note — four skins, subtitles from the transcript |
+| `727fdad` | docs: name the service when deploying, or the tunnel goes down with the bot |
 | `ca0df54` | `source_bytes` is written, and the dynamic-ad hole is priced |
 | `1eb3949` | the normaliser's version is compared; identical bytes stop colliding |
 | `894efc6` | the listening queue moves into SQLite; a wait has a number |
@@ -73,7 +88,7 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**804 tests pass, ruff clean** (8 hybrid basket rows skip unless
+**835 tests pass, ruff clean** (8 hybrid basket rows skip unless
 `EMBED_MODEL_DIR` points at the converted model — §6 has the command).
 The answer key exists, the baselines are committed for all four transcript
 variants, and the model comparison table is done — see §3b.
