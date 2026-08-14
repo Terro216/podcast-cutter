@@ -137,6 +137,21 @@ class TestIndexing:
         assert len(set(results)) == 1
         assert recognizer.calls == 1
 
+    async def test_the_size_of_what_was_fetched_is_recorded(
+        self, store, stub_fetch, tmp_path
+    ):
+        """The column existed and was never written. It is the only property
+        of these bytes a later request can learn without downloading them
+        again, so without it there is nothing to compare a re-check against —
+        and no way to measure how often an episode's bytes change."""
+        indexer = Indexer(settings(), store, FakeRecognizer())
+        transcript = await index(indexer, tmp_path)
+
+        size = store._execute(
+            "SELECT source_bytes FROM transcripts WHERE id = ?", (transcript,)
+        )[0][0]
+        assert size == len(stub_fetch["bytes"])
+
     async def test_identical_bytes_under_another_id_are_not_redone(
         self, store, stub_fetch, tmp_path
     ):

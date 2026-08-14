@@ -178,6 +178,22 @@ class Indexer:
         Concurrent callers for the same episode share one job. The task is
         removed from the map only once it has finished, so a second caller
         arriving mid-transcription joins rather than queues.
+
+        **The lookup below is by episode id, and does not re-check the hash.**
+        That is the one place the "a transcript belongs to the bytes" promise
+        is taken on trust rather than proved, and it is deliberate: proving it
+        means fetching the episode again on every search, which is exactly the
+        instant-search property this cache exists to provide.
+
+        Measured before being left alone (2026-08-14): 25 of 25 sampled
+        directory episodes served an identical total length twice over, so no
+        host in the sample stitches per request; and both episodes this
+        deployment had already transcribed re-hashed **identical** 7.4 h and
+        48.8 h later. So the failure this would catch has not been observed
+        once. `source_bytes` is now recorded against every transcript, which
+        is what a cheap revalidation would need — every sampled host reports a
+        total length for a one-byte ranged GET — and, more immediately, what
+        makes the frequency measurable instead of guessed at.
         """
         if not self.settings.asr_enabled:
             raise TranscriptionDisabled
@@ -247,6 +263,14 @@ class Indexer:
         )
 
         digest = await asyncio.to_thread(_sha256, source)
+        # Recorded because it is the only property of these bytes a *future*
+        # request can learn cheaply: a hash needs the whole file again, and
+        # every one of 25 sampled hosts reports a total length in a one-byte
+        # ranged GET. Nothing reads it yet — see the note on the episode-id
+        # fast path in `transcript_id` — but without it in the row there is
+        # nothing to compare against and no way to measure how often these
+        # bytes change at all.
+        source_bytes = source.stat().st_size
         key = TranscriptKey(
             episode_id=episode_id,
             source_sha256=digest,
@@ -363,6 +387,7 @@ class Indexer:
             {
                 **(meta or {}),
                 "source_url": resolved,
+                "source_bytes": source_bytes,
                 "duration_s": info.duration,
                 "language": language,
                 "ms": elapsed_ms,

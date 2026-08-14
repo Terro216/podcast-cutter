@@ -71,7 +71,7 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**803 tests pass, ruff clean** (8 hybrid basket rows skip unless
+**804 tests pass, ruff clean** (8 hybrid basket rows skip unless
 `EMBED_MODEL_DIR` points at the converted model — §6 has the command).
 The answer key exists, the baselines are committed for all four transcript
 variants, and the model comparison table is done — see §3b.
@@ -587,7 +587,7 @@ difference on the decoder rather than on the feed.
    re-checks the audio hash, which is the one place the dynamic-ad guarantee
    does not hold end-to-end — note the honest fix (re-fetch + re-hash every
    search) would cost the instant-search property, so this is a tradeoff to
-   decide, not a bug to squash; ~~(f) two episode ids serving identical bytes
+   decide, not a bug to squash. **Now priced (2026-08-14) — see §5.1b;** ~~(f) two episode ids serving identical bytes
    can race into an `IntegrityError` after a full transcription~~ **fixed**
    (`1eb3949`): a collision it can prove is a duplicate resolves to the row
    that won, and any other `IntegrityError` still raises. The queue serialises
@@ -597,6 +597,34 @@ difference on the decoder rather than on the feed.
    leak on the timeout path~~ **fixed** in `e3bef37` (the decoded WAV is
    unlinked on the timeout path too). **Only (e) is left, and it is a decision
    rather than a defect.**
+1b. **The dynamic-ad hole (e), measured before deciding.** The premise is that
+   an episode id can serve different bytes later, which would put a warmed
+   transcript's timestamps against audio that no longer exists. Nobody had
+   ever checked whether it happens. Three measurements, all on 2026-08-14
+   from the production container:
+
+   * **Both transcripts this deployment holds re-hashed identical.** Episode
+     `7511532481` 48.8 h after transcription (33 307 323 B, anchor.fm →
+     CloudFront, fetched through the proxy because direct times out) and
+     `58980719790` 7.4 h after (12 777 379 B, redcircle, direct). Same
+     SHA-256 both times, byte for byte.
+   * **No host in a 25-episode directory sample stitches per request.** Each
+     episode probed twice, 20 s apart, by a one-byte ranged GET: **25/25
+     served an identical total length**, ETags identical where present. That
+     includes `dcs-cached.megaphone.fm` and `dcs-spotify.megaphone.fm` —
+     Megaphone's *dynamic content service*, i.e. exactly the machinery the
+     concern is about, returning the same bytes to us twice.
+   * **A cheap re-check is buildable if it is ever wanted: 25/25 hosts report
+     a total length** for that ranged GET (ETag 16/25, Last-Modified 19/25).
+     So revalidation would cost one request of a few bytes, not a
+     re-download — the fast path would stay instant.
+
+   **Decision: the fast path is left alone, and `source_bytes` is now
+   written** (it was in the schema and never populated). Nothing reads it
+   yet. It is there because it is the only property of the fetched bytes a
+   later request can learn cheaply, so it is what any re-check would compare
+   against — and, more immediately, what turns "how often does this happen"
+   from a guess into a query. Build the re-check when a number says to.
 2. **English morphology — the lemma column is inert, not inaccurate.** Checked
    rather than assumed: `lemmatize("proteins folding rapidly")` returns the
    string unchanged, and so do `investors`, `companies`, `studies`. pymorphy3's
