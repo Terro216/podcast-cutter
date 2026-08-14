@@ -71,7 +71,7 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**796 tests pass, ruff clean** (8 hybrid basket rows skip unless
+**803 tests pass, ruff clean** (8 hybrid basket rows skip unless
 `EMBED_MODEL_DIR` points at the converted model — §6 has the command).
 The answer key exists, the baselines are committed for all four transcript
 variants, and the model comparison table is done — see §3b.
@@ -573,18 +573,30 @@ difference on the decoder rather than on the feed.
    while the worker still decodes~~ **fixed** (`e3bef37`): the lock is held
    until the worker thread actually finishes, so a post-timeout retry waits
    rather than starting a second decode on the same model; a test drives the
-   sequence; (d) `NORMALIZER_VERSION` is written to the row but never compared
-   at search time, so bumping it (or losing pymorphy3 in one environment)
-   silently splits the lemma index and the lemma query into different
-   languages; (e) `Indexer.transcript_id`'s episode-id fast path never
+   sequence; ~~(d) `NORMALIZER_VERSION` is written to the row but never
+   compared at search time~~ **fixed** (`1eb3949`): `search_windows` compares
+   before it searches, and a mismatch rebuilds `text_normalized` and
+   `text_lemmas` from the stored `windows.text` — seconds of CPU, because
+   unlike the chunker the normaliser needs no audio. The stored value is
+   `normalizer_identity()` rather than the bare constant, so **losing
+   pymorphy3 counts as a change too**: it is folded into the integer's sign,
+   since widening the column would mean a schema bump and a schema bump
+   rebuilds every transcript. Production is unaffected — pymorphy3 is in the
+   image, identity is 2, and both live rows already store 2; (e)
+   `Indexer.transcript_id`'s episode-id fast path never
    re-checks the audio hash, which is the one place the dynamic-ad guarantee
    does not hold end-to-end — note the honest fix (re-fetch + re-hash every
    search) would cost the instant-search property, so this is a tradeoff to
-   decide, not a bug to squash; (f) two episode ids serving identical bytes
-   can race into an `IntegrityError` after a full transcription; ~~temp files
+   decide, not a bug to squash; ~~(f) two episode ids serving identical bytes
+   can race into an `IntegrityError` after a full transcription~~ **fixed**
+   (`1eb3949`): a collision it can prove is a duplicate resolves to the row
+   that won, and any other `IntegrityError` still raises. The queue serialises
+   transcription within a process, so the window that remains is two processes
+   over one volume — a redeploy overlap, or a script against the live
+   database; ~~temp files
    leak on the timeout path~~ **fixed** in `e3bef37` (the decoded WAV is
-   unlinked on the timeout path too). Fix (a) and (b) next — the baskets will
-   show both moving.
+   unlinked on the timeout path too). **Only (e) is left, and it is a decision
+   rather than a defect.**
 2. **English morphology — the lemma column is inert, not inaccurate.** Checked
    rather than assumed: `lemmatize("proteins folding rapidly")` returns the
    string unchanged, and so do `investors`, `companies`, `studies`. pymorphy3's
@@ -665,9 +677,10 @@ difference on the decoder rather than on the feed.
    or context anywhere in the call path, and 64.4 s later the job was `done`:
    793 s of English audio, **RTF 0.081** against the 0.079 this host was
    measured at, 202 utterances, 52 windows, 52 dense vectors, journalled as
-   `listened/ok/resumed`, and `/var/tmp/podcast-cutter/` left empty. What that
-   run could *not* show is whether the message reached the chat — the journal
-   row is written either way — so a failed send is now a log line (`ff3814a`).
+   `listened/ok/resumed`, and `/var/tmp/podcast-cutter/` left empty. **The
+   message arrived in Telegram** — confirmed by the recipient, so the chain is
+   proven end to end including delivery. The journal row is written whether or
+   not the send succeeds, so a failed send is now also a log line (`ff3814a`).
 5. ~~**Backups.** Nothing is backed up.~~ **Done and live (2026-08-13).**
    Encrypted restic → rclone-native-yandex, the cinemarr/vaultwarden shape:
    the SQLite database (`.backup`, verified against the live WAL, quick_check)
