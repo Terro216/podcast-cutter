@@ -42,7 +42,9 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 
 | commit | what |
 | --- | --- |
-| _this_ | the listening queue moves into SQLite; a wait has a number |
+| `ca0df54` | `source_bytes` is written, and the dynamic-ad hole is priced |
+| `1eb3949` | the normaliser's version is compared; identical bytes stop colliding |
+| `894efc6` | the listening queue moves into SQLite; a wait has a number |
 | `e3b5785` | a Docker healthcheck that catches a wedged event loop |
 | `c6eaf56` | offsite backup to Yandex Disk, the arr/vaultwarden shape |
 | `e3bef37` | a transcription timeout no longer frees the model mid-decode |
@@ -783,8 +785,16 @@ docker run --rm --user root -v podcast-asr-bench:/bench -e HF_HOME=/bench/hf \
       shutil.copy(hf_hub_download(\"intfloat/multilingual-e5-small\", \
       \"tokenizer.json\"), \"/bench/models/multilingual-e5-small-ct2/\")"'
 
-# deploy
-docker compose up -d --build && docker compose logs -f
+# deploy — name the service, or the tunnel is recreated with it
+#
+# `docker compose up -d --build` on its own recreates `podcast-cutter-tunnel`
+# too, and with TELEGRAM_PROXY set the bot's bootstrap `getMe` then goes
+# through a proxy that is not up yet: PTB's `_bootstrap_initialize` raises
+# TimedOut and the container restart-loops until the sidecar is ready. It
+# converges on its own (2026-08-14, ~4 restarts) and no podcast_cutter frame
+# appears in that traceback — but it looks exactly like a broken deploy.
+# Naming the service leaves the tunnel alone and it starts first time.
+docker compose up -d --build podcast-cutter && docker compose logs -f
 
 # how much of the directory can production actually fetch, per route
 docker compose exec -T -e CONCURRENCY=1 podcast-cutter python - 40 \
