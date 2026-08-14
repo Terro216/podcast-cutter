@@ -165,7 +165,14 @@ class TestBuildGraph:
 class TestRealRender:
     @pytest.mark.parametrize(
         ("skin", "round_frame"),
-        [("bars", True), ("vhs", True), ("matrix", False), ("party", False)],
+        [
+            ("bars", True),
+            ("vhs", True),
+            ("matrix", False),
+            ("party", False),
+            ("aurora", False),
+            ("lava", True),
+        ],
     )
     def test_renders_a_playable_square_video_with_subtitles(
         self, tmp_path, settings, skin, round_frame

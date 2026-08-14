@@ -116,10 +116,16 @@ SKIN_LABELS = {
     "party": "🪩 Party",
     "vhs": "📼 VHS",
     "matrix": "💊 Matrix",
+    "aurora": "🌌 Aurora",
+    "lava": "🌋 Lava",
 }
 
-#: The skin rows split so seven choices do not become seven slivers.
-_SKIN_ROWS = (("bars", "spectrum", "scope", "cover"), ("party", "vhs", "matrix"))
+#: The skin rows split so nine choices do not become nine slivers.
+_SKIN_ROWS = (
+    ("bars", "spectrum", "scope"),
+    ("cover", "party", "vhs"),
+    ("matrix", "aurora", "lava"),
+)
 
 #: A found moment, carried as its start in seconds rather than an index into a
 #: list: the list lives in a session, and a button on a scrolled-past message

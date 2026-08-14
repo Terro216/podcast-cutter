@@ -230,14 +230,22 @@ compositing it *inside* a track-sized overlay — `crop` evaluates its width
 once at configuration time, so a bar growing by `t` is not available the
 obvious way.
 
-**Skins**: seven presets on two rows — bars, spectrum, oscilloscope, cover
-art, and the meme shelf: **party** (bars strobing through the colour wheel,
-`hue=H=2*PI*t/3` on the visualiser only, so the text stays readable),
+**Skins**: nine presets on three rows — bars, spectrum, oscilloscope, cover
+art, and the meme shelf: **party** (bars cycling through the colour wheel
+on the visualiser only, so the text stays readable),
 **VHS** (`showwaves` over static, scanlines and smeared chroma — tape damage
 applied *under* the text), **matrix** (a full-frame scrolling spectrogram,
 intensity greyscale with red and blue zeroed to phosphor green; `fscale=log`
 is load-bearing, because speech lives below ~4 kHz and on a linear axis the
-whole picture huddles in the rows the circle crops off). Everything textual
+whole picture huddles in the rows the circle crops off), **aurora** (the
+averaged spectrum melted by a long `tmix` and a heavy `gblur` into a ridge
+that breathes with the voice under a slow hue drift — the gamma lift after
+the blur is what keeps it a glow instead of a smudge) and **lava** (a
+continuous wavelet transform flowing bottom-up under the inferno palette —
+the smoothest picture ffmpeg draws from audio; picked from frames rendered
+on *real speech*, because the synthetic test tone made every smooth
+candidate look wrong: a CQT-based aurora collapsed to one dim spike, and
+the wavelet under pink noise was speckle wall to wall). Everything textual
 reaches ffmpeg through files (`textfile=`, an `.ass` script), never inline
 in the graph, because episode titles contain every character that is an
 operator to the graph parser. Subtitles come from the same transcript the

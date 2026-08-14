@@ -57,6 +57,8 @@ SKIN_COVER = "cover"
 SKIN_PARTY = "party"
 SKIN_VHS = "vhs"
 SKIN_MATRIX = "matrix"
+SKIN_AURORA = "aurora"
+SKIN_LAVA = "lava"
 
 #: Render behaviour lives here; the matching button labels live in
 #: :mod:`keyboards`, which must not import the ffmpeg half of the world. A
@@ -69,6 +71,8 @@ SKINS = (
     SKIN_PARTY,
     SKIN_VHS,
     SKIN_MATRIX,
+    SKIN_AURORA,
+    SKIN_LAVA,
 )
 
 #: Refuse cover images beyond this. Artwork is decoration; a feed offering a
@@ -244,6 +248,19 @@ def _canvas(
         )
         return graph, "0x33ff66@0.9", "0x33ff66", False
 
+    if skin == SKIN_LAVA:
+        # A continuous wavelet transform flowing bottom-up under the inferno
+        # palette — the smoothest picture ffmpeg can draw from audio, and it
+        # fills the circle instead of huddling in the rows it crops (the erbs
+        # scale is doing that work). Chosen from rendered frames of real
+        # speech; the synthetic test tone made every candidate look wrong.
+        graph = (
+            f"[0:a]showcwt=s={size}x{size}:scale=erbs:mode=magnitude"
+            ":slide=scroll:direction=du[cw];"
+            "[cw]pseudocolor=preset=inferno[canvas];"
+        )
+        return graph, "0xffa030@0.9", "0xffb347", False
+
     background, viz, bar_color, title_color = {
         SKIN_BARS: (
             "0x0d0d1a",
@@ -288,6 +305,20 @@ def _canvas(
             f"showwaves=s={viz_w}x{viz_h}:mode=cline:scale=sqrt"
             ":colors=0xd8d8f0,tmix=frames=3",
             "white@0.8",
+            "white",
+        ),
+        SKIN_AURORA: (
+            "0x05030f",
+            # The bars again, but melted: a long tmix and a heavy blur turn
+            # the averaged spectrum into a glowing ridge that breathes with
+            # the voice, and a slow hue drift plays the northern lights.
+            # The gamma lift matters — blurring spreads the energy thin, and
+            # without it the glow reads as a dim smudge.
+            f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
+            ":averaging=8:colors=0x40e0d0|0xff69b4,"
+            "tmix=frames=7,gblur=sigma=11,"
+            "eq=gamma=0.6:saturation=1.9,hue=H=2*PI*t/16",
+            "0xb066ff@0.8",
             "white",
         ),
     }[skin]

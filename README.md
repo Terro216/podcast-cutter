@@ -24,11 +24,13 @@ Telegram bot: https://t.me/podcast_cutter_bot
   circle is the round video note that plays right in the conversation; the
   video is the same picture as a square file with a caption, for clips longer
   than the minute Telegram allows a circle. Both draw the sound in one of
-  seven skins — bars, spectrum, oscilloscope, cover art, and the fun ones:
-  party (the bars strobe through the colour wheel), VHS (static, scanlines
-  and smeared chroma) and matrix (a scrolling phosphor-green spectrogram) —
-  with a title, a progress bar, and subtitles when the episode has already
-  been listened to for search.
+  nine skins — bars, spectrum, oscilloscope, cover art, and the fun shelf:
+  party (the bars cycle through the colour wheel), VHS (static, scanlines
+  and smeared chroma), matrix (a scrolling phosphor-green spectrogram),
+  aurora (the spectrum melted into a glowing ridge that breathes with the
+  voice and slowly shifts colour) and lava (a wavelet transform flowing
+  upward under the inferno palette) — with a title, a progress bar, and
+  subtitles when the episode has already been listened to for search.
 - **Nudge after the fact.** The result offers `↺ 15s earlier` / `15s later ↻`
   and re-cuts, so finding the exact line is a couple of taps.
 - **Share from anywhere.** Type `@podcast_cutter_bot some words` in any chat to
