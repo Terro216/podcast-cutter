@@ -16,6 +16,7 @@ from podcast_cutter.transcripts import (
     Word,
     build,
     cluster,
+    normalizer_identity,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -153,6 +154,38 @@ class TestIdentity:
 
     async def test_unknown_episode_has_no_transcript(self, store):
         assert await store.transcript_for_episode("nope") is None
+
+
+class TestIdenticalBytesFromTwoEpisodes:
+    """A show re-published, or a feed listing an episode twice. The uniqueness
+    constraint is on the bytes, so the second writer collides — after twenty
+    minutes of recognition it had no way of knowing about."""
+
+    async def test_the_duplicate_resolves_to_the_row_that_won(self, store):
+        first = await save(store, episode="e1")
+        second = await save(store, episode="e2")
+
+        assert second == first
+        assert store._execute("SELECT count(*) FROM transcripts")[0][0] == 1
+
+    async def test_the_loser_leaves_no_half_written_rows(self, store):
+        await save(store, episode="e1")
+        utterances = store._execute("SELECT count(*) FROM utterances")[0][0]
+        await save(store, episode="e2")
+
+        assert store._execute("SELECT count(*) FROM utterances")[0][0] == utterances
+
+    async def test_a_real_constraint_failure_still_raises(self, store):
+        """The duplicate path must not become a blanket swallow of
+        IntegrityError — only the collision it can prove is a duplicate."""
+        import sqlite3
+
+        def explode(*args, **kwargs):
+            raise sqlite3.IntegrityError("FOREIGN KEY constraint failed")
+
+        store._insert_transcript = explode
+        with pytest.raises(sqlite3.IntegrityError):
+            await save(store)
 
 
 class TestWriting:
@@ -328,3 +361,76 @@ class TestSearch:
         raw = await store.search_windows(transcript, "фолдинг")
         assert len(raw) > 1, "overlap means several windows hold the same phrase"
         assert len(cluster(raw)) == 1
+
+
+class TestTheNormalisersOwnVersion:
+    """`normalizer_version` was written on every transcript and read by
+    nothing. FTS5 matches tokens literally, so an index built under other
+    rules does not fail — it answers less, and nothing says why."""
+
+    async def test_a_stale_index_is_rebuilt_on_the_next_search(self, store):
+        transcript = await save(store)
+        # As if the rules had changed under a transcript written earlier.
+        store._execute(
+            "UPDATE windows SET text_lemmas = 'кракозябра', text_normalized = "
+            "'кракозябра' WHERE transcript_id = ?",
+            (transcript,),
+        )
+        store._execute(
+            "UPDATE transcripts SET normalizer_version = -99 WHERE id = ?",
+            (transcript,),
+        )
+        # The split is real, not hypothetical: the index no longer holds the
+        # word, so a search over it would come back empty and say nothing.
+        assert store._execute(
+            "SELECT count(*) FROM windows_fts WHERE windows_fts MATCH ?",
+            ('text_lemmas : ("фолдинг")',),
+        )[0][0] == 0
+
+        # Searching repairs first. The rebuild is derived from `windows.text`,
+        # which never changed — a second of CPU, not a re-transcription.
+        assert await store.search_windows(transcript, "фолдинг")
+        assert store._execute(
+            "SELECT normalizer_version FROM transcripts WHERE id = ?", (transcript,)
+        )[0][0] == normalizer_identity()
+
+    async def test_a_matching_version_is_left_alone(self, store):
+        transcript = await save(store)
+        before = store._execute(
+            "SELECT text_lemmas FROM windows WHERE transcript_id = ? ORDER BY id",
+            (transcript,),
+        )
+        assert store._renormalize(transcript) is False
+        after = store._execute(
+            "SELECT text_lemmas FROM windows WHERE transcript_id = ? ORDER BY id",
+            (transcript,),
+        )
+        assert [r[0] for r in before] == [r[0] for r in after]
+
+    async def test_losing_the_dictionary_counts_as_a_change(self, monkeypatch):
+        """The constant alone cannot see this: pymorphy3 going missing changes
+        what `lemmatize` produces without anybody editing a line."""
+        import podcast_cutter.transcripts as t
+
+        with_morph = t.normalizer_identity()
+        monkeypatch.setattr(t, "_morph", lambda: None)
+        assert t.normalizer_identity() != with_morph
+
+    async def test_the_repair_keeps_the_fts_index_in_step(self, store):
+        """External-content FTS5 holds no copy of the text, so an update that
+        skipped the triggers would leave the old tokens searchable."""
+        transcript = await save(store)
+        store._execute(
+            "UPDATE windows SET text_lemmas = 'кракозябра' WHERE transcript_id = ?",
+            (transcript,),
+        )
+        store._execute(
+            "UPDATE transcripts SET normalizer_version = -99 WHERE id = ?",
+            (transcript,),
+        )
+        store._renormalize(transcript)
+
+        assert store._execute(
+            "SELECT count(*) FROM windows_fts WHERE windows_fts MATCH ?",
+            ('text_lemmas : ("кракозябра")',),
+        )[0][0] == 0

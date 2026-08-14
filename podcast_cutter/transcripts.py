@@ -183,6 +183,24 @@ def lemma(word: str) -> str:
     return parsed[0].normal_form if parsed else word
 
 
+def normalizer_identity() -> int:
+    """What identifies the rules an index was built under.
+
+    A function rather than the bare constant, because the constant is only
+    half the story. Whether pymorphy3 is installed changes what
+    :func:`lemmatize` produces just as surely as editing it would: without the
+    dictionary the lemma column holds surface forms, and a lemmatised query
+    against it matches by luck. That split is invisible — the index answers,
+    it just answers less — so the two cases have to be distinguishable in the
+    stored value.
+
+    Encoded by negating the version, because the column is one integer and
+    widening it means a schema bump, which rebuilds every transcript on the
+    machine. Signs are cheap; transcripts are minutes of CPU each.
+    """
+    return NORMALIZER_VERSION if _morph() is not None else -NORMALIZER_VERSION
+
+
 def lemmatize(text: str) -> str:
     """Normalise, then fold every word to its dictionary form.
 

@@ -31,7 +31,6 @@ from pathlib import Path
 
 from .api import Episode
 from .transcripts import (
-    NORMALIZER_VERSION,
     Moment,
     TranscriptBuild,
     Utterance,
@@ -39,6 +38,7 @@ from .transcripts import (
     is_indexable,
     lemmatize,
     normalize,
+    normalizer_identity,
 )
 
 logger = logging.getLogger(__name__)
@@ -524,15 +524,7 @@ class Store:
         hit — it is a different answer that happens to concern the same
         episode.
         """
-        rows = await self._run(
-            """
-            SELECT id FROM transcripts
-            WHERE source_sha256 = ? AND asr_backend = ? AND asr_model = ?
-              AND chunker_version = ?
-            """,
-            (key.source_sha256, key.asr_backend, key.asr_model, key.chunker_version),
-        )
-        return int(rows[0]["id"]) if rows else None
+        return await asyncio.to_thread(self._find_transcript, key)
 
     async def transcript_for_episode(self, episode_id: str) -> int | None:
         """The newest transcript of an episode, whatever produced it.
@@ -570,6 +562,56 @@ class Store:
                 f"these must correspond one to one."
             )
 
+        try:
+            return self._insert_transcript(
+                key, meta, build, vectors, embedding_model
+            )
+        except sqlite3.IntegrityError:
+            # Two episode ids can serve identical bytes — a show re-published,
+            # or a feed listing an episode twice — and `find_transcript` only
+            # rules that out at the moment it is asked, twenty minutes before
+            # this insert.
+            #
+            # The listening queue serialises transcription within one process,
+            # so the remaining window is two processes over one volume: the
+            # overlap during a redeploy, where the outgoing container is still
+            # finishing a job as the incoming one starts, or a script run
+            # against the live database. Both are ordinary, and neither should
+            # cost a user their answer after twenty minutes of waiting.
+            #
+            # The loser of that race has produced the same transcript by
+            # definition: same audio, same model, same chunker. So this is not
+            # an error, it is a duplicate, and the answer is the row that got
+            # there first.
+            existing = self._find_transcript(key)
+            if existing is None:
+                raise
+            logger.info(
+                "These bytes were transcribed concurrently (%s); keeping %s",
+                key.source_sha256[:12],
+                existing,
+            )
+            return existing
+
+    def _find_transcript(self, key: TranscriptKey) -> int | None:
+        rows = self._execute(
+            """
+            SELECT id FROM transcripts
+            WHERE source_sha256 = ? AND asr_backend = ? AND asr_model = ?
+              AND chunker_version = ?
+            """,
+            (key.source_sha256, key.asr_backend, key.asr_model, key.chunker_version),
+        )
+        return int(rows[0]["id"]) if rows else None
+
+    def _insert_transcript(
+        self,
+        key: TranscriptKey,
+        meta: dict,
+        build: TranscriptBuild,
+        vectors: list[bytes] | None = None,
+        embedding_model: str | None = None,
+    ) -> int:
         with self._lock:
             connection = self._connection
             with connection:  # commits, or rolls the whole thing back
@@ -595,7 +637,7 @@ class Store:
                         key.asr_backend,
                         key.asr_model,
                         key.chunker_version,
-                        NORMALIZER_VERSION,
+                        normalizer_identity(),
                         embedding_model if vectors else None,
                         build.quarantined,
                         meta.get("ms"),
@@ -691,6 +733,55 @@ class Store:
             self._save_transcript, key, meta, build, vectors, embedding_model
         )
 
+    def _renormalize(self, transcript_id: int) -> bool:
+        """Rebuild a transcript's text columns under today's rules.
+
+        The cheap half of a re-index. `chunker_version` is part of the
+        transcript key because changing it means the *audio* has to be heard
+        again; the normaliser is not, because everything it needs is already
+        in `windows.text` — so a mismatch costs a second of CPU rather than
+        the twenty minutes a re-transcription would.
+        """
+        if self._connection is None:
+            raise RuntimeError("Store is not connected")
+        wanted = normalizer_identity()
+
+        with self._lock:
+            connection = self._connection
+            row = connection.execute(
+                "SELECT normalizer_version FROM transcripts WHERE id = ?",
+                (transcript_id,),
+            ).fetchone()
+            if row is None or row["normalizer_version"] == wanted:
+                return False
+
+            windows = connection.execute(
+                "SELECT id, text FROM windows WHERE transcript_id = ?",
+                (transcript_id,),
+            ).fetchall()
+            with connection:  # the triggers rewrite the FTS rows for us
+                connection.executemany(
+                    "UPDATE windows SET text_normalized = ?, text_lemmas = ? "
+                    "WHERE id = ?",
+                    [
+                        (normalize(w["text"]), lemmatize(w["text"]), w["id"])
+                        for w in windows
+                    ],
+                )
+                connection.execute(
+                    "UPDATE transcripts SET normalizer_version = ? WHERE id = ?",
+                    (wanted, transcript_id),
+                )
+
+        logger.info(
+            "Re-normalised transcript %s (%s → %s) over %d windows",
+            transcript_id,
+            row["normalizer_version"],
+            wanted,
+            len(windows),
+        )
+        return True
+
     async def search_windows(
         self, transcript_id: int, query: str, limit: int = 20
     ) -> list[Moment]:
@@ -700,6 +791,14 @@ class Store:
         and :func:`~podcast_cutter.transcripts.cluster` both want "higher wins"
         and should not each have to remember which way round this one is.
         """
+        # The stored columns and this query have to have been produced by the
+        # same rules, or they are two languages that happen to share an
+        # alphabet: FTS5 matches tokens literally, so an index built under
+        # other rules does not fail, it quietly answers less. Checked here
+        # because this is the only code that reads those columns — a version
+        # written and never compared is a guarantee nobody is keeping.
+        await asyncio.to_thread(self._renormalize, transcript_id)
+
         # Lemmas first, surface forms second. The lemma index is what makes
         # Russian work at all, and the surface index is the check on it: when
         # the dictionary mangles a word — names and jargon especially — the
