@@ -15,6 +15,13 @@
 > restore round-trip validated, three systemd timers enabled (daily 04:57,
 > weekly Sun 06:42, monthly 1st Sat) — see `docs/backup-policy.md`. The restic
 > password is in `.env`; **its Bitwarden copy is still owed.**
+>
+> **Runtime note, 2026-08-14.** The listening queue now lives in SQLite (§5.4)
+> and is deployed: pre-deploy snapshot `predeploy-20260814-140049.db`
+> (quick_check ok), `asr_jobs` created on the live database with
+> `user_version` still 4 and every warmed transcript intact, container
+> `healthy`, and the resume-after-restart path exercised against a real
+> episode on the host — numbers in §5.4.
 
 Working notes for whoever picks this up. `README.md` describes the project as
 it is, `ROADMAP.md` where it is going and why; this file records **where we
@@ -64,7 +71,7 @@ Recent history, newest first, on branch **`harden-source-urls`**:
 | `dccbf01` | `ROADMAP.md` |
 | `b94c57c` | bound where an episode URL may point |
 
-**792 tests pass, ruff clean** (8 hybrid basket rows skip unless
+**796 tests pass, ruff clean** (8 hybrid basket rows skip unless
 `EMBED_MODEL_DIR` points at the converted model — §6 has the command).
 The answer key exists, the baselines are committed for all four transcript
 variants, and the model comparison table is done — see §3b.
@@ -649,6 +656,18 @@ difference on the decoder rather than on the feed.
      cannot become a boot loop that re-downloads it every start. Still open
      here: an **ETA** beside the position, which needs per-length history the
      queue does not keep, and LRU eviction of old transcripts.
+
+   **Proven on big-one, not just in tests (2026-08-14).** A row was written
+   straight into `asr_jobs` for an untranscribed episode — so only a restart
+   could pick it up — and the container was restarted. The log said
+   `Resuming the listening queue: 1 episode waiting (0 interrupted by the
+   restart)`, the worker downloaded, decoded and recognised it with no update
+   or context anywhere in the call path, and 64.4 s later the job was `done`:
+   793 s of English audio, **RTF 0.081** against the 0.079 this host was
+   measured at, 202 utterances, 52 windows, 52 dense vectors, journalled as
+   `listened/ok/resumed`, and `/var/tmp/podcast-cutter/` left empty. What that
+   run could *not* show is whether the message reached the chat — the journal
+   row is written either way — so a failed send is now a log line (`ff3814a`).
 5. ~~**Backups.** Nothing is backed up.~~ **Done and live (2026-08-13).**
    Encrypted restic → rclone-native-yandex, the cinemarr/vaultwarden shape:
    the SQLite database (`.backup`, verified against the live WAL, quick_check)
