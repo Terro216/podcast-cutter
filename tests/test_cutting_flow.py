@@ -529,19 +529,72 @@ class TestInlineMode:
         assert update.inline_query.answers
         assert update.inline_query.results == []
 
-    async def test_falls_back_to_a_podcast_search_when_no_person_matches(
+    async def test_a_show_name_answers_that_shows_episodes(
+        self, bot, context, client
+    ):
+        """Feeds first: a show title must never be answered by whatever the
+        person-search loosely matches across the directory."""
+        update = FakeInlineUpdate("Radiolab")
+        await bot.on_inline_query(update, context)
+
+        assert update.inline_query.results
+        assert any(call.startswith("list_episodes:") for call in client.calls)
+        assert not any(
+            call.startswith("search_episodes_by_person") for call in client.calls
+        )
+
+    async def test_falls_back_to_people_when_no_podcast_matches(
         self, bot, context, client
     ):
         from podcast_cutter.errors import NotFoundError
 
-        client.person_fail = NotFoundError("nobody")
-        update = FakeInlineUpdate("Radiolab")
+        client.feeds_fail = NotFoundError("no such show")
+        update = FakeInlineUpdate("lex fridman")
 
         await bot.on_inline_query(update, context)
 
         assert update.inline_query.results
-        assert any(call.startswith("search_feeds:") for call in client.calls)
-        assert any(call.startswith("list_episodes:") for call in client.calls)
+        assert any(
+            call.startswith("search_episodes_by_person") for call in client.calls
+        )
+
+    async def test_an_exact_share_answers_only_that_episode(
+        self, bot, context, client
+    ):
+        """The Share button carries ``ep:<id>``, so the recipient sees the
+        episode that was shared — not a directory search over its title."""
+        client.by_id["10"] = make_episode("10", "The One Being Shared")
+        update = FakeInlineUpdate("ep:10")
+
+        await bot.on_inline_query(update, context)
+
+        results = update.inline_query.results
+        assert [r.id for r in results] == ["10"]
+        assert results[0].title == "The One Being Shared"
+        assert not any(call.startswith("search_feeds") for call in client.calls)
+
+    async def test_a_dead_shared_episode_answers_empty(
+        self, bot, context, client
+    ):
+        update = FakeInlineUpdate("ep:404")
+        await bot.on_inline_query(update, context)
+        assert update.inline_query.results == []
+        assert update.inline_query.options["button"] is not None
+
+    async def test_the_share_button_carries_the_id_not_the_title(
+        self, bot, context, ready, monkeypatch
+    ):
+        stub_cut(monkeypatch)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+        await bot.on_callback(update, context)
+
+        share = next(
+            b
+            for row in update.markup.inline_keyboard
+            for b in row
+            if b.switch_inline_query is not None
+        )
+        assert share.switch_inline_query == "ep:10"
 
     async def test_a_query_nothing_matches_answers_empty(
         self, bot, context, client

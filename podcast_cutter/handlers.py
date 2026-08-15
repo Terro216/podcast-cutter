@@ -1730,7 +1730,16 @@ class PodcastCutterBot:
             return
 
         try:
-            episodes = await self._inline_episodes(query)
+            if query.startswith(kb.INLINE_EPISODE_PREFIX):
+                # The Share button asks for one exact episode by id; nothing
+                # here should depend on how the directory feels about titles.
+                episodes = [
+                    await self.client.get_episode(
+                        query[len(kb.INLINE_EPISODE_PREFIX) :].strip()
+                    )
+                ]
+            else:
+                episodes = await self._inline_episodes(query)
         except PodcastCutterError as exc:
             # Nothing to show is not an error the user can act on here — the
             # button stays, so they can still open the bot and search properly.
@@ -1754,22 +1763,23 @@ class PodcastCutterBot:
         )
 
     async def _inline_episodes(self, query: str) -> list[Episode]:
-        """Episodes to offer for an inline query.
+        """Episodes to offer for a free-text inline query.
 
-        ``/search/byperson`` only matches people credited in a feed, so it
-        answers nothing for a topic or a podcast's own name — which is what
-        most people type. Fall back to searching podcasts by term and offering
-        the top match's episodes, the same two-step the in-chat search does.
+        The podcast search goes first: what people type inline is mostly a
+        show's name, and ``/search/byperson`` — despite its name — matches
+        free text loosely across the whole directory, so asking it first
+        answered a show title with somebody else's podcasts (observed live:
+        a shared episode title came back as a page of Chinese feeds). A
+        person's name that matches no podcast still falls through to it.
         """
         try:
-            return await self.client.search_episodes_by_person(query)
+            feeds, _ = await self.client.search_feeds(query)
+            if feeds:
+                return await self.client.list_episodes(feeds[0].id)
         except NotFoundError:
             pass
 
-        feeds, _ = await self.client.search_feeds(query)
-        if not feeds:
-            raise NotFoundError("err_no_podcasts", query=one_line(query))
-        return await self.client.list_episodes(feeds[0].id)
+        return await self.client.search_episodes_by_person(query)
 
     def _inline_result(
         self, episode: Episode, lang: str = DEFAULT_LANGUAGE

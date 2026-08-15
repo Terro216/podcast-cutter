@@ -441,7 +441,9 @@ def result(session: Session, bot_username: str) -> View:
     lang = session.language
     episode = session.episode
     heading = _episode_heading(episode) if episode else ""
-    share = episode.title if episode else ""
+    # The id, not the title: the title went through the directory's fuzzy
+    # search and shared somebody else's podcasts (observed live, 2026-08-15).
+    share = f"{kb.INLINE_EPISODE_PREFIX}{episode.id}" if episode else ""
 
     body = (
         breadcrumb(session)
@@ -458,7 +460,7 @@ def result(session: Session, bot_username: str) -> View:
     return View(
         body,
         kb.result_keyboard(
-            truncate(share, 40),
+            share,
             lang,
             # Attribution: the way back to the whole episode rides on the
             # result screen, which is also what a captionless video note has.

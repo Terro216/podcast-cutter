@@ -147,6 +147,11 @@ _SKIN_ROWS = (
 #: outlives it.
 MOMENT_PREFIX = "at"
 
+#: What the Share button puts into the inline query: the episode's *id*, not
+#: its title. A title pushed through fuzzy directory search used to answer
+#: with somebody else's podcasts entirely; an id answers with the episode.
+INLINE_EPISODE_PREFIX = "ep:"
+
 
 def parse_callback(data: str | None) -> tuple[str, str]:
     """Split ``"ep:1234"`` into ``("ep", "1234")``.

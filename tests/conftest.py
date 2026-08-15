@@ -200,6 +200,8 @@ class FakeClient:
         #: Raised by :meth:`search_episodes_by_person` alone, so a caller that
         #: falls back to a feed search can be exercised.
         self.person_fail: Exception | None = None
+        #: Raised by :meth:`search_feeds` alone — the inverse fallback.
+        self.feeds_fail: Exception | None = None
         self.calls: list[str] = []
 
     def _check(self, name: str) -> None:
@@ -209,6 +211,8 @@ class FakeClient:
 
     async def search_feeds(self, query, page=1):
         self._check(f"search_feeds:{query}:{page}")
+        if self.feeds_fail is not None:
+            raise self.feeds_fail
         return list(self.feeds), self.has_next
 
     async def list_episodes(self, feed_id):
