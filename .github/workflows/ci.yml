@@ -1,0 +1,40 @@
+# Lint and the full test suite, on every push and PR.
+#
+# The suite needs a real ffmpeg: the integration tests cut real audio served
+# from a local HTTP server, which is what makes them worth running. Everything
+# model-shaped (speech recognition, embeddings) is faked in tests, so no
+# weights are downloaded here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Lint
+        run: poetry run ruff check . --output-format github
+
+      - name: Tests
+        run: poetry run pytest -q
