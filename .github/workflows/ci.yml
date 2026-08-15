@@ -20,7 +20,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        # The SSRF lock (`-max_redirects 0` in audio.py) only exists in
+        # ffmpeg >= 7.1; production runs 7.1.x, while Ubuntu 24.04's apt
+        # ffmpeg is 6.1 and fails every remote probe with "Option not
+        # found". Pin CI to the same 7.1 line via BtbN's static builds.
+        run: |
+          curl -fsSL -o /tmp/ffmpeg.tar.xz \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
+          tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
+          sudo install /tmp/ffmpeg-n7.1-latest-linux64-gpl-7.1/bin/ffmpeg \
+            /tmp/ffmpeg-n7.1-latest-linux64-gpl-7.1/bin/ffprobe /usr/local/bin/
+          ffprobe -version | head -1
 
       - name: Install Poetry
         run: pipx install poetry
