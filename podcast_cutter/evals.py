@@ -176,14 +176,14 @@ def _timestamps(raw, query_id: str) -> tuple[float, ...]:
     """
     if raw is None:
         return ()
-    if isinstance(raw, (str, int, float)):
+    if isinstance(raw, str | int | float):
         raw = [raw]
     stamps = []
     for item in raw:
         # YAML numbers go straight through: `at: 90.5` is already seconds,
         # and round-tripping it through the clock parser would refuse the
         # decimal point it never promised to read.
-        if isinstance(item, (int, float)) and not isinstance(item, bool):
+        if isinstance(item, int | float) and not isinstance(item, bool):
             stamps.append(float(item))
             continue
         try:
