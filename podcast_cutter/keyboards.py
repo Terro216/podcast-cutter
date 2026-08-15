@@ -112,6 +112,9 @@ NAV_NOOP = f"{NAV_PREFIX}:noop"
 
 ACTION_CUT = "act:cut"
 ACTION_RETRY = "act:retry"
+#: Render a short sample of the current clip in every skin, so nobody has
+#: to spend ten cuts to find out what the buttons mean.
+ACTION_DEMO = "act:demo"
 #: The pre-video-note format toggle. No keyboard offers it any more, but
 #: buttons on scrolled-past messages outlive keyboards, so the router still
 #: answers it.
@@ -136,21 +139,24 @@ _FORMAT_LABEL_KEYS = (
 SKIN_LABELS = {
     "cover": "skin_cover",
     "vinyl": "skin_vinyl",
-    "brainrot": "skin_brainrot",
     "aurora": "skin_aurora",
     "party": "skin_party",
     "lava": "skin_lava",
     "matrix": "skin_matrix",
     "fractal": "skin_fractal",
     "dvd": "skin_dvd",
+    "random": "skin_random",
+    "subway": "skin_subway",
 }
 
-#: The skin rows split so nine choices do not become nine slivers: the
-#: artwork family first, then the glowing visualisers, then the memes.
+#: The skin rows split so ten choices do not become ten slivers: the
+#: artwork family first, then the glowing visualisers, then the memes,
+#: with the loop-backed pair closing the block.
 _SKIN_ROWS = (
     ("cover", "vinyl", "dvd"),
     ("aurora", "party", "lava"),
-    ("matrix", "fractal", "brainrot"),
+    ("matrix", "fractal"),
+    ("random", "subway"),
 )
 
 #: A found moment, carried as its start in seconds rather than an index into a
@@ -345,6 +351,7 @@ def interval_keyboard(
                     for key in group
                 ]
             )
+        rows.append([_button(t(lang, "btn_demo"), ACTION_DEMO)])
     rows.append([_button(t(lang, "btn_cut"), ACTION_CUT, STYLE_PRIMARY)])
     if can_search:
         rows.append([_button(t(lang, "btn_find"), ACTION_FIND)])

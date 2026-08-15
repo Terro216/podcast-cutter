@@ -140,6 +140,12 @@ _EN = {
     ),
     "full_episode_link": "Full episode",
     "btn_full_episode": "🎧 Open the full episode",
+    "btn_demo": "🎨 Demo all skins",
+    "demo_working": "🎨 Rendering {label} — {i}/{n}…",
+    "demo_done": (
+        "🎨 That was every skin on a {seconds}-second sample of your clip. "
+        "Pick the one you liked and hit Cut."
+    ),
     "status_cutting": "✂️ Cutting the segment…",
     "status_full_download": (
         "⬇️ This host does not allow partial reads — downloading "
@@ -309,7 +315,8 @@ _EN = {
     "fmt_video": "🎬 Video",
     "skin_cover": "🖼 Cover",
     "skin_vinyl": "💿 Vinyl",
-    "skin_brainrot": "🧠 Brainrot",
+    "skin_random": "🎲 Random",
+    "skin_subway": "🏄 Subway",
     "skin_aurora": "🌌 Aurora",
     "skin_party": "🪩 Party",
     "skin_lava": "🌋 Lava",
@@ -537,6 +544,12 @@ _RU = {
     ),
     "full_episode_link": "Полный выпуск",
     "btn_full_episode": "🎧 Открыть полный выпуск",
+    "btn_demo": "🎨 Демо всех скинов",
+    "demo_working": "🎨 Рендерю {label} — {i}/{n}…",
+    "demo_done": (
+        "🎨 Это были все скины на {seconds}-секундном кусочке вашего клипа. "
+        "Выберите понравившийся и жмите «Вырезать»."
+    ),
     "status_cutting": "✂️ Вырезаю фрагмент…",
     "status_full_download": (
         "⬇️ Этот хостинг не отдаёт файл по частям — сначала скачиваю "
@@ -700,7 +713,8 @@ _RU = {
     "fmt_video": "🎬 Видео",
     "skin_cover": "🖼 Обложка",
     "skin_vinyl": "💿 Винил",
-    "skin_brainrot": "🧠 Брейнрот",
+    "skin_random": "🎲 Рандом",
+    "skin_subway": "🏄 Сабвей",
     "skin_aurora": "🌌 Сияние",
     "skin_party": "🪩 Вечеринка",
     "skin_lava": "🌋 Лава",

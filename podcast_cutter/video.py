@@ -55,13 +55,16 @@ NOTE_SIZE = 384
 
 SKIN_COVER = "cover"
 SKIN_VINYL = "vinyl"
-SKIN_BRAINROT = "brainrot"
 SKIN_AURORA = "aurora"
 SKIN_PARTY = "party"
 SKIN_LAVA = "lava"
 SKIN_MATRIX = "matrix"
 SKIN_FRACTAL = "fractal"
 SKIN_DVD = "dvd"
+#: The loop-backed pair: ``random`` plays any file the operator dropped on
+#: the volume, ``subway`` only what lives in the ``subway/`` subdirectory.
+SKIN_RANDOM = "random"
+SKIN_SUBWAY = "subway"
 
 #: Render behaviour lives here; the matching button labels live in
 #: :mod:`keyboards`, which must not import the ffmpeg half of the world. A
@@ -69,14 +72,23 @@ SKIN_DVD = "dvd"
 SKINS = (
     SKIN_COVER,
     SKIN_VINYL,
-    SKIN_BRAINROT,
     SKIN_AURORA,
     SKIN_PARTY,
     SKIN_LAVA,
     SKIN_MATRIX,
     SKIN_FRACTAL,
     SKIN_DVD,
+    SKIN_RANDOM,
+    SKIN_SUBWAY,
 )
+
+#: The loop-backed skins, and where each looks for its footage relative to
+#: ``settings.brainrot_dir``: ``random`` sweeps the whole tree, a themed
+#: skin only its own subdirectory.
+LOOP_SKINS: dict[str, str | None] = {
+    SKIN_RANDOM: None,
+    SKIN_SUBWAY: "subway",
+}
 
 #: Retired skins, mapped to their closest living relative. Buttons on
 #: scrolled-past messages outlive keyboards, and a session that chose a look
@@ -86,6 +98,7 @@ LEGACY_SKINS = {
     "spectrum": SKIN_AURORA,
     "scope": SKIN_MATRIX,
     "vhs": SKIN_VINYL,
+    "brainrot": SKIN_RANDOM,
 }
 
 #: Skins whose second input is the episode artwork; the caller only fetches
@@ -275,13 +288,22 @@ def _dark_card(size: int, dur: float) -> str:
     return f"color=c=0x1a1a2e:s={size}x{size}:d={dur}[canvas];"
 
 
-def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
+def _canvas(
+    skin: str,
+    *,
+    size: int,
+    dur: float,
+    with_media: bool,
+    round_frame: bool = False,
+) -> _Canvas:
     """The skin's picture. Every skin paints the whole frame: the inset-box
     geometry of the first generation is what made the visualisers read as
     «слишком технически», so it did not survive the redesign.
 
     ``with_media`` says whether a second input exists — episode artwork for
-    the cover-family skins, a background loop for brainrot.
+    the cover-family skins, a background loop for the loop skins.
+    ``round_frame`` is for the one skin whose *shape* depends on the crop:
+    dvd bounces off the circle in a note and off the frame in a video.
     """
     if skin == SKIN_COVER:
         if not with_media:
@@ -318,7 +340,7 @@ def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
         )
         return _Canvas(graph, "white@0.9", "white", boxed=True, endless=True)
 
-    if skin == SKIN_BRAINROT:
+    if skin in LOOP_SKINS:
         if not with_media:
             return _Canvas(_dark_card(size, dur), "white@0.85", "white", boxed=True)
         # The operator's own background loop (see docs/video-skins.md),
@@ -350,28 +372,21 @@ def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
         return _Canvas(graph, "0xb066ff@0.8", "white")
 
     if skin == SKIN_PARTY:
-        # A neon soundwave over a slowly breathing dance floor: one quadrant
-        # of spectrum bars mirrored four ways pulses symmetrically from the
-        # centre, stretched vertically so speech actually moves the frame —
-        # unstretched, real voices barely left the middle line. The whole
-        # thing spins through the hue wheel every six seconds.
+        # A crisp equalizer standing on the centre line with its reflection
+        # hanging below, spun through the hue wheel. The falling peaks are
+        # ``lagfun``: each pixel keeps its maximum and decays a few percent
+        # per frame, so every syllable leaves a ghost that sinks back down —
+        # the peak-hold of a hi-fi deck. (The earlier tmix+gblur cut was
+        # dismissed as «мыльно»; this one stays sharp on purpose.)
         half = size // 2
-        tall = int(size * 1.6)
         graph = (
-            f"gradients=s={size}x{size}:c0=0x14001f:c1=0x0a0a2e:c2=0x2e0a1e"
-            f":n=3:speed=0.05:d={dur}[floor];"
-            # ``ascale=cbrt`` sits between the extremes measured on real
-            # speech: log pinned every bar to full height and filled the
-            # mirror solid, sqrt collapsed it to a thin centre line.
-            f"[0:a]showfreqs=s={half}x{half}:mode=bar:ascale=cbrt:fscale=log"
-            ":averaging=6:colors=0xff4dd2|0x4dd2ff[q];"
-            "[q]split=2[qa][qb];[qb]hflip[qbf];[qa][qbf]hstack[top];"
-            "[top]split=2[ta][tb];[tb]vflip[tbf];[ta][tbf]vstack[mirror];"
-            f"[mirror]scale={size}:{tall},"
-            f"crop={size}:{size}:0:{(tall - size) // 2}[band];"
-            "[floor][band]blend=all_mode=screen,"
-            "tmix=frames=4,gblur=sigma=3,"
-            "eq=saturation=1.7,hue=H=2*PI*t/6[canvas];"
+            f"[0:a]showfreqs=s={size}x{half}:mode=bar:ascale=cbrt:fscale=log"
+            ":averaging=4:colors=0xff4dd2|0x4dd2ff[fr];"
+            "[fr]split=2[up][dn];"
+            "[dn]vflip,eq=brightness=-0.18:saturation=0.8[refl];"
+            "[up][refl]vstack[eq];"
+            "[eq]lagfun=decay=0.93,"
+            "eq=saturation=1.7,hue=H=2*PI*t/8[canvas];"
         )
         return _Canvas(graph, "0xff4dd2@0.9", "white")
 
@@ -402,7 +417,9 @@ def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
             f"[0:a]showspectrum=s={half}x{half}:mode=combined"
             ":color=intensity:scale=sqrt:fscale=log:slide=scroll"
             ":orientation=horizontal:drange=48[sp];"
-            f"[sp]scale={size}:{size}:flags=neighbor,"
+            # vflip: the scroll grows upward on its own, and rain that rises
+            # is not rain — the streams must fall.
+            f"[sp]scale={size}:{size}:flags=neighbor,vflip,"
             "colorchannelmixer=rr=0:bb=0,"
             f"drawgrid=w=12:h={size}:t=3:c=black@0.85,"
             "eq=contrast=1.3[canvas];"
@@ -412,13 +429,18 @@ def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
         return _Canvas(graph, "0x33ff66@0.9", "0x33ff66", boxed=True)
 
     if skin == SKIN_FRACTAL:
-        # An endless Mandelbrot dive with a slow hue drift: pure hypnosis,
-        # generated locally by ffmpeg at next to no cost. The generator
-        # never ends on its own, so the bar overlay trims it.
+        # An endless Mandelbrot dive that the voice lights up: a blurred
+        # spectrum glow is soft-lit onto the fractal, so loud passages
+        # flush it with colour and silence lets it cool back down. The
+        # generator never ends on its own, so the bar overlay trims it.
         graph = (
             f"mandelbrot=s={size}x{size}:rate=25:end_scale=0.00001"
             ":end_pts=1200[mb];"
-            "[mb]hue=H=t/9:s=1.3[canvas];"
+            "[mb]hue=H=t/9:s=1.3[dive];"
+            f"[0:a]showfreqs=s={size}x{size}:mode=bar:ascale=log:fscale=log"
+            ":averaging=8:colors=0xff40c0|0x40c0ff,"
+            "tmix=frames=5,gblur=sigma=20,eq=gamma=0.7[pulse];"
+            "[dive][pulse]blend=all_mode=softlight[canvas];"
         )
         return _Canvas(graph, "white@0.85", "white", boxed=True, endless=True)
 
@@ -427,23 +449,34 @@ def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
         # the feed has none) drifts and ricochets off the edges; everyone
         # waits for the corner hit. Speeds are deliberately not multiples of
         # each other, so the path takes ages to repeat.
+        #
+        # In the round note the frame's edges are invisible — Telegram crops
+        # to the inscribed circle — so the logo bounces inside the circle's
+        # inscribed *square* instead: a logo whose corner grazes that
+        # square's corner sits exactly on the circle, which reads as
+        # bouncing off the round border rather than off nothing.
         item = size * 3 // 10
+        margin = round(size * (1 - 0.7071) / 2) if round_frame else 0
+        span_w = size - 2 * margin - item
         graph = f"color=c=0x11101c:s={size}x{size}:d={dur}[bg];"
         if with_media:
             graph += (
                 f"[1:v]scale={item}:{item}:force_original_aspect_ratio="
                 f"increase,crop={item}:{item}[item];"
                 "[bg][item]overlay"
-                "=x='abs(mod(43*t,2*(W-w))-(W-w))'"
-                ":y='abs(mod(31*t,2*(H-h))-(H-h))'[canvas];"
+                f"=x='{margin}+abs(mod(43*t,{2 * span_w})-{span_w})'"
+                f":y='{margin}+abs(mod(31*t,{2 * span_w})-{span_w})'[canvas];"
             )
         else:
+            pad = 2 * margin + 28
             graph += (
                 "[bg]drawtext=" + _font(bold=True)
                 + ":text='♪':fontcolor=white:fontsize=72"
                 + ":box=1:boxcolor=0x7a2ea8@0.9:boxborderw=14"
-                + ":x='abs(mod(43*t,2*(w-text_w-28))-(w-text_w-28))'"
-                + ":y='abs(mod(31*t,2*(h-text_h-28))-(h-text_h-28))',"
+                + f":x='{margin}+abs(mod(43*t,2*(w-{pad}-text_w))"
+                + f"-(w-{pad}-text_w))'"
+                + f":y='{margin}+abs(mod(31*t,2*(h-{pad}-text_h))"
+                + f"-(h-{pad}-text_h))',"
                 + "hue=H=2*PI*t/12[canvas];"
             )
         return _Canvas(graph, "0xc084ff@0.9", "white")
@@ -533,7 +566,10 @@ def build_graph(
         clock_size = 13
     bar_x = (size - bar_w) // 2
 
-    canvas = _canvas(skin, size=size, dur=dur, with_media=with_media)
+    canvas = _canvas(
+        skin, size=size, dur=dur, with_media=with_media,
+        round_frame=round_frame,
+    )
     total = f"{int(dur) // 60}\\:{int(dur) % 60:02d}"
 
     chain = canvas.graph
@@ -655,10 +691,17 @@ async def _cover_usable(cover: Path, timeout: float = 30.0) -> bool:
     return code == 0
 
 
-def background_files(settings: Settings) -> list[Path]:
-    """The operator's brainrot loops, if any were dropped on the volume."""
+def background_files(settings: Settings, subdir: str | None) -> list[Path]:
+    """The operator's loops for one loop skin.
+
+    ``random`` (``subdir=None``) sweeps the whole tree, so a file filed
+    under ``subway/`` still counts; a themed skin sees only its own folder.
+    """
+    directory = settings.brainrot_dir
+    if subdir is not None:
+        directory = directory / subdir
     try:
-        entries = sorted(settings.brainrot_dir.iterdir())
+        entries = sorted(directory.rglob("*"))
     except OSError:
         return []
     return [
@@ -668,7 +711,7 @@ def background_files(settings: Settings) -> list[Path]:
 
 
 async def _pick_background(
-    settings: Settings, need: float
+    settings: Settings, need: float, subdir: str | None
 ) -> tuple[Path | None, list[str]]:
     """A random background loop and the input args that loop it.
 
@@ -677,12 +720,12 @@ async def _pick_background(
     offset needs the file's duration, which the audio probe answers only for
     loops that ship sound — a silent file just starts from the top.
     """
-    files = background_files(settings)
+    files = background_files(settings, subdir)
     if not files:
         logger.info(
-            "Brainrot skin has no background loops in %s; "
+            "No background loops for the loop skin under %s; "
             "rendering the plain card.",
-            settings.brainrot_dir,
+            settings.brainrot_dir / (subdir or ""),
         )
         return None, []
     choice = random.choice(files)
@@ -739,15 +782,17 @@ async def render_clip(
             ass_document(
                 subtitles,
                 round_frame=round_frame,
-                centered=skin == SKIN_BRAINROT,
+                centered=skin in LOOP_SKINS,
             ),
             encoding="utf-8",
         )
 
     media = cover if skin in COVER_SKINS else None
     media_args = ["-loop", "1"]
-    if skin == SKIN_BRAINROT:
-        media, media_args = await _pick_background(settings, duration)
+    if skin in LOOP_SKINS:
+        media, media_args = await _pick_background(
+            settings, duration, LOOP_SKINS[skin]
+        )
 
     if media is not None and not await _cover_usable(media):
         logger.info("Second input %s is not decodable; dropping it.", media)

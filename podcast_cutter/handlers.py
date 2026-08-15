@@ -104,6 +104,11 @@ INLINE_EMPTY_CACHE_SECONDS = 5
 #: and a bar that moves more often than this is noise, not information.
 PROGRESS_INTERVAL = 3.0
 
+#: Length of the sample the skin demo renders. Long enough that every skin
+#: shows its motion — the vinyl completes a few turns, the matrix fills the
+#: frame — short enough that ten renders stay around a minute of ffmpeg.
+DEMO_SECONDS = 20
+
 #: Progress-stage → i18n key. The bar and the estimate carry the detail;
 #: the waiting notes live in the i18n tables next to every other sentence.
 _STAGE_KEYS = {
@@ -1197,6 +1202,10 @@ class PodcastCutterBot:
             await self._start_cut(update, session)
             return
 
+        if data == kb.ACTION_DEMO:
+            await self._start_demo(update, session)
+            return
+
         if prefix == kb.SHIFT_PREFIX:
             with contextlib.suppress(ValueError):
                 session.move_clip(int(value))
@@ -1533,6 +1542,249 @@ class PodcastCutterBot:
                     detail=detail,
                 )
 
+    async def _start_demo(self, update: Update, session: Session) -> None:
+        """One tap, every skin: a short sample of the current clip rendered
+        in each look and sent in a row, so choosing a skin does not cost ten
+        cuts of trial and error.
+
+        Charged as a single cut: the sample is capped at
+        :data:`DEMO_SECONDS`, so the whole parade costs about a minute of
+        ffmpeg — one download, ten cheap renders — and it holds the same
+        one-heavy-job-per-user lock and job slot a cut does.
+        """
+        episode = session.episode
+        if episode is None or session.send_as not in (FORMAT_NOTE, FORMAT_VIDEO):
+            await self._stale(update, session)
+            return
+
+        user = update.effective_user
+        user_id = user.id if user else 0
+        if user_id in self._busy_users:
+            await self.show(
+                update,
+                View(
+                    t(session.language, "busy_previous_clip"),
+                    self.view_for(session).keyboard,
+                ),
+            )
+            return
+
+        if not self._budget_allows(self._cut_budget, update):
+            await self.show(
+                update,
+                View(
+                    t(session.language, "rate_cuts"),
+                    self.view_for(session).keyboard,
+                ),
+            )
+            await self._log(update, "limit", outcome="demo")
+            return
+
+        self._busy_users.add(user_id)
+        try:
+            session.clamp()
+            interval = Interval(
+                start=session.clip_start,
+                end=session.clip_start
+                + min(DEMO_SECONDS, session.clip_length),
+            )
+
+            queued = self._job_slots.locked()
+            status_message = await self.show(
+                update,
+                screens.working(
+                    t(
+                        session.language,
+                        "queued_slot" if queued else "working_on_it",
+                    )
+                ),
+            )
+            if status_message is None:
+                return
+
+            job = asyncio.create_task(
+                self._perform_demo(
+                    update, session, episode, interval,
+                    StatusEditor(status_message),
+                )
+            )
+            self._cut_tasks[user_id] = job
+            try:
+                await job
+            except asyncio.CancelledError:
+                if not job.cancelled():
+                    job.cancel()
+                    raise
+        finally:
+            self._cut_tasks.pop(user_id, None)
+            self._busy_users.discard(user_id)
+
+    async def _perform_demo(
+        self,
+        update: Update,
+        session: Session,
+        episode: Episode,
+        interval: Interval,
+        status: StatusEditor,
+    ) -> None:
+        message = update.effective_message
+        lang = session.language
+
+        async def on_status(text: str) -> None:
+            await status.set(text, force=True)
+
+        async def on_progress(done: int, total: int | None) -> None:
+            await status.set(
+                t(lang, "downloading_episode")
+                + f"\n\n{progress_bar(done, total, lang=lang)}"
+            )
+
+        started = time.monotonic()
+        outcome = "failed"
+        detail: str | None = None
+        sent = 0
+
+        async with self._job_slots:
+            workdir = Path(
+                tempfile.mkdtemp(prefix="demo-", dir=self._ensure_work_dir())
+            )
+            try:
+                result = await cut_episode(
+                    episode.enclosure_url,
+                    interval,
+                    workdir,
+                    self.settings,
+                    on_status=on_status,
+                    on_progress=on_progress,
+                    metadata=self._id3_tags(episode, interval),
+                    voice=False,
+                    proxy=self.media_proxy,
+                    lang=lang,
+                )
+                subtitles = await self._subtitles_for(episode, interval)
+                cover = None
+                if episode.image:
+                    cover = await video.fetch_cover(
+                        episode.image, workdir, self.settings
+                    )
+
+                round_frame = session.send_as == FORMAT_NOTE
+                span = (
+                    f"{format_duration(interval.start)}–"
+                    f"{format_duration(interval.end)}"
+                )
+                timeouts = {
+                    "read_timeout": self.settings.upload_timeout,
+                    "write_timeout": self.settings.upload_timeout,
+                    "connect_timeout": 60,
+                }
+                failed: list[str] = []
+                for index, skin in enumerate(video.SKINS, start=1):
+                    label = t(lang, kb.SKIN_LABELS[skin])
+                    await status.set(
+                        t(
+                            lang, "demo_working",
+                            label=label, i=index, n=len(video.SKINS),
+                        ),
+                        force=True,
+                    )
+                    skin_dir = workdir / f"skin-{skin}"
+                    skin_dir.mkdir(exist_ok=True)
+                    try:
+                        path = await video.render_clip(
+                            result.path,
+                            skin_dir,
+                            skin=skin,
+                            duration=float(interval.duration),
+                            title=one_line(
+                                f"{episode.feed_title} — {episode.title}"
+                            ),
+                            span=span,
+                            subtitles=subtitles,
+                            cover=cover,
+                            settings=self.settings,
+                            round_frame=round_frame,
+                        )
+                    except PodcastCutterError as exc:
+                        # One broken look must not sink the parade; the
+                        # journal keeps the name for the postmortem.
+                        logger.warning(
+                            "Demo render of %s failed: %s", skin, exc
+                        )
+                        failed.append(skin)
+                        continue
+                    with path.open("rb") as handle:
+                        if round_frame:
+                            # sendVideoNote has no caption, so the skin's
+                            # name travels one message ahead of it.
+                            await message.reply_text(label)
+                            await message.reply_video_note(
+                                video_note=handle,
+                                duration=interval.duration,
+                                length=video.NOTE_SIZE,
+                                **timeouts,
+                            )
+                        else:
+                            await message.reply_video(
+                                video=handle,
+                                duration=interval.duration,
+                                width=video.NOTE_SIZE,
+                                height=video.NOTE_SIZE,
+                                caption=label,
+                                **timeouts,
+                            )
+                    sent += 1
+
+                outcome = "ok" if sent else "failed"
+                parts = [f"sent={sent}"]
+                if failed:
+                    parts.append("failed=" + ",".join(failed))
+                detail = " ".join(parts)
+                await status.show(
+                    View(
+                        t(lang, "demo_done", seconds=interval.duration),
+                        self.view_for(session).keyboard,
+                    )
+                )
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                await status.show(screens.working(t(lang, "cut_cancelled")))
+                raise
+            except PodcastCutterError as exc:
+                outcome = exc.code
+                detail = exc.user_message()
+                await status.show(
+                    screens.failure(exc.user_message(lang), lang)
+                )
+            except TelegramError as exc:
+                logger.exception("Failed to deliver the demo: %s", exc)
+                outcome, detail = "upload_rejected", str(exc)
+                await status.show(
+                    screens.failure(t(lang, "upload_rejected"), lang)
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected failure in the demo for %s", episode.id
+                )
+                outcome, detail = "crash", f"{type(exc).__name__}: {exc}"
+                await status.show(
+                    screens.failure(t(lang, "generic_error"), lang)
+                )
+            finally:
+                shutil.rmtree(workdir, ignore_errors=True)
+                await self._log(
+                    update,
+                    "demo",
+                    outcome=outcome,
+                    episode_id=episode.id,
+                    feed_title=episode.feed_title,
+                    episode_title=episode.title,
+                    start_s=interval.start,
+                    length_s=interval.duration,
+                    ms=int((time.monotonic() - started) * 1000),
+                    detail=detail,
+                )
+
     def _ensure_work_dir(self) -> Path:
         self.settings.work_dir.mkdir(parents=True, exist_ok=True)
         return self.settings.work_dir
@@ -1546,6 +1798,26 @@ class PodcastCutterBot:
             ChatAction.UPLOAD_VOICE
             if session.as_voice
             else ChatAction.UPLOAD_DOCUMENT
+        )
+
+    async def _subtitles_for(
+        self, episode: Episode, interval: Interval
+    ) -> list[video.SubtitleLine] | None:
+        """The same transcript the search runs on, cut to the clip.
+
+        Nothing is transcribed for a video: an episode nobody has searched
+        simply gets no subtitles, because minutes of CPU for a caption is
+        the wrong trade until somebody asks for the words.
+        """
+        if self.store is None:
+            return None
+        transcript = await self.store.transcript_for_episode(episode.id)
+        if transcript is None:
+            return None
+        utterances = await self.store.utterances_for(transcript)
+        return (
+            video.subtitle_lines(utterances, interval.start, interval.end)
+            or None
         )
 
     async def _render_video(
@@ -1564,21 +1836,7 @@ class PodcastCutterBot:
         anyway. The durable queue earns its complexity protecting minutes of
         CPU across a redeploy; a lost render costs one more tap.
         """
-        subtitles = None
-        if self.store is not None:
-            # The same transcript the search runs on. Nothing is transcribed
-            # for a video: an episode nobody has searched simply gets no
-            # subtitles, because minutes of CPU for a caption is the wrong
-            # trade until somebody asks for the words.
-            transcript = await self.store.transcript_for_episode(episode.id)
-            if transcript is not None:
-                utterances = await self.store.utterances_for(transcript)
-                subtitles = (
-                    video.subtitle_lines(
-                        utterances, interval.start, interval.end
-                    )
-                    or None
-                )
+        subtitles = await self._subtitles_for(episode, interval)
 
         cover = None
         if session.skin in video.COVER_SKINS and episode.image:

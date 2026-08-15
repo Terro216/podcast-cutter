@@ -6,40 +6,47 @@ labels in `keyboards.py`/`i18n.py`. This page is for the operator.
 
 ## The lineup
 
-Three rows of three, as they appear on the keyboard:
+As they appear on the keyboard (the 🎨 demo button under the skin rows
+renders a 20-second sample of the current clip in *every* skin and sends
+them in a row — charged as one cut):
 
 | Skin | Picture | Needs |
 | --- | --- | --- |
 | cover | Episode artwork with a slow Ken Burns zoom | artwork in the feed |
 | vinyl | The artwork spinning like a record, vignetted into the circle | artwork in the feed |
-| dvd | The artwork ricocheting off the frame edges, DVD-logo style | artwork in the feed |
+| dvd | The artwork ricocheting off the edges (of the circle, in a note) | artwork in the feed |
 | aurora | The spectrum melted into northern lights over a black sky | — |
-| party | A mirrored neon soundwave over a dark dance floor, hue spinning | — |
+| party | A crisp equalizer with falling peaks and its reflection, hue spinning | — |
 | lava | A lava lamp of warm gradient blobs that flares with the speech | — |
 | matrix | Chunky phosphor-green streams falling down the frame | — |
-| fractal | An endless Mandelbrot dive with a slow hue drift | — |
-| brainrot | The operator's own background loops behind big centred subtitles | files, see below |
+| fractal | An endless Mandelbrot dive, flushed with colour by the voice | — |
+| random | A random background loop behind big centred subtitles | files, see below |
+| subway | Same, but only loops from the `subway/` subfolder | files, see below |
 
 The artwork skins fall back to an honest dark card when the feed ships no
 image (or a broken one): title, subtitles and progress stay, nothing
 pretends to be another skin. Retired first-generation skins (`bars`,
-`spectrum`, `scope`, `vhs`) still arrive from buttons on old messages;
+`spectrum`, `scope`, `vhs`, `brainrot`) still arrive from buttons on old
+messages;
 `video.LEGACY_SKINS` maps each to its closest heir.
 
-## Feeding the brainrot skin
+## Feeding the loop skins
 
-The skin plays a random file from `<DATA_DIR>/brainrot/` (the compose volume:
-`/data/brainrot/` inside the container), cropped to the square, starting at a
-random offset and looping if the clip outlasts it. Accepted suffixes:
-`.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`. No files — the honest dark card.
+`random` plays a random file from anywhere under `<DATA_DIR>/brainrot/` (the
+compose volume: `/data/brainrot/` inside the container); `subway` draws only
+from `/data/brainrot/subway/`, so themed footage stays themed while still
+counting toward `random`'s pool. Either way the file is cropped to the
+square, starts at a random offset and loops if the clip outlasts it.
+Accepted suffixes: `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`. No files — the
+honest dark card.
 
 Dropping a file in, from the host running the stack:
 
 ```
-docker cp subway.mp4 podcast-cutter:/data/brainrot/
+docker cp subway.mp4 podcast-cutter:/data/brainrot/subway/
 ```
 
-(`docker exec podcast-cutter mkdir -p /data/brainrot` first if it is the
+(`docker exec podcast-cutter mkdir -p /data/brainrot/subway` first if it is the
 volume's first file.) No restart needed; the directory is listed per render.
 
 The repo ships no footage on purpose: gameplay recordings are somebody's

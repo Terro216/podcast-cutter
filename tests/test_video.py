@@ -229,8 +229,9 @@ class TestRealRender:
             # fallbacks; the artwork paths ride the cover test below.
             ("vinyl", True),
             ("dvd", False),
-            # brainrot with an empty loops directory: the honest card.
-            ("brainrot", True),
+            # The loop skins with an empty loops directory: the honest card.
+            ("random", True),
+            ("subway", False),
             # A retired skin arriving from an old button.
             ("vhs", True),
         ],
