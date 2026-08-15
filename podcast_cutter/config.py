@@ -202,6 +202,17 @@ class Settings:
         return self.data_dir / "health" / "heartbeat"
 
     @property
+    def brainrot_dir(self) -> Path:
+        """Background loops for the ``brainrot`` video skin.
+
+        On the volume, not in the image: the footage is the operator's own —
+        the repo ships no gameplay, both for size and for rights reasons —
+        and dropping a file here must not require a rebuild. Missing or
+        empty simply renders the skin as a plain card.
+        """
+        return self.data_dir / "brainrot"
+
+    @property
     def asr_model_dir(self) -> Path:
         """Where recognition models live.
 

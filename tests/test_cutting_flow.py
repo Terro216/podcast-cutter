@@ -195,7 +195,7 @@ class TestDelivery:
         self, bot, context, ready, monkeypatch, store
     ):
         ready.send_as = FORMAT_NOTE
-        ready.skin = "scope"
+        ready.skin = "matrix"
         stub_cut(monkeypatch)
         stub_render(monkeypatch)
 
@@ -204,7 +204,7 @@ class TestDelivery:
         row = store._execute(
             "SELECT outcome, detail, as_voice FROM events WHERE action = 'cut'"
         )[0]
-        assert (row["outcome"], row["detail"]) == ("ok", "note:scope")
+        assert (row["outcome"], row["detail"]) == ("ok", "note:matrix")
         assert not row["as_voice"]
 
     async def test_no_transcript_means_no_subtitles_not_a_transcription(
@@ -757,7 +757,7 @@ class TestReskin:
     ):
         record: dict = {}
         await self._send_a_note(bot, context, ready, monkeypatch, record)
-        assert record["skin"] == "bars"
+        assert record["skin"] == "cover"
 
         retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:matrix")
         await bot.on_callback(retap, context)
@@ -775,7 +775,7 @@ class TestReskin:
         await self._send_a_note(bot, context, ready, monkeypatch, record)
 
         renders_before = dict(record)
-        retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:bars")
+        retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:cover")
         await bot.on_callback(retap, context)
         assert record == renders_before
         assert retap.effective_message.sent_video_note is None
@@ -788,7 +788,7 @@ class TestReskin:
 
         retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:nonsense")
         await bot.on_callback(retap, context)
-        assert ready.skin == "bars"
+        assert ready.skin == "cover"
         assert retap.effective_message.sent_video_note is None
 
     async def test_the_result_screen_offers_the_switch(

@@ -124,22 +124,23 @@ _FORMAT_LABEL_KEYS = (
 #: holds them together — but the labels live in the i18n tables because this
 #: module is the UI vocabulary and must not import the ffmpeg half of the world.
 SKIN_LABELS = {
-    "bars": "skin_bars",
-    "spectrum": "skin_spectrum",
-    "scope": "skin_scope",
     "cover": "skin_cover",
-    "party": "skin_party",
-    "vhs": "skin_vhs",
-    "matrix": "skin_matrix",
+    "vinyl": "skin_vinyl",
+    "brainrot": "skin_brainrot",
     "aurora": "skin_aurora",
+    "party": "skin_party",
     "lava": "skin_lava",
+    "matrix": "skin_matrix",
+    "fractal": "skin_fractal",
+    "dvd": "skin_dvd",
 }
 
-#: The skin rows split so nine choices do not become nine slivers.
+#: The skin rows split so nine choices do not become nine slivers: the
+#: artwork family first, then the glowing visualisers, then the memes.
 _SKIN_ROWS = (
-    ("bars", "spectrum", "scope"),
-    ("cover", "party", "vhs"),
-    ("matrix", "aurora", "lava"),
+    ("cover", "vinyl", "dvd"),
+    ("aurora", "party", "lava"),
+    ("matrix", "fractal", "brainrot"),
 )
 
 #: A found moment, carried as its start in seconds rather than an index into a

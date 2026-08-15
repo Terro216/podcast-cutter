@@ -12,17 +12,20 @@ contain colons, quotes and every other character that is an operator to the
 graph parser, and escaping them in place is exactly the kind of code that
 works until the first Кофлан.
 
-Measured in the production image before this module was shaped (60 s at
-384×384, eight pinned cores): bars 2.5 s / 3.3 MB, spectrum 1.5 s / 0.9 MB,
-scope 1.9 s / 0.8 MB, cover 2.7 s / 0.9 MB. A render is seconds — the cost
-class of a cut, not of a transcription — which is why it runs inside the same
-job slot as the cut that feeds it instead of in the durable listening queue.
+Measured in the production image when the second-generation skins landed
+(30 s of real speech at 384×384, eight pinned cores): brainrot 2.5 s /
+1.4 MB, cover 3.4 s / 0.5 MB, aurora 4.2 s / 0.6 MB, vinyl 4.4 s / 0.6 MB,
+dvd 7.0 s / 1.0 MB, fractal 11 s / 4.1 MB, lava 11.6 s / 1.1 MB, party
+12.5 s / 1.8 MB, matrix 24 s / 4.0 MB. A render is seconds — the cost class
+of a cut, not of a transcription — which is why it runs inside the same job
+slot as the cut that feeds it instead of in the durable listening queue.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,30 +53,47 @@ MAX_VIDEO_SECONDS = 300
 #: it is the size every render was measured at.
 NOTE_SIZE = 384
 
-SKIN_BARS = "bars"
-SKIN_SPECTRUM = "spectrum"
-SKIN_SCOPE = "scope"
 SKIN_COVER = "cover"
-SKIN_PARTY = "party"
-SKIN_VHS = "vhs"
-SKIN_MATRIX = "matrix"
+SKIN_VINYL = "vinyl"
+SKIN_BRAINROT = "brainrot"
 SKIN_AURORA = "aurora"
+SKIN_PARTY = "party"
 SKIN_LAVA = "lava"
+SKIN_MATRIX = "matrix"
+SKIN_FRACTAL = "fractal"
+SKIN_DVD = "dvd"
 
 #: Render behaviour lives here; the matching button labels live in
 #: :mod:`keyboards`, which must not import the ffmpeg half of the world. A
 #: test holds the two key sets equal.
 SKINS = (
-    SKIN_BARS,
-    SKIN_SPECTRUM,
-    SKIN_SCOPE,
     SKIN_COVER,
-    SKIN_PARTY,
-    SKIN_VHS,
-    SKIN_MATRIX,
+    SKIN_VINYL,
+    SKIN_BRAINROT,
     SKIN_AURORA,
+    SKIN_PARTY,
     SKIN_LAVA,
+    SKIN_MATRIX,
+    SKIN_FRACTAL,
+    SKIN_DVD,
 )
+
+#: Retired skins, mapped to their closest living relative. Buttons on
+#: scrolled-past messages outlive keyboards, and a session that chose a look
+#: before a redeploy should get *a* video, not a ValueError.
+LEGACY_SKINS = {
+    "bars": SKIN_PARTY,
+    "spectrum": SKIN_AURORA,
+    "scope": SKIN_MATRIX,
+    "vhs": SKIN_VINYL,
+}
+
+#: Skins whose second input is the episode artwork; the caller only fetches
+#: a cover when the skin will actually put it on screen.
+COVER_SKINS = frozenset({SKIN_COVER, SKIN_VINYL, SKIN_DVD})
+
+#: Container suffixes accepted as brainrot background loops.
+BACKGROUND_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".webm", ".m4v"})
 
 #: Refuse cover images beyond this. Artwork is decoration; a feed offering a
 #: 100 MB "image" is not a feed to indulge.
@@ -82,6 +102,11 @@ MAX_COVER_BYTES = 10 * 1024 * 1024
 _DEJAVU = Path("/usr/share/fonts/truetype/dejavu")
 _ENCODE_ARGS = [
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+    # The VBV cap is for the noisy skins: an uncapped Mandelbrot dive
+    # measured ~2 Mbit/s, which over a five-minute square video overshoots
+    # the upload ceiling. 1 Mbit/s tops out near 40 MB with audio and looks
+    # the same at 384 px.
+    "-maxrate", "1M", "-bufsize", "2M",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "96k",
     "-movflags", "+faststart",
@@ -131,7 +156,10 @@ def _ass_time(seconds: float) -> str:
 
 
 def ass_document(
-    lines: list[SubtitleLine], size: int = NOTE_SIZE, round_frame: bool = False
+    lines: list[SubtitleLine],
+    size: int = NOTE_SIZE,
+    round_frame: bool = False,
+    centered: bool = False,
 ) -> str:
     """An ASS script libass renders bottom-centred with an outline.
 
@@ -141,9 +169,17 @@ def ass_document(
     ``round_frame`` widens the side margins and lifts the block: a video
     note is shown cropped to the circle inscribed in the square, so text
     near the frame's edge is text the viewer never sees.
+
+    ``centered`` is the brainrot layout: captions in the middle of the
+    frame, bigger and bold, because over gameplay footage the words *are*
+    the content.
     """
     side = size // 6 if round_frame else size // 32
     bottom = int(size * 0.31) if round_frame else int(size * 0.115)
+    if centered:
+        fontsize, bold, alignment = size // 15, 1, 5
+    else:
+        fontsize, bold, alignment = max(14, size // 21), 0, 2
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -154,8 +190,8 @@ def ass_document(
         "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
         "BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, "
         "MarginV\n"
-        f"Style: Default,DejaVu Sans,{max(14, size // 21)},&H00FFFFFF,"
-        f"&H00000000,&H80000000,0,2,0,2,{side},{side},{bottom}\n"
+        f"Style: Default,DejaVu Sans,{fontsize},&H00FFFFFF,"
+        f"&H00000000,&H80000000,{bold},2,0,{alignment},{side},{side},{bottom}\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Text\n"
@@ -183,165 +219,269 @@ def _font(bold: bool) -> str:
 
 
 def _drawtext(
-    textfile: Path,
+    textfile: Path | None = None,
     *,
+    text: str | None = None,
+    x: str = "(w-text_w)/2",
     y: int,
     fontsize: int,
     color: str = "white",
     bold: bool = False,
     box: bool = False,
 ) -> str:
+    """One drawtext filter. User-controlled strings go through ``textfile``;
+    inline ``text`` is reserved for strings this module wrote itself (the
+    running clock), which must never contain filter-graph operators."""
+    source = (
+        f"textfile='{textfile}'" if textfile is not None else f"text='{text}'"
+    )
     parts = [
         _font(bold),
-        f"textfile='{textfile}'",
+        source,
         f"fontcolor={color}",
         f"fontsize={fontsize}",
-        "x=(w-text_w)/2",
+        f"x={x}",
         f"y={y}",
     ]
     if box:
-        parts += ["box=1", "boxcolor=black@0.45", "boxborderw=8"]
+        parts += ["box=1", "boxcolor=black@0.45", "boxborderw=6"]
     return "drawtext=" + ":".join(parts)
 
 
-def _canvas(
-    skin: str, *, size: int, dur: float, with_cover: bool
-) -> tuple[str, str, str, bool]:
-    """The skin's picture, ending in ``[canvas]``.
+#: The running clock next to the progress bar: minutes and zero-padded
+#: seconds of the *clip*, ticking as it plays. ``eif`` needs its colons
+#: escaped one level deeper than the option quoting, hence the backslashes.
+_CLOCK_TEXT = r"%{eif\:trunc(t/60)\:d}\:%{eif\:mod(trunc(t)\,60)\:d\:2}"
 
-    Returns ``(graph, bar_color, title_color, title_box)``. Visualiser skins
-    share one geometry — a full-frame background with the visualiser inset —
-    so the presets read as variations of one design; ``matrix`` and ``cover``
-    paint the whole frame themselves.
+
+@dataclass(frozen=True, slots=True)
+class _Canvas:
+    """One skin's picture, as a graph fragment ending in ``[canvas]``."""
+
+    graph: str
+    bar_color: str
+    title_color: str
+    #: Busy, unpredictable background: put dark boxes behind every piece of
+    #: text and under the progress bar, or a bright cover eats them alive.
+    boxed: bool = False
+    #: The canvas never ends on its own (looped stills, endless generators);
+    #: the progress-bar overlay then carries ``shortest=1`` to end the video.
+    endless: bool = False
+
+
+def _dark_card(size: int, dur: float) -> str:
+    # No artwork came with the episode; an honest dark card keeps the title
+    # and subtitles rather than pretending another skin was asked for.
+    return f"color=c=0x1a1a2e:s={size}x{size}:d={dur}[canvas];"
+
+
+def _canvas(skin: str, *, size: int, dur: float, with_media: bool) -> _Canvas:
+    """The skin's picture. Every skin paints the whole frame: the inset-box
+    geometry of the first generation is what made the visualisers read as
+    «слишком технически», so it did not survive the redesign.
+
+    ``with_media`` says whether a second input exists — episode artwork for
+    the cover-family skins, a background loop for brainrot.
     """
-    pad = 8
-    viz_w, viz_h = size - 2 * pad, size - 144
-    viz_y = 72
-
     if skin == SKIN_COVER:
-        if with_cover:
-            graph = (
-                f"[1:v]scale={size}:{size}:force_original_aspect_ratio="
-                f"increase,crop={size}:{size},eq=brightness=-0.15[canvas];"
-            )
-        else:
-            # No artwork came with the episode; an honest dark card keeps the
-            # title and subtitles rather than pretending another skin was
-            # asked for.
-            graph = f"color=c=0x1a1a2e:s={size}x{size}:d={dur}[canvas];"
-        return graph, "white@0.85", "white", True
-
-    if skin == SKIN_MATRIX:
-        # The spectrogram scrolls across the whole frame; intensity greyscale
-        # with red and blue zeroed out is the phosphor green of the meme.
-        # ``fscale=log`` matters more than it looks: speech lives below
-        # ~4 kHz, and on a linear axis the whole picture huddles in the
-        # bottom rows — which the circle crop then cuts off entirely.
-        # ``drange`` is the calm: the default 120 dB window renders the noise
-        # floor as flickering speckle over the whole frame, and 48 dB keeps
-        # the speech bands while the background stays black.
+        if not with_media:
+            return _Canvas(_dark_card(size, dur), "white@0.85", "white", boxed=True)
+        # Ken Burns instead of a frozen poster: the still is scaled with
+        # headroom, then zoompan creeps in ~12% over the clip. ``pzoom``
+        # (not ``zoom``) is what accumulates across a looped still's frames.
+        big = size * 13 // 10
         graph = (
-            f"[0:a]showspectrum=s={size}x{size}:mode=combined"
-            ":color=intensity:scale=sqrt:fscale=log:slide=scroll"
-            ":drange=48[sp];"
-            "[sp]colorchannelmixer=rr=0:bb=0[canvas];"
+            f"[1:v]scale={big}:{big}:force_original_aspect_ratio=increase,"
+            f"crop={big}:{big},"
+            f"zoompan=z='min(pzoom+{0.12 / (25 * dur):.7f},1.5)'"
+            ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={size}x{size}:fps=25,"
+            "eq=brightness=-0.1[canvas];"
         )
-        return graph, "0x33ff66@0.9", "0x33ff66", False
+        return _Canvas(graph, "white@0.9", "white", boxed=True, endless=True)
+
+    if skin == SKIN_VINYL:
+        if not with_media:
+            return _Canvas(_dark_card(size, dur), "white@0.85", "white", boxed=True)
+        # The artwork spins like the record it decorates. Scaled to the
+        # square's diagonal so the rotating square always covers the frame,
+        # and vignetted so the corners fall off into black — in the round
+        # note the circle crop turns this into a literal spinning disc.
+        diag = int(size * 1.42)
+        graph = (
+            f"[1:v]scale={diag}:{diag}:force_original_aspect_ratio=increase,"
+            f"crop={diag}:{diag},"
+            f"rotate=2*PI*t/6:ow={size}:oh={size}:c=black,"
+            "vignette=PI/3.5,"
+            f"drawbox=x={size // 2 - 7}:y={size // 2 - 7}:w=14:h=14"
+            ":color=0x111111@0.9:t=fill[canvas];"
+        )
+        return _Canvas(graph, "white@0.9", "white", boxed=True, endless=True)
+
+    if skin == SKIN_BRAINROT:
+        if not with_media:
+            return _Canvas(_dark_card(size, dur), "white@0.85", "white", boxed=True)
+        # The operator's own background loop (see docs/video-skins.md),
+        # cropped to the square and barely touched: the whole point of the
+        # genre is that the footage is loud.
+        graph = (
+            f"[1:v]scale={size}:{size}:force_original_aspect_ratio=increase,"
+            f"crop={size}:{size},eq=brightness=-0.05[canvas];"
+        )
+        return _Canvas(graph, "white@0.9", "white", boxed=True, endless=True)
+
+    if skin == SKIN_AURORA:
+        # Bars, but melted: a long tmix and a heavy blur turn the averaged
+        # spectrum into a glowing ridge that breathes with the voice, and a
+        # slow hue drift plays the northern lights. The ridge lives on the
+        # lower half of a black sky — rendered full-height it filled the
+        # frame with a solid wall of colour and stopped reading as lights.
+        # The gamma lift matters — blurring spreads the energy thin, and
+        # without it the glow reads as a dim smudge.
+        ridge = int(size * 0.55)
+        graph = (
+            f"color=c=black:s={size}x{size}:d={dur}[sky];"
+            f"[0:a]showfreqs=s={size}x{ridge}:mode=bar:ascale=log:fscale=log"
+            ":averaging=8:colors=0x40e0d0|0xff69b4[ridge];"
+            f"[sky][ridge]overlay=x=0:y={size - ridge}:shortest=1[comp];"
+            "[comp]tmix=frames=7,gblur=sigma=14,"
+            "eq=gamma=0.6:saturation=1.9,hue=H=2*PI*t/16[canvas];"
+        )
+        return _Canvas(graph, "0xb066ff@0.8", "white")
+
+    if skin == SKIN_PARTY:
+        # A neon soundwave over a slowly breathing dance floor: one quadrant
+        # of spectrum bars mirrored four ways pulses symmetrically from the
+        # centre, stretched vertically so speech actually moves the frame —
+        # unstretched, real voices barely left the middle line. The whole
+        # thing spins through the hue wheel every six seconds.
+        half = size // 2
+        tall = int(size * 1.6)
+        graph = (
+            f"gradients=s={size}x{size}:c0=0x14001f:c1=0x0a0a2e:c2=0x2e0a1e"
+            f":n=3:speed=0.05:d={dur}[floor];"
+            # ``ascale=cbrt`` sits between the extremes measured on real
+            # speech: log pinned every bar to full height and filled the
+            # mirror solid, sqrt collapsed it to a thin centre line.
+            f"[0:a]showfreqs=s={half}x{half}:mode=bar:ascale=cbrt:fscale=log"
+            ":averaging=6:colors=0xff4dd2|0x4dd2ff[q];"
+            "[q]split=2[qa][qb];[qb]hflip[qbf];[qa][qbf]hstack[top];"
+            "[top]split=2[ta][tb];[tb]vflip[tbf];[ta][tbf]vstack[mirror];"
+            f"[mirror]scale={size}:{tall},"
+            f"crop={size}:{size}:0:{(tall - size) // 2}[band];"
+            "[floor][band]blend=all_mode=screen,"
+            "tmix=frames=4,gblur=sigma=3,"
+            "eq=saturation=1.7,hue=H=2*PI*t/6[canvas];"
+        )
+        return _Canvas(graph, "0xff4dd2@0.9", "white")
 
     if skin == SKIN_LAVA:
-        # A continuous wavelet transform flowing bottom-up under the inferno
-        # palette — the smoothest picture ffmpeg can draw from audio, and it
-        # fills the circle instead of huddling in the rows it crops (the erbs
-        # scale is doing that work). Chosen from rendered frames of real
-        # speech; the synthetic test tone made every candidate look wrong.
+        # An actual lava lamp: slow warm gradient blobs underneath, and the
+        # aurora treatment of the spectrum screened on top so the glow still
+        # swells with the voice.
         graph = (
-            f"[0:a]showcwt=s={size}x{size}:scale=erbs:mode=magnitude"
-            ":slide=scroll:direction=du[cw];"
-            "[cw]pseudocolor=preset=inferno[canvas];"
+            f"gradients=s={size}x{size}:c0=0x1a0005:c1=0x5c0a00:c2=0xd93800"
+            f":c3=0xff9a00:n=4:speed=0.02:d={dur}[grad];"
+            f"[0:a]showfreqs=s={size}x{size}:mode=bar:ascale=log:fscale=log"
+            ":averaging=8:colors=0xff5a00|0xffc040,"
+            "tmix=frames=9,gblur=sigma=16,eq=gamma=0.65[glow];"
+            "[grad][glow]blend=all_mode=screen,eq=saturation=1.4[canvas];"
         )
-        return graph, "0xffa030@0.9", "0xffb347", False
+        return _Canvas(graph, "0xffa030@0.9", "0xffb347")
 
-    background, viz, bar_color, title_color = {
-        SKIN_BARS: (
-            "0x0d0d1a",
-            # ``averaging`` is what keeps the bars from twitching at frame
-            # rate: raw per-frame spectra jump so hard the picture reads as
-            # glitching rather than dancing.
-            f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
-            ":averaging=8:colors=0x00e07c|0xffcc00",
-            "0xffcc00@0.9",
-            "white",
-        ),
-        SKIN_SPECTRUM: (
-            "0x0a0a14",
-            f"showcqt=s={viz_w}x{viz_h}:count=2:bar_g=2:sono_g=4"
-            ":sono_h=0:axis_h=0",
-            "white@0.7",
-            "white",
-        ),
-        SKIN_SCOPE: (
-            "0x001100",
-            f"avectorscope=s={viz_w}x{viz_h}:draw=line:zoom=1.5",
-            "0x33ff66@0.8",
-            "0x33ff66",
-        ),
-        SKIN_PARTY: (
-            "0x14001f",
-            f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
-            # The hue drifts through the wheel once every eight seconds —
-            # three felt like a strobe — and only on the visualiser, so the
-            # text stays readable while the bars cycle.
-            ":averaging=8:colors=0xff4dd2|0x4dd2ff,hue=H=2*PI*t/8",
-            "0xff4dd2@0.9",
-            "white",
-        ),
-        SKIN_VHS: (
-            "0x0b0b12",
-            # sqrt lifts quiet passages: a waveform of ordinary speech on a
-            # linear scale is a thin line pretending the tape is blank.
-            # tmix is the phosphor: three frames averaged turn the raw
-            # per-frame waveform — which jumps too hard to follow — into a
-            # trailing glow that reads as a CRT instead of a glitch.
-            f"showwaves=s={viz_w}x{viz_h}:mode=cline:scale=sqrt"
-            ":colors=0xd8d8f0,tmix=frames=3",
-            "white@0.8",
-            "white",
-        ),
-        SKIN_AURORA: (
-            "0x05030f",
-            # The bars again, but melted: a long tmix and a heavy blur turn
-            # the averaged spectrum into a glowing ridge that breathes with
-            # the voice, and a slow hue drift plays the northern lights.
-            # The gamma lift matters — blurring spreads the energy thin, and
-            # without it the glow reads as a dim smudge.
-            f"showfreqs=s={viz_w}x{viz_h}:mode=bar:ascale=log:fscale=log"
-            ":averaging=8:colors=0x40e0d0|0xff69b4,"
-            "tmix=frames=7,gblur=sigma=11,"
-            "eq=gamma=0.6:saturation=1.9,hue=H=2*PI*t/16",
-            "0xb066ff@0.8",
-            "white",
-        ),
-    }[skin]
-
-    graph = (
-        f"color=c={background}:s={size}x{size}:d={dur}[bg];"
-        f"[0:a]{viz}[viz];"
-        f"[bg][viz]overlay={pad}:{viz_y}:shortest=1[canvas0];"
-    )
-    if skin == SKIN_VHS:
-        # Tape damage goes on before the text, so the title stays legible
-        # over the static, the scanlines and the smeared chroma.
-        # Tape damage, at a strength that reads as texture rather than a
-        # blizzard: the first cut used alls=17 and a 4-pixel chroma smear,
-        # and the verdict from the person watching was «слишком шумят».
-        graph += (
-            "[canvas0]noise=alls=8:allf=t,"
-            f"drawgrid=w={size}:h=3:t=1:c=black@0.3,"
-            "chromashift=crh=2:cbh=-2[canvas];"
+    if skin == SKIN_MATRIX:
+        # The spectrogram falls down the frame — ``orientation=horizontal``
+        # turns the scroll vertical — and a column grid slices it into the
+        # falling green streams of the meme. ``fscale=log`` keeps speech off
+        # the frame's edge; ``drange=48`` keeps the noise floor black.
+        # Rendered at half size and upscaled with nearest-neighbour: the
+        # doubled cells read as chunky glyph streams instead of a fine-grain
+        # spectrogram, and the frame fills twice as fast from a cold start.
+        half = size // 2
+        graph = (
+            f"[0:a]showspectrum=s={half}x{half}:mode=combined"
+            ":color=intensity:scale=sqrt:fscale=log:slide=scroll"
+            ":orientation=horizontal:drange=48[sp];"
+            f"[sp]scale={size}:{size}:flags=neighbor,"
+            "colorchannelmixer=rr=0:bb=0,"
+            f"drawgrid=w=12:h={size}:t=3:c=black@0.85,"
+            "eq=contrast=1.3[canvas];"
         )
-    else:
-        graph += "[canvas0]null[canvas];"
-    return graph, bar_color, title_color, False
+        # Boxed: once the streams fill the frame, green-on-green text needs
+        # the black pad to stay legible.
+        return _Canvas(graph, "0x33ff66@0.9", "0x33ff66", boxed=True)
+
+    if skin == SKIN_FRACTAL:
+        # An endless Mandelbrot dive with a slow hue drift: pure hypnosis,
+        # generated locally by ffmpeg at next to no cost. The generator
+        # never ends on its own, so the bar overlay trims it.
+        graph = (
+            f"mandelbrot=s={size}x{size}:rate=25:end_scale=0.00001"
+            ":end_pts=1200[mb];"
+            "[mb]hue=H=t/9:s=1.3[canvas];"
+        )
+        return _Canvas(graph, "white@0.85", "white", boxed=True, endless=True)
+
+    if skin == SKIN_DVD:
+        # The bouncing-logo meme. The episode artwork (or a music note when
+        # the feed has none) drifts and ricochets off the edges; everyone
+        # waits for the corner hit. Speeds are deliberately not multiples of
+        # each other, so the path takes ages to repeat.
+        item = size * 3 // 10
+        graph = f"color=c=0x11101c:s={size}x{size}:d={dur}[bg];"
+        if with_media:
+            graph += (
+                f"[1:v]scale={item}:{item}:force_original_aspect_ratio="
+                f"increase,crop={item}:{item}[item];"
+                "[bg][item]overlay"
+                "=x='abs(mod(43*t,2*(W-w))-(W-w))'"
+                ":y='abs(mod(31*t,2*(H-h))-(H-h))'[canvas];"
+            )
+        else:
+            graph += (
+                "[bg]drawtext=" + _font(bold=True)
+                + ":text='♪':fontcolor=white:fontsize=72"
+                + ":box=1:boxcolor=0x7a2ea8@0.9:boxborderw=14"
+                + ":x='abs(mod(43*t,2*(w-text_w-28))-(w-text_w-28))'"
+                + ":y='abs(mod(31*t,2*(h-text_h-28))-(h-text_h-28))',"
+                + "hue=H=2*PI*t/12[canvas];"
+            )
+        return _Canvas(graph, "0xc084ff@0.9", "white")
+
+    raise ValueError(f"Unknown skin {skin!r}")
+
+
+#: Title budgets, in characters per line, verified against rendered frames:
+#: bold DejaVu at these sizes fills the round title chord at ~26 characters
+#: and the square frame at ~40. The second round line sits on a wider chord.
+TITLE_BUDGETS_ROUND = (24, 28)
+TITLE_BUDGETS_SQUARE = (40, 40)
+
+
+def wrap_title(title: str, budgets: tuple[int, int]) -> list[str]:
+    """Fit a title into at most two centred lines.
+
+    Greedy word wrap against per-line budgets — they differ in the round
+    layout, where each line lives on its own chord of the circle. Whatever
+    does not fit the second line is ellipsised away.
+    """
+    first, second = budgets
+    words = title.split()
+    line1 = ""
+    index = 0
+    while index < len(words):
+        candidate = f"{line1} {words[index]}".strip()
+        if len(candidate) > first:
+            break
+        line1 = candidate
+        index += 1
+    if not line1:
+        # A single word longer than the whole line; cut it rather than wrap.
+        return [truncate(title, first)]
+    rest = " ".join(words[index:])
+    if not rest:
+        return [line1]
+    return [line1, truncate(rest, second)]
 
 
 def build_graph(
@@ -351,18 +491,21 @@ def build_graph(
     title_file: Path,
     span_file: Path,
     subs_file: Path | None,
-    with_cover: bool,
+    with_media: bool,
+    title2_file: Path | None = None,
     size: int = NOTE_SIZE,
     round_frame: bool = False,
 ) -> str:
     """The whole filter graph for one skin, ending in ``[out]``.
 
-    Two layouts share the code. The square one uses the full frame: title at
-    the top edge, time span and a frame-wide progress bar along the bottom.
-    ``round_frame`` is for a video note, which Telegram crops to the circle
-    inscribed in the square — at 384 px, a centred line at the very top has
-    barely 200 px of visible chord — so everything textual moves inside the
-    circle and the progress bar becomes a short centred track.
+    Two layouts share the code. The square one uses the full frame: up to two
+    title lines at the top edge; along the bottom a frame-wide progress bar
+    flanked by a running clock on the left and the clip length on the right,
+    with the episode time span centred between them. ``round_frame`` is for a
+    video note, which Telegram crops to the circle inscribed in the square —
+    at 384 px, a centred line at the very top has barely 200 px of visible
+    chord — so everything textual moves inside the circle and the progress
+    bar becomes a short centred track with the clock and length beside it.
 
     The progress fill is a strip slid across by ``overlay``'s ``t``
     expression *inside* a track-sized composition, which clips it: overlay's
@@ -371,42 +514,81 @@ def build_graph(
     so a bar that grows by ``t`` is not available that way; drawbox can
     animate but overlay is the documented, boring path.)
     """
+    skin = LEGACY_SKINS.get(skin, skin)
     if skin not in SKINS:
         raise ValueError(f"Unknown skin {skin!r}")
 
     dur = max(0.1, duration)
     if round_frame:
-        title_y, title_size = int(size * 0.13), 14
+        title_y, title_size, line_gap = 38, 14, 18
         span_y, span_size = int(size * 0.8125), 12
         bar_w, bar_h = int(size * 0.39), 5
         bar_y = int(size * 0.875)
+        clock_size = 11
     else:
-        title_y, title_size = 16, 15
+        title_y, title_size, line_gap = 12, 15, 20
         span_y, span_size = size - 34, 13
         bar_w, bar_h = size, 6
         bar_y = size - 14
+        clock_size = 13
     bar_x = (size - bar_w) // 2
 
-    base, bar_color, title_color, title_box = _canvas(
-        skin, size=size, dur=dur, with_cover=with_cover
-    )
+    canvas = _canvas(skin, size=size, dur=dur, with_media=with_media)
+    total = f"{int(dur) // 60}\\:{int(dur) % 60:02d}"
 
-    chain = (
-        base
-        + f"color=c=white@0.18:s={bar_w}x{bar_h}:d={dur}[track];"
-        + f"color=c={bar_color}:s={bar_w}x{bar_h}:d={dur}[fill];"
+    chain = canvas.graph
+    base_label = "canvas"
+    if canvas.boxed:
+        # A dark pad under the progress bar, sized with the same margins the
+        # drawtext boxes get, so the bar reads on top of bright artwork.
+        chain += (
+            f"[canvas]drawbox=x={bar_x - 6 if bar_x else 0}:y={bar_y - 5}"
+            f":w={bar_w + 12 if bar_x else bar_w}:h={bar_h + 10}"
+            ":color=black@0.45:t=fill[padded];"
+        )
+        base_label = "padded"
+    chain += (
+        f"color=c=white@0.18:s={bar_w}x{bar_h}:d={dur}[track];"
+        + f"color=c={canvas.bar_color}:s={bar_w}x{bar_h}:d={dur}[fill];"
         + f"[track][fill]overlay=x='-{bar_w}+{bar_w}*t/{dur}':y=0"
         + ":shortest=1[bar];"
-        + f"[canvas][bar]overlay=x={bar_x}:y={bar_y}"
-        + (":shortest=1" if skin == SKIN_COVER and with_cover else "")
+        + f"[{base_label}][bar]overlay=x={bar_x}:y={bar_y}"
+        + (":shortest=1" if canvas.endless else "")
         + "[timed];"
         + "[timed]"
         + _drawtext(
-            title_file, y=title_y, fontsize=title_size, color=title_color,
-            bold=True, box=title_box,
+            title_file, y=title_y, fontsize=title_size,
+            color=canvas.title_color, bold=True, box=canvas.boxed,
+        )
+    )
+    if title2_file is not None:
+        chain += "," + _drawtext(
+            title2_file, y=title_y + line_gap, fontsize=title_size,
+            color=canvas.title_color, bold=True, box=canvas.boxed,
+        )
+    if round_frame:
+        clock_x = f"{bar_x - 8}-text_w"
+        total_x = str(bar_x + bar_w + 8)
+        clock_y = bar_y + (bar_h - clock_size) // 2
+    else:
+        clock_x, total_x = "10", "w-text_w-10"
+        clock_y = span_y
+    chain += (
+        ","
+        + _drawtext(
+            span_file, y=span_y, fontsize=span_size, color="0xcccccc",
+            box=canvas.boxed,
         )
         + ","
-        + _drawtext(span_file, y=span_y, fontsize=span_size, color="0xaaaaaa")
+        + _drawtext(
+            text=_CLOCK_TEXT, x=clock_x, y=clock_y, fontsize=clock_size,
+            color="0xdddddd", box=canvas.boxed,
+        )
+        + ","
+        + _drawtext(
+            text=total, x=total_x, y=clock_y, fontsize=clock_size,
+            color="0xdddddd", box=canvas.boxed,
+        )
     )
     if subs_file is not None:
         chain += f",subtitles=filename='{subs_file}'"
@@ -473,6 +655,44 @@ async def _cover_usable(cover: Path, timeout: float = 30.0) -> bool:
     return code == 0
 
 
+def background_files(settings: Settings) -> list[Path]:
+    """The operator's brainrot loops, if any were dropped on the volume."""
+    try:
+        entries = sorted(settings.brainrot_dir.iterdir())
+    except OSError:
+        return []
+    return [
+        path for path in entries
+        if path.suffix.lower() in BACKGROUND_SUFFIXES and path.is_file()
+    ]
+
+
+async def _pick_background(
+    settings: Settings, need: float
+) -> tuple[Path | None, list[str]]:
+    """A random background loop and the input args that loop it.
+
+    A random start offset keeps two renders of the same clip from serving
+    the same thirty seconds of gameplay; the file loops if it runs out. The
+    offset needs the file's duration, which the audio probe answers only for
+    loops that ship sound — a silent file just starts from the top.
+    """
+    files = background_files(settings)
+    if not files:
+        logger.info(
+            "Brainrot skin has no background loops in %s; "
+            "rendering the plain card.",
+            settings.brainrot_dir,
+        )
+        return None, []
+    choice = random.choice(files)
+    offset = 0.0
+    info = await probe(choice, timeout=30.0)
+    if info.duration and info.duration > need + 2:
+        offset = random.uniform(0.0, info.duration - need - 1)
+    return choice, ["-stream_loop", "-1", "-ss", f"{offset:.2f}"]
+
+
 async def render_clip(
     audio: Path,
     workdir: Path,
@@ -488,51 +708,68 @@ async def render_clip(
 ) -> Path:
     """Render the cut audio into a square video, verified before it is sent.
 
-    The cover is test-decoded first and dropped if unreadable — see
-    :func:`_cover_usable` for why that cannot wait for the render to find
-    out. A render that then still fails *quickly* with artwork is retried
-    once without it, losing the picture rather than the clip; a render that
-    times out is not retried, because its failure already cost minutes.
+    The second input — artwork or a brainrot loop — is test-decoded first
+    and dropped if unreadable; see :func:`_cover_usable` for why that cannot
+    wait for the render to find out. A render that then still fails
+    *quickly* with media is retried once without it, losing the picture
+    rather than the clip; a render that times out is not retried, because
+    its failure already cost minutes.
     """
-    title_file = workdir / "title.txt"
-    span_file = workdir / "span.txt"
+    skin = LEGACY_SKINS.get(skin, skin)
     # Fitted here, not by the caller, because how many characters survive is
     # a property of the layout: drawtext neither wraps nor ellipsises, and a
     # centred line wider than the frame — or, in a note, wider than the
     # circle's chord at title height — is simply cropped at both ends.
-    # Verified against rendered frames: ~26 characters of bold Cyrillic at
-    # size 14 fill the round title chord, ~40 at size 15 fill the square.
-    title_file.write_text(
-        truncate(title, 26 if round_frame else 40), encoding="utf-8"
+    lines = wrap_title(
+        title, TITLE_BUDGETS_ROUND if round_frame else TITLE_BUDGETS_SQUARE
     )
+    title_file = workdir / "title.txt"
+    title_file.write_text(lines[0], encoding="utf-8")
+    title2_file: Path | None = None
+    if len(lines) > 1:
+        title2_file = workdir / "title2.txt"
+        title2_file.write_text(lines[1], encoding="utf-8")
+    span_file = workdir / "span.txt"
     span_file.write_text(span, encoding="utf-8")
 
     subs_file: Path | None = None
     if subtitles:
         subs_file = workdir / "subs.ass"
         subs_file.write_text(
-            ass_document(subtitles, round_frame=round_frame), encoding="utf-8"
+            ass_document(
+                subtitles,
+                round_frame=round_frame,
+                centered=skin == SKIN_BRAINROT,
+            ),
+            encoding="utf-8",
         )
 
-    if cover is not None and not await _cover_usable(cover):
-        logger.info("Cover art is not decodable; rendering without it.")
-        cover = None
+    media = cover if skin in COVER_SKINS else None
+    media_args = ["-loop", "1"]
+    if skin == SKIN_BRAINROT:
+        media, media_args = await _pick_background(settings, duration)
+
+    if media is not None and not await _cover_usable(media):
+        logger.info("Second input %s is not decodable; dropping it.", media)
+        media = None
 
     output = workdir / "note.mp4"
-    attempts = [cover] if cover is None else [cover, None]
+    attempts = [media] if media is None else [media, None]
     reason = ""
-    for attempt_cover in attempts:
+    for attempt_media in attempts:
         reason = await _render_once(
             audio, output,
             skin=skin, duration=duration, title_file=title_file,
-            span_file=span_file, subs_file=subs_file, cover=attempt_cover,
-            round_frame=round_frame, timeout=settings.ffmpeg_timeout,
+            title2_file=title2_file, span_file=span_file,
+            subs_file=subs_file, media=attempt_media,
+            media_args=media_args, round_frame=round_frame,
+            timeout=settings.ffmpeg_timeout,
         )
         if reason is None:
             return output
-        if attempt_cover is not None:
+        if attempt_media is not None:
             logger.info(
-                "Render with cover art failed (%s); retrying without it.",
+                "Render with media failed (%s); retrying without it.",
                 reason[:300],
             )
     logger.error("Video render failed: %s", reason[:500])
@@ -546,9 +783,11 @@ async def _render_once(
     skin: str,
     duration: float,
     title_file: Path,
+    title2_file: Path | None,
     span_file: Path,
     subs_file: Path | None,
-    cover: Path | None,
+    media: Path | None,
+    media_args: list[str],
     round_frame: bool,
     timeout: float,
 ) -> str | None:
@@ -560,17 +799,18 @@ async def _render_once(
         skin,
         duration=duration,
         title_file=title_file,
+        title2_file=title2_file,
         span_file=span_file,
         subs_file=subs_file,
-        with_cover=cover is not None,
+        with_media=media is not None,
         round_frame=round_frame,
     )
     cmd = [
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
         *_protocol_args(audio), "-i", str(audio),
     ]
-    if cover is not None:
-        cmd += ["-loop", "1", *_protocol_args(cover), "-i", str(cover)]
+    if media is not None:
+        cmd += [*media_args, *_protocol_args(media), "-i", str(media)]
     cmd += ["-filter_complex", graph, "-map", "[out]", "-map", "0:a"]
     cmd += [*_ENCODE_ARGS, str(output)]
 

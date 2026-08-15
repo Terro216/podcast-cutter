@@ -112,7 +112,7 @@ class TestBuildGraph:
             "title_file": tmp_path / "t.txt",
             "span_file": tmp_path / "s.txt",
             "subs_file": None,
-            "with_cover": False,
+            "with_media": False,
         }
         options.update(kwargs)
         return video.build_graph(skin, **options)
@@ -120,14 +120,26 @@ class TestBuildGraph:
     def test_every_skin_builds_and_ends_in_out(self, tmp_path):
         for skin in video.SKINS:
             for round_frame in (False, True):
-                graph = self.build(skin, tmp_path, round_frame=round_frame)
-                assert graph.endswith("[out]")
+                for with_media in (False, True):
+                    graph = self.build(
+                        skin, tmp_path,
+                        round_frame=round_frame, with_media=with_media,
+                    )
+                    assert graph.endswith("[out]")
+
+    def test_a_retired_skin_still_renders_as_its_heir(self, tmp_path):
+        # Buttons on scrolled-past messages outlive keyboards: a callback
+        # carrying a pre-redesign skin must map to a living one, not raise.
+        for legacy, heir in video.LEGACY_SKINS.items():
+            assert heir in video.SKINS
+            graph = self.build(legacy, tmp_path)
+            assert graph.endswith("[out]")
 
     def test_the_round_progress_bar_is_a_short_centred_track(self, tmp_path):
         # At the frame's bottom edge the circle leaves ~140 px of visible
         # chord, so the full-width square bar would show only its middle.
-        square = self.build("bars", tmp_path)
-        round_ = self.build("bars", tmp_path, round_frame=True)
+        square = self.build("aurora", tmp_path)
+        round_ = self.build("aurora", tmp_path, round_frame=True)
         assert f"s={video.NOTE_SIZE}x6" in square
         assert f"s={video.NOTE_SIZE}x6" not in round_
 
@@ -136,9 +148,9 @@ class TestBuildGraph:
             self.build("winamp2000", tmp_path)
 
     def test_subtitles_join_the_chain_only_when_given(self, tmp_path):
-        without = self.build("bars", tmp_path)
+        without = self.build("aurora", tmp_path)
         with_subs = self.build(
-            "bars", tmp_path, subs_file=tmp_path / "subs.ass"
+            "aurora", tmp_path, subs_file=tmp_path / "subs.ass"
         )
         assert "subtitles=" not in without
         assert "subtitles=" in with_subs
@@ -146,10 +158,52 @@ class TestBuildGraph:
     def test_cover_art_is_used_when_present_and_not_faked_when_absent(
         self, tmp_path
     ):
-        with_art = self.build("cover", tmp_path, with_cover=True)
-        without = self.build("cover", tmp_path, with_cover=False)
+        with_art = self.build("cover", tmp_path, with_media=True)
+        without = self.build("cover", tmp_path, with_media=False)
         assert "[1:v]" in with_art
         assert "[1:v]" not in without
+
+    def test_the_running_clock_and_length_flank_every_bar(self, tmp_path):
+        # The clip's own clock, ticking in minutes and seconds, plus the
+        # static total — both are inline text this module wrote itself.
+        graph = self.build("aurora", tmp_path, duration=95.0)
+        assert "eif" in graph
+        assert "1\\:35" in graph
+
+    def test_a_second_title_line_joins_only_when_given(self, tmp_path):
+        one = self.build("aurora", tmp_path)
+        two = self.build(
+            "aurora", tmp_path, title2_file=tmp_path / "t2.txt"
+        )
+        assert one.count("drawtext") + 1 == two.count("drawtext")
+
+
+class TestWrapTitle:
+    def test_a_short_title_stays_on_one_line(self):
+        assert video.wrap_title("Short", (24, 28)) == ["Short"]
+
+    def test_a_long_title_wraps_at_word_boundaries(self):
+        lines = video.wrap_title(
+            "Запуск Завтра — Как мы чинили прод в три часа ночи", (24, 28)
+        )
+        assert len(lines) == 2
+        assert lines[0] == "Запуск Завтра — Как мы"
+        assert lines[1].startswith("чинили прод")
+
+    def test_the_budgets_are_respected(self):
+        for first, second in ((24, 28), (40, 40)):
+            lines = video.wrap_title("word " * 30, (first, second))
+            assert len(lines[0]) <= first
+            assert len(lines[1]) <= second
+
+    def test_overflow_past_two_lines_is_ellipsised(self):
+        lines = video.wrap_title("word " * 30, (24, 28))
+        assert lines[1].endswith("…")
+
+    def test_a_single_giant_word_is_cut_not_wrapped(self):
+        lines = video.wrap_title("щ" * 60, (24, 28))
+        assert len(lines) == 1
+        assert len(lines[0]) <= 24
 
     def test_skin_keys_match_the_keyboard_labels(self):
         # The render behaviour lives in this module and the button labels in
@@ -166,12 +220,19 @@ class TestRealRender:
     @pytest.mark.parametrize(
         ("skin", "round_frame"),
         [
-            ("bars", True),
-            ("vhs", True),
-            ("matrix", False),
+            ("aurora", True),
             ("party", False),
-            ("aurora", False),
             ("lava", True),
+            ("matrix", False),
+            ("fractal", True),
+            # vinyl and dvd without artwork: the dark-card and bouncing-note
+            # fallbacks; the artwork paths ride the cover test below.
+            ("vinyl", True),
+            ("dvd", False),
+            # brainrot with an empty loops directory: the honest card.
+            ("brainrot", True),
+            # A retired skin arriving from an old button.
+            ("vhs", True),
         ],
     )
     def test_renders_a_playable_square_video_with_subtitles(

@@ -302,13 +302,13 @@ class TestClipEditingCallbacks:
 
     async def test_choosing_a_skin(self, bot, context):
         session = await self._open(bot, context)
-        await tap(bot, context, f"{kb.SKIN_PREFIX}:scope")
-        assert session.skin == "scope"
+        await tap(bot, context, f"{kb.SKIN_PREFIX}:matrix")
+        assert session.skin == "matrix"
 
     async def test_an_unknown_skin_changes_nothing(self, bot, context):
         session = await self._open(bot, context)
         await tap(bot, context, f"{kb.SKIN_PREFIX}:vaporwave")
-        assert session.skin == "bars"
+        assert session.skin == "cover"
 
     async def test_a_malformed_number_is_survived(self, bot, context):
         session = await self._open(bot, context)

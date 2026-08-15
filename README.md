@@ -24,12 +24,17 @@ Telegram bot: https://t.me/podcast_cutter_bot
   circle is the round video note that plays right in the conversation; the
   video is the same picture as a square file with a caption, for clips longer
   than the minute Telegram allows a circle. Both draw the sound in one of
-  nine skins — bars, spectrum, oscilloscope, cover art, and the fun shelf:
-  party (the bars cycle through the colour wheel), VHS (static, scanlines
-  and smeared chroma), matrix (a scrolling phosphor-green spectrogram),
-  aurora (the spectrum melted into a glowing ridge that breathes with the
-  voice and slowly shifts colour) and lava (a wavelet transform flowing
-  upward under the inferno palette) — with a title, a progress bar, and
+  nine skins in three families. The artwork shelf: cover (the episode art
+  with a slow Ken Burns zoom), vinyl (the art spinning like the record it
+  decorates) and DVD (the art ricocheting off the edges, corner hit and
+  all). The glow shelf: aurora (the spectrum melted into a ridge of
+  northern lights that breathes with the voice), party (a mirrored neon
+  soundwave over a dark dance floor, spinning through the colour wheel) and
+  lava (a lava lamp that flares with the speech). The brainrot shelf:
+  matrix (chunky green streams falling down the frame), fractal (an endless
+  Mandelbrot dive) and brainrot itself — the operator's own gameplay loops
+  behind big centred subtitles, see docs/video-skins.md. Every skin carries
+  the title on up to two lines, a progress bar with a running clock, and
   subtitles when the episode has already been listened to for search.
 - **Nudge after the fact.** The result offers `↺ 15s earlier` / `15s later ↻`
   and re-cuts, so finding the exact line is a couple of taps.

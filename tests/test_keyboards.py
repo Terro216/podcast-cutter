@@ -207,13 +207,13 @@ class TestIntervalKeyboard:
 
     def test_the_active_skin_is_marked(self):
         markup = kb.interval_keyboard(
-            60, max_length=900, send_as="note", skin="scope"
+            60, max_length=900, send_as="note", skin="matrix"
         )
         active = next(
             b
             for row in markup.inline_keyboard
             for b in row
-            if b.callback_data == f"{kb.SKIN_PREFIX}:scope"
+            if b.callback_data == f"{kb.SKIN_PREFIX}:matrix"
         )
         assert active.text.startswith("●")
 
@@ -244,7 +244,7 @@ class TestResultKeyboard:
 class TestReskinOnResult:
     def test_skins_are_offered_after_a_visual_format(self):
         for fmt in ("note", "video"):
-            markup = kb.result_keyboard("x", send_as=fmt, skin="bars")
+            markup = kb.result_keyboard("x", send_as=fmt, skin="cover")
             data = payloads(markup)
             for skin in kb.SKIN_LABELS:
                 assert f"{kb.RESKIN_PREFIX}:{skin}" in data

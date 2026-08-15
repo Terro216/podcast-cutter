@@ -132,7 +132,7 @@ class Session:
     #: Video-note skin. The value is a key of ``keyboards.SKIN_LABELS`` and of
     #: ``video.SKINS`` — a test holds those two sets equal, so a bare string
     #: here cannot quietly drift from either.
-    skin: str = "bars"
+    skin: str = "cover"
 
     # -- searching inside an episode ---------------------------------------
     #: The phrase last looked for, kept so the results screen can say what it

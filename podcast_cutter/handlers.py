@@ -1581,7 +1581,7 @@ class PodcastCutterBot:
                 )
 
         cover = None
-        if session.skin == video.SKIN_COVER and episode.image:
+        if session.skin in video.COVER_SKINS and episode.image:
             cover = await video.fetch_cover(
                 episode.image, workdir, self.settings
             )
