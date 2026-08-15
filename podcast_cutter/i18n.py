@@ -63,7 +63,7 @@ _EN = {
         "Find an episode, tell me a moment, get just that part back.\n\n"
         "<b>Finding something</b>\n"
         "/search — a podcast by name\n"
-        "/person — episodes mentioning someone\n"
+        "/person — find episodes: a guest, a topic, a title\n"
         "/trending — what's popular\n"
         "/surprise — a random episode\n"
         "/recent — episodes you looked at\n"
@@ -198,7 +198,7 @@ _EN = {
 
     # -- breadcrumbs -------------------------------------------------------
     "crumb_search": "🔍 Search",
-    "crumb_person": "🧑 Person",
+    "crumb_person": "🔎 Episodes",
     "crumb_trending": "🔥 Trending",
     "crumb_recent": "🕘 Recent",
 
@@ -210,9 +210,9 @@ _EN = {
     ),
     "ask_podcast": "🔍 <b>Which podcast?</b>\n\nSend me its name.",
     "ask_person": (
-        "🧑 <b>Who or what?</b>\n\n"
-        "I'll look across every podcast in the directory — a guest's name, a "
-        "topic, anything."
+        "🔎 <b>Who or what?</b>\n\n"
+        "I'll search episodes across every podcast in the directory — a "
+        "guest's name, a topic, or an episode's title."
     ),
     "feeds_found": (
         "Found <b>{n}</b> on this page. Pick one, or send a different name."
@@ -222,7 +222,7 @@ _EN = {
     ),
     "filter_match": "🔎 <b>{n}</b> of {total} match “{query}”.",
     "filter_none": "🔎 Nothing matches “{query}”. Try other words.",
-    "global_heading": "🔎 <b>{n}</b> {episodes} mention that.",
+    "global_heading": "🔎 <b>{n}</b> {episodes} match.",
     "trending_heading": "🔥 <b>Popular right now.</b>",
     "recent_heading": "🕘 <b>Episodes you looked at recently.</b>",
     "recent_empty": (
@@ -274,7 +274,7 @@ _EN = {
 
     # -- reply-keyboard buttons -------------------------------------------
     "btn_search_podcast": "🔍 Search a podcast",
-    "btn_search_person": "🧑 Search by person",
+    "btn_search_person": "🔎 Find episodes",
     "btn_trending": "🔥 Trending",
     "btn_surprise": "🎲 Surprise me",
     "btn_recent": "🕘 Recent",
@@ -295,7 +295,7 @@ _EN = {
     "btn_open": "🎧 Open it",
     "btn_retry": "↻ Try again",
     "btn_menu_podcast": "🔍 Podcast",
-    "btn_menu_person": "🧑 Person",
+    "btn_menu_person": "🔎 Episodes",
     "btn_menu_trending": "🔥 Trending",
     "btn_menu_surprise": "🎲 Surprise",
     "btn_menu_recent": "🕘 Recent episodes",
@@ -326,7 +326,7 @@ _EN = {
 
     # -- the bot's Telegram profile ---------------------------------------
     "cmd_search": "Find a podcast by name",
-    "cmd_person": "Find episodes mentioning someone",
+    "cmd_person": "Find episodes — a guest, a topic, a title",
     "cmd_trending": "What is popular right now",
     "cmd_surprise": "A random episode",
     "cmd_recent": "Episodes you looked at",
@@ -461,7 +461,7 @@ _RU = {
         "Найдите эпизод, назовите момент — получите обратно только его.\n\n"
         "<b>Как искать</b>\n"
         "/search — подкаст по названию\n"
-        "/person — эпизоды, где кого-то упоминают\n"
+        "/person — поиск эпизодов: гость, тема, название\n"
         "/trending — что популярно\n"
         "/surprise — случайный эпизод\n"
         "/recent — эпизоды, которые вы открывали\n"
@@ -592,7 +592,7 @@ _RU = {
     "working_episodes": "🎧 Загружаю эпизоды…",
 
     "crumb_search": "🔍 Поиск",
-    "crumb_person": "🧑 Люди",
+    "crumb_person": "🔎 Эпизоды",
     "crumb_trending": "🔥 Популярное",
     "crumb_recent": "🕘 Недавние",
 
@@ -603,8 +603,9 @@ _RU = {
     ),
     "ask_podcast": "🔍 <b>Какой подкаст?</b>\n\nПришлите его название.",
     "ask_person": (
-        "🧑 <b>Кто или что?</b>\n\n"
-        "Поищу по всем подкастам каталога — имя гостя, тема, что угодно."
+        "🔎 <b>Кто или что?</b>\n\n"
+        "Поищу эпизоды по всем подкастам каталога — имя гостя, тема "
+        "или название выпуска."
     ),
     "feeds_found": (
         "На этой странице нашлось <b>{n}</b>. Выберите один "
@@ -616,7 +617,7 @@ _RU = {
     ),
     "filter_match": "🔎 <b>{n}</b> из {total} подходят под «{query}».",
     "filter_none": "🔎 Ничего не подходит под «{query}». Попробуйте другие слова.",
-    "global_heading": "🔎 Это упоминается в <b>{n}</b> {episodes}.",
+    "global_heading": "🔎 Нашлось в <b>{n}</b> {episodes}.",
     "trending_heading": "🔥 <b>Популярно прямо сейчас.</b>",
     "recent_heading": "🕘 <b>Эпизоды, которые вы недавно открывали.</b>",
     "recent_empty": (
@@ -666,7 +667,7 @@ _RU = {
     "stats_journal": "журнал: {size}",
 
     "btn_search_podcast": "🔍 Найти подкаст",
-    "btn_search_person": "🧑 Поиск по людям",
+    "btn_search_person": "🔎 Поиск эпизодов",
     "btn_trending": "🔥 Популярное",
     "btn_surprise": "🎲 Удиви меня",
     "btn_recent": "🕘 Недавние",
@@ -686,7 +687,7 @@ _RU = {
     "btn_open": "🎧 Открыть",
     "btn_retry": "↻ Попробовать ещё раз",
     "btn_menu_podcast": "🔍 Подкаст",
-    "btn_menu_person": "🧑 Человек",
+    "btn_menu_person": "🔎 Эпизоды",
     "btn_menu_trending": "🔥 Популярное",
     "btn_menu_surprise": "🎲 Сюрприз",
     "btn_menu_recent": "🕘 Недавние эпизоды",
@@ -714,7 +715,7 @@ _RU = {
     "so_far": "уже {amount}",
 
     "cmd_search": "Найти подкаст по названию",
-    "cmd_person": "Эпизоды, где кого-то упоминают",
+    "cmd_person": "Поиск эпизодов: гость, тема, название",
     "cmd_trending": "Что сейчас популярно",
     "cmd_surprise": "Случайный эпизод",
     "cmd_recent": "Эпизоды, которые вы открывали",

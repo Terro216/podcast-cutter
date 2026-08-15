@@ -56,6 +56,16 @@ _MENU_ACTIONS: dict[str, str] = {
     for key, action in _MENU_LABEL_ACTIONS
 }
 
+#: Labels that shipped on persistent reply keyboards and were later renamed.
+#: A client keeps showing its old keyboard until the bot sends a new one, so
+#: a retired label must keep routing to the action it always meant.
+_MENU_ACTIONS.update(
+    {
+        "🧑 Search by person": "person",
+        "🧑 Поиск по людям": "person",
+    }
+)
+
 
 def menu_action(text: str) -> str | None:
     """The action a reply-keyboard label triggers, in any language."""
