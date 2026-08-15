@@ -10,6 +10,8 @@ import re
 import unicodedata
 from collections.abc import Callable
 
+from .i18n import t, t_seq
+
 #: Characters that are illegal or troublesome in filenames on common platforms.
 _UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 _WHITESPACE = re.compile(r"\s+")
@@ -43,10 +45,10 @@ def truncate(value: str, limit: int) -> str:
     return value[: limit - 1].rstrip() + "…"
 
 
-def button_label(*parts: str, limit: int = 60) -> str:
+def button_label(*parts: str, limit: int = 60, fallback: str = "Untitled") -> str:
     """Build a single-line inline-button label from title fragments."""
     joined = " · ".join(one_line(p) for p in parts if one_line(p))
-    return truncate(joined, limit) or "Untitled"
+    return truncate(joined, limit) or fallback
 
 
 def safe_filename(*parts: str, ext: str, limit: int = 100) -> str:
@@ -78,22 +80,24 @@ def esc(value: str | None, fallback: str = "") -> str:
     return html.escape(one_line(value, fallback), quote=False)
 
 
-def human_bytes(count: float) -> str:
+def human_bytes(count: float, lang: str = "en") -> str:
     """Byte count as a short human-readable string."""
+    units = t_seq(lang, "byte_units")
     if count < 1024:
-        return f"{int(count)} B"
-    for unit in ("KB", "MB", "GB"):
+        return f"{int(count)} {units[0]}"
+    for unit in units[1:]:
         count /= 1024
-        if count < 1024 or unit == "GB":
+        if count < 1024 or unit == units[-1]:
             return f"{count:.1f} {unit}".replace(".0 ", " ")
-    return f"{count:.1f} GB"
+    return f"{count:.1f} {units[-1]}"
 
 
 def progress_bar(
     done: int,
     total: int | None,
     width: int = 10,
-    label: Callable[[int], str] = human_bytes,
+    label: Callable[[int], str] | None = None,
+    lang: str = "en",
 ) -> str:
     """A textual progress bar, degrading gracefully when the size is unknown.
 
@@ -102,8 +106,11 @@ def progress_bar(
     a bar that renders forty minutes as «2.4 KB» reads as a bug, not as
     progress.
     """
+    if label is None:
+        label = lambda count: human_bytes(count, lang)  # noqa: E731
+
     if not total or total <= 0:
-        return f"{label(done)} so far"
+        return t(lang, "so_far", amount=label(done))
 
     fraction = min(1.0, max(0.0, done / total))
     filled = round(fraction * width)

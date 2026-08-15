@@ -184,7 +184,7 @@ class TestIndexing:
         indexer = Indexer(settings(asr_enabled=False), store, FakeRecognizer())
         with pytest.raises(TranscriptionDisabled) as excinfo:
             await index(indexer, tmp_path)
-        assert "timestamp" in excinfo.value.user_message
+        assert "timestamp" in excinfo.value.user_message()
 
     async def test_an_over_long_episode_is_refused(
         self, store, stub_fetch, tmp_path, monkeypatch

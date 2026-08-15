@@ -1,7 +1,6 @@
-import re
-
 import pytest
 
+from podcast_cutter import i18n
 from podcast_cutter import keyboards as kb
 
 
@@ -58,17 +57,27 @@ class TestCallbackVocabulary:
         assert all(len(value.encode()) <= 64 for value in fixed)
 
 
-class TestMenuRegex:
-    @pytest.mark.parametrize("label", kb.MENU_BUTTONS)
-    def test_matches_exactly(self, label):
-        assert re.match(kb.menu_regex(label), label)
+class TestMenuActions:
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_every_label_routes_in_every_language(self, lang):
+        # A reply-keyboard press arrives as its label. Labels on a client's
+        # screen outlive a language switch, so every language's labels must
+        # keep routing, not just the current one's.
+        for key, action in kb._MENU_LABEL_ACTIONS:
+            assert kb.menu_action(i18n.t(lang, key)) == action
 
-    def test_does_not_match_a_substring(self):
-        assert not re.match(kb.menu_regex(kb.BTN_TRENDING), f"{kb.BTN_TRENDING} x")
+    def test_free_text_is_not_a_menu_press(self):
+        assert kb.menu_action("radiolab") is None
 
-    def test_escapes_metacharacters(self):
-        assert re.match(kb.menu_regex("a.b"), "a.b")
-        assert not re.match(kb.menu_regex("a.b"), "axb")
+    def test_labels_do_not_collide_across_languages(self):
+        # Every (language, label) pair must stay distinct, or one language's
+        # button would silently trigger another's action.
+        labels = [
+            i18n.t(lang, key)
+            for lang in i18n.LANGUAGES
+            for key, _ in kb._MENU_LABEL_ACTIONS
+        ]
+        assert len(labels) == len(set(labels))
 
 
 class TestPagination:
@@ -267,37 +276,71 @@ class TestMainMenu:
         markup = kb.main_menu()
         assert markup.is_persistent and markup.resize_keyboard
 
-    def test_lists_every_menu_button(self):
-        shown = {b.text for row in markup_rows(kb.main_menu()) for b in row}
-        assert shown == set(kb.MENU_BUTTONS)
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_lists_every_menu_button(self, lang):
+        shown = {b.text for row in markup_rows(kb.main_menu(lang)) for b in row}
+        assert shown == {
+            i18n.t(lang, key) for key, _ in kb._MENU_LABEL_ACTIONS
+        }
+
+
+class TestLanguageKeyboard:
+    def test_offers_every_language_by_its_own_name(self):
+        markup = kb.language_keyboard("en")
+        texts = labels(markup)
+        for lang in i18n.LANGUAGES:
+            assert any(i18n.LANGUAGE_NAMES[lang] in text for text in texts)
+            assert f"{kb.LANG_PREFIX}:{lang}" in payloads(markup)
+
+    def test_the_current_language_is_marked(self):
+        markup = kb.language_keyboard("ru")
+        active = next(
+            b
+            for row in markup.inline_keyboard
+            for b in row
+            if b.callback_data == f"{kb.LANG_PREFIX}:ru"
+        )
+        assert active.text.startswith("●")
+        assert active.style == kb.STYLE_SUCCESS
+
+    def test_still_offers_a_way_out(self):
+        assert kb.NAV_BACK in payloads(kb.language_keyboard("en"))
 
 
 class TestBotProfile:
     """The texts published at startup, against Telegram's own limits.
 
     Overrunning either is rejected with a BadRequest that startup only logs, so
-    the profile would quietly stay whatever it was.
+    the profile would quietly stay whatever it was. Every language published
+    is bound by the same limits, so every language is checked.
     """
 
-    def test_the_short_description_fits(self):
-        from podcast_cutter.app import SHORT_DESCRIPTION
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_the_short_description_fits(self, lang):
+        assert 0 < len(i18n.t(lang, "short_description")) <= 120
 
-        assert 0 < len(SHORT_DESCRIPTION) <= 120
-
-    def test_the_description_fits_once_the_username_is_filled_in(self):
-        from podcast_cutter.app import DESCRIPTION
-
-        filled = DESCRIPTION.format(username="podcast_cutter_bot")
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_the_description_fits_once_the_username_is_filled_in(self, lang):
+        filled = i18n.t(lang, "description", username="podcast_cutter_bot")
         assert 0 < len(filled) <= 512
         assert "{username}" not in filled
 
-    def test_the_description_carries_no_markup(self):
-        from podcast_cutter.app import DESCRIPTION, SHORT_DESCRIPTION
-
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_the_description_carries_no_markup(self, lang):
         # Telegram renders neither HTML nor Markdown here; tags would show up
         # as literal angle brackets on the empty-chat screen.
-        for text in (DESCRIPTION, SHORT_DESCRIPTION):
+        for key in ("description", "short_description"):
+            text = i18n.t(lang, key) if key == "short_description" else i18n.t(
+                lang, key, username="x"
+            )
             assert "<" not in text and "</" not in text
+
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_command_descriptions_fit_telegrams_limits(self, lang):
+        # BotCommand descriptions are capped at 256 characters.
+        for name, description in i18n.bot_commands(lang):
+            assert name.isascii() and name.islower()
+            assert 0 < len(description) <= 256
 
 
 def markup_rows(markup):

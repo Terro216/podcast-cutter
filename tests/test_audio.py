@@ -243,3 +243,33 @@ class TestCutCommand:
             encode=None,
         )
         assert cmd[cmd.index("-protocol_whitelist") + 1] == "file"
+
+
+class TestRunCancellation:
+    async def test_a_cancelled_run_kills_its_subprocess(self, monkeypatch):
+        """/cancel must not orphan an ffmpeg that keeps encoding a clip
+        nobody wants. The kill is observable as a set returncode: `_run`
+        waits for the process before letting the cancellation continue."""
+        import asyncio
+
+        from podcast_cutter import audio as audio_mod
+
+        spawned = []
+        original = asyncio.create_subprocess_exec
+
+        async def spy(*args, **kwargs):
+            process = await original(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
+
+        task = asyncio.create_task(audio_mod._run(["sleep", "5"], timeout=30))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert spawned, "the subprocess never started"
+        assert spawned[0].returncode is not None
+        assert spawned[0].returncode != 0

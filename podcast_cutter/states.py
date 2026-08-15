@@ -61,6 +61,7 @@ class Screen(Enum):
     RESULT = auto()
     ASK_PHRASE = auto()
     MOMENTS = auto()
+    LANGUAGE = auto()
 
 
 class Awaiting(Enum):
@@ -96,6 +97,13 @@ class Session:
     #: baffling podcast search — so the router gets one chance to say what
     #: happened before quietly carrying on.
     was_reset: bool = False
+
+    # -- language ----------------------------------------------------------
+    #: What the bot answers in. Resolved once per session: the stored choice
+    #: wins, then Telegram's ``language_code``, then English.
+    language: str = "en"
+    #: Whether the stored preference has been looked up yet this session.
+    language_loaded: bool = False
 
     # -- search ------------------------------------------------------------
     query: str = ""
@@ -205,6 +213,23 @@ class Session:
         needle = self.episode_filter.lower()
         return [ep for ep in self.episodes if needle in ep.title.lower()]
 
+    def filter_episodes(self, episodes: list[Episode]) -> list[Episode]:
+        """``episodes`` narrowed by the typed filter, for cross-feed lists.
+
+        Matches the show title as well as the episode's, because on GLOBAL
+        and RECENT the show is half of what the user sees on each button —
+        unlike :attr:`visible_episodes`, where every row shares one show and
+        matching its name would match everything.
+        """
+        if not self.episode_filter:
+            return episodes
+        needle = self.episode_filter.lower()
+        return [
+            ep
+            for ep in episodes
+            if needle in ep.title.lower() or needle in ep.feed_title.lower()
+        ]
+
     def find_episode(self, episode_id: str) -> Episode | None:
         """Look an episode up anywhere we might still know about it."""
         for pool in (self.episodes, self.recents):
@@ -306,5 +331,22 @@ def reset_session(user_data: MutableMapping[str, Any]) -> Session:
     session = Session(
         recents=recents, recents_loaded=previous.recents_loaded if known else False
     )
+    if known:
+        # The language survives every reset: it is who the user is, not part
+        # of whatever flow is being abandoned.
+        session.language = previous.language
+        session.language_loaded = previous.language_loaded
     user_data[_SESSION_KEY] = session
     return session
+
+
+def peek_session(user_data: MutableMapping[str, Any] | None) -> Session | None:
+    """The session if one exists, without creating or resetting anything.
+
+    For code that runs outside the normal routers — the global error handler —
+    and needs the user's language without side effects.
+    """
+    if not user_data:
+        return None
+    session = user_data.get(_SESSION_KEY)
+    return session if isinstance(session, Session) else None

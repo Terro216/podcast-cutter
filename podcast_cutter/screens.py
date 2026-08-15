@@ -3,6 +3,10 @@
 Each function turns session state into a :class:`View` — the message text and
 its inline keyboard. They perform no I/O and touch no Telegram objects beyond
 building markup, which makes the entire interface unit-testable without a bot.
+
+Text comes from :mod:`~podcast_cutter.i18n` in the session's language. The
+session is the source of truth for that language, which is why even screens
+with no other state (:func:`ask_podcast`) take it.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from telegram import InlineKeyboardMarkup
 from . import keyboards as kb
 from .api import Episode
 from .config import Settings
+from .i18n import plural, t
 from .states import FORMAT_NOTE, FORMAT_VIDEO, Screen, Session
 from .text import esc, format_duration, human_bytes, truncate
 from .transcripts import excerpt
@@ -33,23 +38,24 @@ class View:
 
 def breadcrumb(session: Session) -> str:
     """A dim trail showing where the user is, e.g. ``Search › Radiolab``."""
+    lang = session.language
     screen = session.current.screen if session.current else Screen.MENU
     parts: list[str] = []
 
     if screen in (Screen.ASK_PODCAST, Screen.FEEDS, Screen.EPISODES):
-        parts.append("🔍 Search")
+        parts.append(t(lang, "crumb_search"))
         if screen is not Screen.ASK_PODCAST and session.query:
             parts.append(f"“{esc(truncate(session.query, 24))}”")
         if screen is Screen.EPISODES and session.feed:
             parts[-1] = esc(truncate(session.feed.title, 28))
     elif screen in (Screen.ASK_PERSON, Screen.GLOBAL):
-        parts.append("🧑 Person")
+        parts.append(t(lang, "crumb_person"))
         if screen is Screen.GLOBAL and session.query:
             parts.append(f"“{esc(truncate(session.query, 24))}”")
     elif screen is Screen.TRENDING:
-        parts.append("🔥 Trending")
+        parts.append(t(lang, "crumb_trending"))
     elif screen is Screen.RECENT:
-        parts.append("🕘 Recent")
+        parts.append(t(lang, "crumb_recent"))
     elif screen in (Screen.INTERVAL, Screen.RESULT, Screen.ASK_PHRASE,
                     Screen.MOMENTS):
         # Show where the episode came from, so the trail stays meaningful
@@ -104,44 +110,50 @@ def _episode_heading(episode: Episode) -> str:
 
 def menu(session: Session) -> View:
     return View(
-        "🎙 <b>Podcast Cutter</b>\n"
-        "Find an episode, pick a moment, get just that part.\n\n"
-        "Tap below, or just send me a podcast name.",
-        kb.menu_keyboard(has_recent=bool(session.recents)),
+        t(session.language, "menu_screen"),
+        kb.menu_keyboard(
+            has_recent=bool(session.recents), lang=session.language
+        ),
     )
 
 
-def ask_podcast() -> View:
+def ask_podcast(session: Session) -> View:
     return View(
-        "🔍 <b>Which podcast?</b>\n\nSend me its name.",
-        kb.cancel_keyboard(),
+        t(session.language, "ask_podcast"),
+        kb.cancel_keyboard(session.language),
     )
 
 
-def ask_person() -> View:
+def ask_person(session: Session) -> View:
     return View(
-        "🧑 <b>Who or what?</b>\n\n"
-        "I'll look across every podcast in the directory — a guest's name, a "
-        "topic, anything.",
-        kb.cancel_keyboard(),
+        t(session.language, "ask_person"),
+        kb.cancel_keyboard(session.language),
+    )
+
+
+def language(session: Session) -> View:
+    """The language chooser — the one screen that speaks both at once."""
+    return View(
+        t(session.language, "language_screen"),
+        kb.language_keyboard(session.language),
     )
 
 
 def feeds(session: Session, settings: Settings) -> View:
+    lang = session.language
     page = session.current.page if session.current else 1
     # The upstream search has no total count, so pages are only known one at a
     # time: show the current page plus whether another exists.
     pages = page + 1 if session.feeds_has_next else page
 
     return View(
-        breadcrumb(session)
-        + f"Found <b>{len(session.feeds)}</b> on this page. Pick one, "
-        "or send a different name.",
+        breadcrumb(session) + t(lang, "feeds_found", n=len(session.feeds)),
         kb.choice_keyboard(
             session.feeds,
             kb.FEED_PREFIX,
             id_of=lambda f: f.id,
             label_of=lambda f: f"{f.title} — {f.author}",
+            lang=lang,
             page=page,
             pages=pages,
         ),
@@ -149,6 +161,7 @@ def feeds(session: Session, settings: Settings) -> View:
 
 
 def episodes(session: Session, settings: Settings) -> View:
+    lang = session.language
     page = session.current.page if session.current else 1
     visible = session.visible_episodes
     window, page, pages = session.page_of(
@@ -156,19 +169,19 @@ def episodes(session: Session, settings: Settings) -> View:
     )
 
     if session.episode_filter:
-        heading = (
-            f"🔎 <b>{len(visible)}</b> of {len(session.episodes)} match "
-            f"“{esc(truncate(session.episode_filter, 30))}”."
-        )
-        if not visible:
-            heading = (
-                f"🔎 Nothing matches “{esc(truncate(session.episode_filter, 30))}”. "
-                "Try other words."
+        query = esc(truncate(session.episode_filter, 30))
+        if visible:
+            heading = t(
+                lang, "filter_match",
+                n=len(visible), total=len(session.episodes), query=query,
             )
+        else:
+            heading = t(lang, "filter_none", query=query)
     else:
-        heading = (
-            f"🎧 <b>{len(session.episodes)}</b> episodes. "
-            "Pick one, or type part of a title to filter."
+        count = len(session.episodes)
+        heading = t(
+            lang, "episodes_heading",
+            n=count, episodes=plural(lang, "episodes", count),
         )
 
     return View(
@@ -178,48 +191,78 @@ def episodes(session: Session, settings: Settings) -> View:
             kb.EPISODE_PREFIX,
             id_of=lambda e: e.id,
             label_of=episode_label,
+            lang=lang,
             page=page,
             pages=pages,
             extra_rows=(
-                [[kb.clear_filter_button()]] if session.episode_filter else None
+                [[kb.clear_filter_button(lang)]]
+                if session.episode_filter
+                else None
             ),
         ),
     )
 
 
+def _filtered_heading(session: Session, visible: list, total: int) -> str:
+    """What a narrowed cross-feed list says about itself."""
+    lang = session.language
+    query = esc(truncate(session.episode_filter, 30))
+    if visible:
+        return t(lang, "filter_match", n=len(visible), total=total, query=query)
+    return t(lang, "filter_none", query=query)
+
+
 def global_episodes(session: Session, settings: Settings) -> View:
+    lang = session.language
     page = session.current.page if session.current else 1
+    visible = session.filter_episodes(session.episodes)
     window, page, pages = session.page_of(
-        session.episodes, page, settings.episodes_per_page
+        visible, page, settings.episodes_per_page
     )
 
+    if session.episode_filter:
+        heading = _filtered_heading(session, visible, len(session.episodes))
+    else:
+        count = len(session.episodes)
+        heading = t(
+            lang, "global_heading",
+            n=count, episodes=plural(lang, "episodes_in", count),
+        )
+
     return View(
-        breadcrumb(session)
-        + f"🔎 <b>{len(session.episodes)}</b> episodes mention that.",
+        breadcrumb(session) + heading,
         kb.choice_keyboard(
             window,
             kb.EPISODE_PREFIX,
             id_of=lambda e: e.id,
             label_of=lambda e: f"{e.feed_title}: {e.title}",
+            lang=lang,
             page=page,
             pages=pages,
+            extra_rows=(
+                [[kb.clear_filter_button(lang)]]
+                if session.episode_filter
+                else None
+            ),
         ),
     )
 
 
 def trending(session: Session, settings: Settings) -> View:
+    lang = session.language
     page = session.current.page if session.current else 1
     window, page, pages = session.page_of(
         session.feeds, page, settings.podcasts_per_page
     )
 
     return View(
-        breadcrumb(session) + "🔥 <b>Popular right now.</b>",
+        breadcrumb(session) + t(lang, "trending_heading"),
         kb.choice_keyboard(
             window,
             kb.FEED_PREFIX,
             id_of=lambda f: f.id,
             label_of=lambda f: f"{f.title} — {f.author}",
+            lang=lang,
             page=page,
             pages=pages,
         ),
@@ -227,33 +270,47 @@ def trending(session: Session, settings: Settings) -> View:
 
 
 def recent(session: Session, settings: Settings) -> View:
+    lang = session.language
     if not session.recents:
         return View(
-            breadcrumb(session)
-            + "🕘 Nothing here yet — episodes you cut show up in this list.",
-            InlineKeyboardMarkup([kb.footer_row()]),
+            breadcrumb(session) + t(lang, "recent_empty"),
+            InlineKeyboardMarkup([kb.footer_row(lang)]),
         )
 
     page = session.current.page if session.current else 1
+    visible = session.filter_episodes(session.recents)
     window, page, pages = session.page_of(
-        session.recents, page, settings.episodes_per_page
+        visible, page, settings.episodes_per_page
+    )
+
+    heading = (
+        _filtered_heading(session, visible, len(session.recents))
+        if session.episode_filter
+        else t(lang, "recent_heading")
     )
 
     return View(
-        breadcrumb(session) + "🕘 <b>Episodes you looked at recently.</b>",
+        breadcrumb(session) + heading,
         kb.choice_keyboard(
             window,
             kb.EPISODE_PREFIX,
             id_of=lambda e: e.id,
             label_of=lambda e: f"{e.feed_title}: {e.title}",
+            lang=lang,
             page=page,
             pages=pages,
+            extra_rows=(
+                [[kb.clear_filter_button(lang)]]
+                if session.episode_filter
+                else None
+            ),
         ),
     )
 
 
 def interval(session: Session, settings: Settings) -> View:
     """The clip editor — the screen users spend the most time on."""
+    lang = session.language
     episode = session.episode
     if episode is None:  # pragma: no cover - guarded by the router
         return menu(session)
@@ -261,11 +318,12 @@ def interval(session: Session, settings: Settings) -> View:
     start, end = session.clip_start, session.clip_end
     body = (
         f"{_episode_heading(episode)}\n\n"
-        f"✂️ <b>{format_duration(start)} → {format_duration(end)}</b>"
-        f"   <i>({format_duration(session.clip_length)})</i>\n\n"
-        f"Send a timestamp to jump there — <code>12:30</code> for a "
-        f"{format_duration(session.clip_length)} clip, or "
-        f"<code>12:30-14:00</code> for an exact range."
+        + t(
+            lang, "interval_editor",
+            start=format_duration(start),
+            end=format_duration(end),
+            length=format_duration(session.clip_length),
+        )
     )
 
     # Telegram's limits change what is honest to promise per format, so the
@@ -273,15 +331,12 @@ def interval(session: Session, settings: Settings) -> View:
     # finds out. Nothing is switched behind the user's back: a circle that
     # cannot fit stays a refusal with a way out, not a silent square video.
     if session.send_as == FORMAT_NOTE and session.clip_length > VIDEO_NOTE_SECONDS:
-        body += (
-            "\n\n⚠️ <i>A circle fits one minute — Telegram's rule. Shorten "
-            "the clip, or pick 🎬 Video to send it square and full-length.</i>"
-        )
+        body += f"\n\n<i>{t(lang, 'circle_rule')}</i>"
     if session.send_as == FORMAT_VIDEO and session.clip_length > MAX_VIDEO_SECONDS:
         body += (
-            f"\n\n⚠️ <i>Video is capped at "
-            f"{format_duration(MAX_VIDEO_SECONDS)} — shorten the clip "
-            "or switch back to audio.</i>"
+            "\n\n<i>"
+            + t(lang, "video_cap", limit=format_duration(MAX_VIDEO_SECONDS))
+            + "</i>"
         )
 
     # Arriving from a search replaces the list of moments with this screen, so
@@ -289,9 +344,16 @@ def interval(session: Session, settings: Settings) -> View:
     # line the only way to know is to try it, and a person who found three
     # moments and wants the second one should not have to guess.
     if came_from_search(session) and len(session.moments) > 1:
+        count = len(session.moments)
         body += (
-            f"\n\n<i>‹ Back returns to the {len(session.moments)} moments "
-            f"found for “{esc(truncate(session.phrase, 40))}”.</i>"
+            "\n\n<i>"
+            + t(
+                lang, "back_to_moments",
+                n=count,
+                moments=plural(lang, "moments_to", count),
+                phrase=esc(truncate(session.phrase, 40)),
+            )
+            + "</i>"
         )
 
     return View(
@@ -302,6 +364,7 @@ def interval(session: Session, settings: Settings) -> View:
             send_as=session.send_as,
             skin=session.skin,
             can_search=settings.asr_enabled,
+            lang=lang,
         ),
     )
 
@@ -313,30 +376,21 @@ def ask_phrase(session: Session, transcribed: bool) -> View:
     promise, so it changes the text: the first search on an episode costs
     minutes, and a user who is not told that will assume the bot has hung.
     """
+    lang = session.language
     episode = session.episode
     heading = f"{_episode_heading(episode)}\n\n" if episode else ""
 
-    if transcribed:
-        promise = "This episode is already transcribed, so this is instant."
-    else:
-        promise = (
-            "⏳ Nobody has searched this episode yet, so I'll listen to it "
-            "first. That takes a few minutes — you'll see progress, and it "
-            "only happens once per episode."
-        )
+    promise = t(lang, "promise_instant" if transcribed else "promise_first")
 
     return View(
-        breadcrumb(session)
-        + heading
-        + "🔎 <b>What was said?</b>\n\n"
-        "Send a word or a phrase and I'll find where it comes up.\n\n"
-        + promise,
-        kb.cancel_keyboard(),
+        breadcrumb(session) + heading + t(lang, "ask_phrase") + promise,
+        kb.cancel_keyboard(lang),
     )
 
 
 def moments(session: Session) -> View:
     """What a search found, or a clear statement that it found nothing."""
+    lang = session.language
     episode = session.episode
     heading = f"{_episode_heading(episode)}\n\n" if episode else ""
     asked = esc(truncate(session.phrase, 60))
@@ -347,13 +401,8 @@ def moments(session: Session) -> View:
         # most usual is that they were spoken and misheard, which no rephrasing
         # of the same query will fix either.
         return View(
-            breadcrumb(session)
-            + heading
-            + f"🔎 <b>“{asked}”</b>\n\n"
-            "Nothing in this episode matches that.\n\n"
-            "It may not have been said — or it was said and misheard: "
-            "transcription is imperfect on names and jargon.",
-            kb.moments_keyboard([], session.phrase),
+            breadcrumb(session) + heading + t(lang, "moments_none", query=asked),
+            kb.moments_keyboard([], session.phrase, lang),
         )
 
     # The context goes in the message, not on the buttons. A button is one
@@ -372,18 +421,24 @@ def moments(session: Session) -> View:
             f"\n{quoted}"
         )
 
+    count = len(session.moments)
     return View(
         breadcrumb(session)
         + heading
-        + f"🔎 <b>“{asked}”</b> — {len(session.moments)} "
-        f"{'moment' if len(session.moments) == 1 else 'moments'}\n\n"
+        + t(
+            lang, "moments_header",
+            query=asked, n=count, moments=plural(lang, "moments", count),
+        )
+        + "\n\n"
         + "\n\n".join(lines)
-        + "\n\nTap a number to open the clip editor there.",
-        kb.moments_keyboard(session.moments, session.phrase),
+        + "\n\n"
+        + t(lang, "moments_tap"),
+        kb.moments_keyboard(session.moments, session.phrase, lang),
     )
 
 
 def result(session: Session, bot_username: str) -> View:
+    lang = session.language
     episode = session.episode
     heading = _episode_heading(episode) if episode else ""
     share = episode.title if episode else ""
@@ -391,45 +446,61 @@ def result(session: Session, bot_username: str) -> View:
     return View(
         breadcrumb(session)
         + f"{heading}\n\n"
-        f"✅ Sent <b>{format_duration(session.clip_start)} → "
-        f"{format_duration(session.clip_end)}</b>\n\n"
-        "Not quite the right moment? Nudge it below.",
-        kb.result_keyboard(truncate(share, 40)),
+        + t(
+            lang, "result_sent",
+            start=format_duration(session.clip_start),
+            end=format_duration(session.clip_end),
+        ),
+        kb.result_keyboard(
+            truncate(share, 40),
+            lang,
+            # Attribution: the way back to the whole episode rides on the
+            # result screen, which is also what a captionless video note has.
+            episode_url=episode.enclosure_url if episode else None,
+        ),
     )
 
 
-def stats(day, week, db_bytes: int) -> View:
+def stats(day, week, db_bytes: int, lang: str = "en") -> View:
     """The operator's panel: is the bot actually working, and for whom."""
     lines = ["📊 <b>Podcast Cutter</b>", ""]
 
-    for label, window in (("Last 24h", day), ("Last 7 days", week)):
+    for label_key, window in (("stats_24h", day), ("stats_7d", week)):
         rate = window.success_rate
         rate_text = f"{rate * 100:.0f}%" if rate is not None else "—"
-        lines.append(f"<b>{label}</b>")
+        lines.append(f"<b>{t(lang, label_key)}</b>")
         lines.append(
-            f"  clips: {window.cuts_ok} ok · {window.cuts_failed} failed"
-            f"  ({rate_text})"
+            t(
+                lang, "stats_clips",
+                ok=window.cuts_ok, failed=window.cuts_failed, rate=rate_text,
+            )
         )
-        lines.append(f"  people: {window.unique_users}")
+        lines.append(t(lang, "stats_people", n=window.unique_users))
         if window.median_ms is not None:
             lines.append(
-                f"  time: {window.median_ms / 1000:.1f}s median · "
-                f"{(window.slowest_ms or 0) / 1000:.1f}s worst"
+                t(
+                    lang, "stats_time",
+                    median=f"{window.median_ms / 1000:.1f}",
+                    worst=f"{(window.slowest_ms or 0) / 1000:.1f}",
+                )
             )
         if window.cuts_ok:
             lines.append(
-                f"  voice notes: {window.voice_share * 100:.0f}%"
-                f" · sent {human_bytes(window.total_bytes)}"
+                t(
+                    lang, "stats_voice",
+                    share=f"{window.voice_share * 100:.0f}",
+                    size=human_bytes(window.total_bytes, lang),
+                )
             )
         lines.append("")
 
     if week.failures:
-        lines.append("<b>Failures this week</b>")
+        lines.append(f"<b>{t(lang, 'stats_failures')}</b>")
         lines += [f"  {esc(name)} × {count}" for name, count in week.failures]
         lines.append("")
 
     if week.top_podcasts:
-        lines.append("<b>Most cut this week</b>")
+        lines.append(f"<b>{t(lang, 'stats_top')}</b>")
         lines += [
             f"  {esc(truncate(name, 40))} × {count}"
             for name, count in week.top_podcasts
@@ -437,7 +508,7 @@ def stats(day, week, db_bytes: int) -> View:
         lines.append("")
 
     if week.sources:
-        lines.append("<b>Where people came from this week</b>")
+        lines.append(f"<b>{t(lang, 'stats_sources')}</b>")
         lines += [
             f"  {esc(truncate(name, 32))} × {count}" for name, count in week.sources
         ]
@@ -445,10 +516,12 @@ def stats(day, week, db_bytes: int) -> View:
 
     if week.actions:
         summary = " · ".join(f"{esc(name)} {count}" for name, count in week.actions)
-        lines.append(f"<b>Activity</b>\n  {summary}")
+        lines.append(f"<b>{t(lang, 'stats_activity')}</b>\n  {summary}")
         lines.append("")
 
-    lines.append(f"<i>journal: {human_bytes(db_bytes)}</i>")
+    lines.append(
+        f"<i>{t(lang, 'stats_journal', size=human_bytes(db_bytes, lang))}</i>"
+    )
     return View("\n".join(lines).strip())
 
 
@@ -456,5 +529,5 @@ def working(message: str) -> View:
     return View(message, None)
 
 
-def failure(message: str) -> View:
-    return View(f"⚠️ {esc(message)}", kb.error_keyboard())
+def failure(message: str, lang: str = "en") -> View:
+    return View(f"⚠️ {esc(message)}", kb.error_keyboard(lang))

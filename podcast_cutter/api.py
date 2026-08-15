@@ -34,6 +34,18 @@ logger = logging.getLogger(__name__)
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE = 0.5
 
+#: How long a directory answer may be reused. Identical searches repeat — the
+#: same person paging back and forth, or several people typing the same show —
+#: and the directory does not change by the minute. Kept short enough that a
+#: freshly published episode is minutes late, not hours.
+CACHE_SECONDS = 300
+
+#: Paths whose whole point is a different answer each time.
+_UNCACHED_PATHS = ("/episodes/random",)
+
+#: Entries kept at most; beyond it the soonest-to-expire half is dropped.
+_CACHE_LIMIT = 256
+
 #: Enclosure MIME types we know ffmpeg can handle. Anything video-shaped is
 #: skipped: cutting it would produce a file we cannot send as audio.
 _SKIPPED_ENCLOSURE_PREFIXES = ("video/",)
@@ -121,6 +133,8 @@ class PodcastIndexClient:
             follow_redirects=True,
             headers={"User-Agent": "PodcastCutter/1.0"},
         )
+        #: ``(path, sorted params) → (expires_at, payload)``.
+        self._cache: dict[tuple, tuple[float, dict]] = {}
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -139,6 +153,26 @@ class PodcastIndexClient:
         }
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch through a small TTL cache; the network half is `_fetch`."""
+        cacheable = path not in _UNCACHED_PATHS
+        key = (path, tuple(sorted(params.items())))
+        if cacheable:
+            cached = self._cache.get(key)
+            if cached is not None and cached[0] > time.monotonic():
+                return cached[1]
+
+        payload = await self._fetch(path, params)
+
+        if cacheable:
+            if len(self._cache) >= _CACHE_LIMIT:
+                for stale in sorted(
+                    self._cache, key=lambda item: self._cache[item][0]
+                )[: _CACHE_LIMIT // 2]:
+                    del self._cache[stale]
+            self._cache[key] = (time.monotonic() + CACHE_SECONDS, payload)
+        return payload
+
+    async def _fetch(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         last_error: Exception | None = None
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -160,13 +194,9 @@ class PodcastIndexClient:
                     try:
                         payload = response.json()
                     except ValueError as exc:
-                        raise ApiError(
-                            "The podcast directory returned a malformed response."
-                        ) from exc
+                        raise ApiError("err_api_malformed") from exc
                     if not isinstance(payload, dict):
-                        raise ApiError(
-                            "The podcast directory returned a malformed response."
-                        )
+                        raise ApiError("err_api_malformed")
                     return payload
 
                 if response.status_code in (401, 403):
@@ -176,19 +206,17 @@ class PodcastIndexClient:
                         response.status_code,
                         path,
                     )
-                    raise ApiError(
-                        "The bot cannot authenticate with the podcast directory."
-                    )
+                    raise ApiError("err_api_auth")
 
                 if response.status_code == 429:
-                    last_error = ApiError("Rate limited by the podcast directory.")
+                    last_error = ApiError("err_api_rate")
                 elif response.status_code >= 500:
                     last_error = ApiError(
-                        f"The podcast directory returned {response.status_code}."
+                        "err_api_status", status=response.status_code
                     )
                 else:
                     raise ApiError(
-                        f"The podcast directory returned {response.status_code}."
+                        "err_api_status", status=response.status_code
                     )
 
                 logger.warning(
@@ -202,9 +230,7 @@ class PodcastIndexClient:
             if attempt < _MAX_ATTEMPTS:
                 await asyncio.sleep(_BACKOFF_BASE * 2 ** (attempt - 1))
 
-        raise ApiError(
-            "The podcast directory is not responding. Please try again in a moment."
-        ) from last_error
+        raise ApiError("err_api_down") from last_error
 
     # -- endpoints ---------------------------------------------------------
 
@@ -225,13 +251,13 @@ class PodcastIndexClient:
 
         feeds = _parse_all(Feed, payload.get("feeds"))
         if not feeds:
-            raise NotFoundError(f"No podcasts found for “{one_line(query)}”.")
+            raise NotFoundError("err_no_podcasts", query=one_line(query))
 
         start = (page - 1) * per_page
         window = feeds[start : start + per_page]
         if not window:
             # The user paged past the end (e.g. results shrank between calls).
-            raise NotFoundError("No more podcasts on that page.")
+            raise NotFoundError("err_no_more_pages")
 
         has_next = len(feeds) > page * per_page
         return window, has_next
@@ -248,7 +274,7 @@ class PodcastIndexClient:
 
         episodes = _parse_all(Episode, payload.get("items"))
         if not episodes:
-            raise NotFoundError("This podcast has no downloadable episodes.")
+            raise NotFoundError("err_no_episodes")
         return episodes
 
     async def search_episodes_by_person(self, query: str) -> list[Episode]:
@@ -260,7 +286,7 @@ class PodcastIndexClient:
 
         episodes = _parse_all(Episode, payload.get("items"))
         if not episodes:
-            raise NotFoundError(f"No episodes found for “{one_line(query)}”.")
+            raise NotFoundError("err_no_person", query=one_line(query))
         return episodes
 
     async def get_episode(self, episode_id: str) -> Episode:
@@ -274,7 +300,7 @@ class PodcastIndexClient:
         raw = payload.get("episode")
         episode = Episode.from_api(raw) if isinstance(raw, dict) else None
         if episode is None:
-            raise NotFoundError("That episode is no longer available.")
+            raise NotFoundError("err_episode_gone")
         return episode
 
     async def trending_feeds(self, limit: int = 10) -> list[Feed]:
@@ -282,7 +308,7 @@ class PodcastIndexClient:
 
         feeds = _parse_all(Feed, payload.get("feeds"))
         if not feeds:
-            raise NotFoundError("No trending podcasts right now.")
+            raise NotFoundError("err_no_trending")
         return feeds
 
     async def random_episode(self) -> Episode:
@@ -295,5 +321,5 @@ class PodcastIndexClient:
 
         episodes = _parse_all(Episode, payload.get("episodes"))
         if not episodes:
-            raise NotFoundError("Could not find a random episode. Try again.")
+            raise NotFoundError("err_no_random")
         return episodes[0]

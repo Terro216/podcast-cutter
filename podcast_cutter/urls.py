@@ -72,14 +72,11 @@ async def ensure_safe_source(url: str, *, allow_private: bool = False) -> None:
     parts = urlsplit(url)
 
     if parts.scheme.lower() not in ALLOWED_SCHEMES:
-        raise UnsafeSourceError(
-            "This episode's audio link is not an ordinary web download, "
-            "so it was not opened."
-        )
+        raise UnsafeSourceError("err_unsafe_scheme")
 
     host = parts.hostname
     if not host:
-        raise UnsafeSourceError("This episode's audio link has no host in it.")
+        raise UnsafeSourceError("err_unsafe_no_host")
 
     if allow_private:
         return
@@ -95,10 +92,7 @@ async def ensure_safe_source(url: str, *, allow_private: bool = False) -> None:
         logger.warning(
             "Refusing %s: %s resolves to %s", url, host, ", ".join(private)
         )
-        raise UnsafeSourceError(
-            "This episode's audio link points inside this server's own "
-            "network, so it was not opened."
-        )
+        raise UnsafeSourceError("err_unsafe_private")
 
 
 def redirect_guard(allow_private: bool = False):

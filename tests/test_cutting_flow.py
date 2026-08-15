@@ -577,3 +577,110 @@ class TestInlineMode:
         await bot.on_inline_query(update, context)
 
         assert 0 < len(update.inline_query.results) <= 50
+
+
+class TestAttribution:
+    """A clip is a citation, and a citation names its source (ROADMAP §13.4)."""
+
+    async def test_the_caption_links_the_full_episode(
+        self, bot, context, ready, monkeypatch
+    ):
+        stub_cut(monkeypatch)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+        await bot.on_callback(update, context)
+
+        caption = update.effective_message.sent_audio["caption"]
+        assert ready.episode.enclosure_url in caption
+        assert "Full episode" in caption
+
+    async def test_the_result_screen_offers_the_full_episode(
+        self, bot, context, ready, monkeypatch
+    ):
+        # The video note has no caption at all, so the result screen's URL
+        # button is the attribution every format shares.
+        stub_cut(monkeypatch)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+        await bot.on_callback(update, context)
+
+        buttons = [
+            b for row in update.markup.inline_keyboard for b in row if b.url
+        ]
+        assert any(b.url == ready.episode.enclosure_url for b in buttons)
+
+
+class TestCancel:
+    async def test_cancel_stops_the_cut_in_flight(
+        self, bot, context, ready, monkeypatch
+    ):
+        """/cancel during a cut cancels the job rather than letting an
+        unwanted clip finish and land in the chat anyway."""
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hanging_cut(url, interval, workdir, settings, **kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        monkeypatch.setattr(handlers_mod, "cut_episode", hanging_cut)
+
+        cutting = FakeUpdate(callback=kb.ACTION_CUT)
+        job = asyncio.create_task(bot.on_callback(cutting, context))
+        await asyncio.wait_for(started.wait(), timeout=2)
+
+        await bot.cmd_cancel(FakeUpdate(text="/cancel"), context)
+        await asyncio.wait_for(job, timeout=2)
+
+        assert cancelled.is_set()
+        assert not bot._busy_users and not bot._cut_tasks
+        assert "Cancelled" in cutting.shown
+
+    async def test_a_cancelled_cut_frees_the_user_for_the_next_one(
+        self, bot, context, ready, monkeypatch
+    ):
+        started = asyncio.Event()
+
+        async def hanging_cut(url, interval, workdir, settings, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(handlers_mod, "cut_episode", hanging_cut)
+        job = asyncio.create_task(
+            bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        await bot.cmd_cancel(FakeUpdate(text="/cancel"), context)
+        await asyncio.wait_for(job, timeout=2)
+
+        # The next cut must not be refused as "still working".
+        stub_cut(monkeypatch)
+        session = get_session(context.user_data)
+        session.select_episode(make_episode("10", duration=3600), 60)
+        session.set_clip(600, 60)
+        session.go(Screen.INTERVAL)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+        await bot.on_callback(update, context)
+        assert update.effective_message.sent_audio is not None
+
+    async def test_the_journal_says_cancelled_not_crashed(
+        self, bot, context, ready, monkeypatch, store
+    ):
+        started = asyncio.Event()
+
+        async def hanging_cut(url, interval, workdir, settings, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(handlers_mod, "cut_episode", hanging_cut)
+        job = asyncio.create_task(
+            bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        await bot.cmd_cancel(FakeUpdate(text="/cancel"), context)
+        await asyncio.wait_for(job, timeout=2)
+
+        failures = dict((await store.stats(24)).failures)
+        assert failures.get("cancelled") == 1

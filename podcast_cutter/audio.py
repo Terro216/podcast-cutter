@@ -41,6 +41,7 @@ from .errors import (
     UnreachableError,
     UnreadableError,
 )
+from .i18n import t
 from .proxy import DIRECT, MediaProxy, is_blocked_status, is_routing_failure
 from .text import format_duration
 from .urls import ensure_safe_source, redirect_guard
@@ -115,7 +116,7 @@ def parse_timestamp(raw: str) -> int:
     """
     text = raw.strip().lower().replace(" ", "")
     if not text:
-        raise IntervalError("A timestamp is missing.")
+        raise IntervalError("err_ts_missing")
 
     if text.isdigit():
         return int(text)
@@ -123,15 +124,11 @@ def parse_timestamp(raw: str) -> int:
     if ":" in text:
         parts = text.split(":")
         if len(parts) > 3 or not all(part.isdigit() for part in parts):
-            raise IntervalError(
-                f"“{raw.strip()}” is not a valid timestamp. Use MM:SS or HH:MM:SS."
-            )
+            raise IntervalError("err_ts_invalid", raw=raw.strip())
         values = [int(part) for part in parts]
         # Only the leading field may exceed 59; 12:75 is a typo, not 13:15.
         if any(value > 59 for value in values[1:]):
-            raise IntervalError(
-                f"“{raw.strip()}” has a minute or second value above 59."
-            )
+            raise IntervalError("err_ts_over59", raw=raw.strip())
         total = 0
         for value in values:
             total = total * 60 + value
@@ -142,9 +139,7 @@ def parse_timestamp(raw: str) -> int:
         hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
         return hours * 3600 + minutes * 60 + seconds
 
-    raise IntervalError(
-        f"“{raw.strip()}” is not a valid timestamp. Try 01:20, 1:05:00 or 90s."
-    )
+    raise IntervalError("err_ts_unparsed", raw=raw.strip())
 
 
 def parse_interval(raw: str, max_duration: int) -> Interval:
@@ -152,21 +147,20 @@ def parse_interval(raw: str, max_duration: int) -> Interval:
     text = (raw or "").strip()
     parts = _INTERVAL_SEPARATOR.split(text, maxsplit=1)
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise IntervalError(
-            "Send a start and an end separated by a hyphen, e.g. 01:20-02:00."
-        )
+        raise IntervalError("err_range_format")
 
     start = parse_timestamp(parts[0])
     end = parse_timestamp(parts[1])
 
     if end <= start:
-        raise IntervalError("The end time must come after the start time.")
+        raise IntervalError("err_end_before_start")
 
     duration = end - start
     if duration > max_duration:
         raise IntervalError(
-            f"That is {format_duration(duration)} long. "
-            f"The maximum is {format_duration(max_duration)}."
+            "err_interval_too_long",
+            duration=format_duration(duration),
+            max=format_duration(max_duration),
         )
 
     return Interval(start=start, end=end)
@@ -297,6 +291,13 @@ async def _run(
         with contextlib.suppress(ProcessLookupError):
             await process.wait()
         raise ProcessingTimeout from None
+    except asyncio.CancelledError:
+        # A cancelled cut (the user pressed /cancel) must not orphan an
+        # ffmpeg that keeps encoding a clip nobody wants.
+        process.kill()
+        with contextlib.suppress(ProcessLookupError):
+            await process.wait()
+        raise
 
     return process.returncode or 0, stderr.decode("utf-8", "replace").strip()
 
@@ -463,7 +464,7 @@ async def _download(
     if not str(url).startswith(("http://", "https://")):
         # Episode URLs are validated when parsed, so reaching here means a bug
         # rather than bad user input; still, say something intelligible.
-        raise AudioError("This episode has no usable audio link.")
+        raise AudioError("err_no_audio_link")
 
     written = 0
     try:
@@ -483,7 +484,7 @@ async def _download(
                 raise BlockedError
             if response.status_code >= 400:
                 raise UnreachableError(
-                    f"The episode host returned {response.status_code}."
+                    "err_host_status", status=response.status_code
                 )
 
             total: int | None = None
@@ -495,10 +496,7 @@ async def _download(
                 async for chunk in response.aiter_bytes(64 * 1024):
                     written += len(chunk)
                     if written > settings.max_source_bytes:
-                        raise AudioError(
-                            "This episode file is unusually large; refusing "
-                            "to download it."
-                        )
+                        raise AudioError("err_source_too_big")
                     handle.write(chunk)
                     if on_progress is not None:
                         # The callback decides how often to actually surface
@@ -506,10 +504,10 @@ async def _download(
                         with contextlib.suppress(Exception):
                             await on_progress(written, total)
     except httpx.HTTPError as exc:
-        raise UnreachableError(f"Could not download the episode: {exc}") from exc
+        raise UnreachableError("err_download_failed", reason=str(exc)) from exc
 
     if written == 0:
-        raise UnreachableError("The episode host returned an empty file.")
+        raise UnreachableError("err_empty_file")
 
 
 async def _resolve_url(
@@ -593,6 +591,7 @@ async def cut_episode(
     metadata: dict[str, str] | None = None,
     voice: bool = False,
     proxy: MediaProxy | None = None,
+    lang: str = "en",
 ) -> CutResult:
     """Extract ``interval`` from ``audio_url`` into ``workdir``.
 
@@ -638,9 +637,9 @@ async def cut_episode(
         """
         if duration is not None and duration > settings.max_source_seconds:
             raise AudioError(
-                f"This episode is {format_duration(duration)} long, past the "
-                f"{format_duration(settings.max_source_seconds)} this bot will "
-                "open. Try a shorter episode."
+                "err_episode_too_long",
+                duration=format_duration(duration),
+                max=format_duration(settings.max_source_seconds),
             )
 
     shrink_with = "opus" if voice else "mp3"
@@ -674,12 +673,13 @@ async def cut_episode(
     check_length(info.duration)
     if info.duration is not None and interval.start >= info.duration:
         raise AudioError(
-            f"This episode is only {format_duration(info.duration)} long, "
-            f"so {format_duration(interval.start)} is past the end."
+            "err_past_end",
+            duration=format_duration(info.duration),
+            start=format_duration(interval.start),
         )
 
     # --- attempt 1: work directly off the URL -----------------------------
-    await status("✂️ Cutting the segment…")
+    await status(t(lang, "status_cutting"))
     for output, encode in plan(info.codec):
         reason = await _try_cut(
             resolved_url,
@@ -694,15 +694,12 @@ async def cut_episode(
         if reason is None:
             return await _finalize(
                 output, encode, interval, workdir, settings, status,
-                metadata, shrink_with, route,
+                metadata, shrink_with, route, lang,
             )
         logger.info("Streaming cut failed (encode=%s): %s", encode, reason[:500])
 
     # --- attempt 2: download the episode, then cut locally ----------------
-    await status(
-        "⬇️ This host does not allow partial reads — downloading "
-        "the full episode first. This can take a couple of minutes…"
-    )
+    await status(t(lang, "status_full_download"))
     local_source = workdir / "source.bin"
     route = await _download_with_fallback(
         resolved_url, local_source, settings, proxy, route, on_progress
@@ -715,11 +712,12 @@ async def cut_episode(
     check_length(local_info.duration)
     if local_info.duration is not None and interval.start >= local_info.duration:
         raise AudioError(
-            f"This episode is only {format_duration(local_info.duration)} long, "
-            f"so {format_duration(interval.start)} is past the end."
+            "err_past_end",
+            duration=format_duration(local_info.duration),
+            start=format_duration(interval.start),
         )
 
-    await status("✂️ Cutting the segment…")
+    await status(t(lang, "status_cutting"))
     failures: list[str] = []
     for output, encode in plan(local_info.codec or info.codec):
         reason = await _try_cut(
@@ -735,7 +733,7 @@ async def cut_episode(
             local_source.unlink(missing_ok=True)
             return await _finalize(
                 output, encode, interval, workdir, settings, status,
-                metadata, shrink_with, route,
+                metadata, shrink_with, route, lang,
             )
         failures.append(reason)
         logger.info("Local cut failed (encode=%s): %s", encode, reason[:500])
@@ -800,6 +798,7 @@ async def _finalize(
     metadata: dict[str, str] | None = None,
     shrink_with: str = "mp3",
     route: str = DIRECT,
+    lang: str = "en",
 ) -> CutResult:
     """Enforce the upload size limit, re-encoding once if that might help."""
     size = output.stat().st_size
@@ -810,7 +809,7 @@ async def _finalize(
             size,
             settings.max_upload_bytes,
         )
-        await status("🗜 The segment is large — compressing it…")
+        await status(t(lang, "status_compressing"))
         # Deliberately not reusing the plain "cut.<ext>" name: it may be
         # `output` itself, and `_try_cut` deletes its destination first.
         compressed = workdir / f"compressed.{_ENCODERS[shrink_with][1]}"
@@ -831,9 +830,9 @@ async def _finalize(
 
     if size > settings.max_upload_bytes:
         raise TooLargeError(
-            f"The cut is {size // (1024 * 1024)} MB, above the "
-            f"{settings.max_upload_bytes // (1024 * 1024)} MB Telegram limit. "
-            "Please pick a shorter interval."
+            "err_cut_too_large",
+            size=size // (1024 * 1024),
+            limit=settings.max_upload_bytes // (1024 * 1024),
         )
 
     return CutResult(

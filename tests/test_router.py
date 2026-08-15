@@ -14,6 +14,7 @@ import pytest
 from conftest import FakeUpdate, make_episode, make_feed
 from podcast_cutter import keyboards as kb
 from podcast_cutter.errors import ApiError, NotFoundError
+from podcast_cutter.i18n import t
 from podcast_cutter.states import Awaiting, Screen, get_session
 
 pytestmark = pytest.mark.asyncio
@@ -60,13 +61,13 @@ class TestTextRouting:
 
     async def test_menu_buttons_work_from_any_screen(self, bot, context):
         await text(bot, context, "radiolab")
-        await text(bot, context, kb.BTN_TRENDING)
+        await text(bot, context, t("en", "btn_trending"))
         assert session_of(context).current.screen is Screen.TRENDING
 
     async def test_menu_buttons_are_never_read_as_a_search_term(
         self, bot, context, client
     ):
-        await text(bot, context, kb.BTN_SURPRISE)
+        await text(bot, context, t("en", "btn_surprise"))
         assert not any(call.startswith("search_feeds") for call in client.calls)
 
     async def test_typing_on_a_list_filters_it(self, bot, context, client):
@@ -471,3 +472,102 @@ class TestRecents:
         update = await tap(bot, context, "menu:recent")
         assert "Nothing here yet" in update.shown
         assert kb.NAV_MENU in payloads(update.markup)
+
+
+class TestBackRestoresWhatTypingMeans:
+    async def test_back_to_the_phrase_prompt_keeps_it_a_phrase_prompt(
+        self, bot, context, client
+    ):
+        """A restored "what was said?" screen must not send the typed phrase
+        off as a podcast-name search."""
+        client.feeds = [make_feed("1")]
+        await text(bot, context, "radiolab")
+        await tap(bot, context, f"{kb.EPISODE_PREFIX}:10")
+        await tap(bot, context, kb.ACTION_FIND)
+        assert session_of(context).awaiting is Awaiting.PHRASE
+
+        # Wander off to another screen, then come back.
+        await tap(bot, context, "menu:recent")
+        await tap(bot, context, kb.NAV_BACK)
+
+        session = session_of(context)
+        assert session.current.screen is Screen.ASK_PHRASE
+        assert session.awaiting is Awaiting.PHRASE
+
+        searches_before = [
+            call for call in client.calls if call.startswith("search_feeds")
+        ]
+        await text(bot, context, "фолдинг")
+        searches_after = [
+            call for call in client.calls if call.startswith("search_feeds")
+        ]
+        assert searches_after == searches_before
+        assert session_of(context).current.screen is Screen.MOMENTS
+
+    async def test_back_to_the_podcast_prompt_still_searches(
+        self, bot, context, client
+    ):
+        await tap(bot, context, "menu:search")
+        await tap(bot, context, "menu:recent")
+        await tap(bot, context, kb.NAV_BACK)
+        session = session_of(context)
+        assert session.current.screen is Screen.ASK_PODCAST
+        assert session.awaiting is Awaiting.PODCAST_NAME
+
+
+class TestCrossFeedFilters:
+    async def test_typing_on_a_person_list_narrows_it(self, bot, context, client):
+        client.episodes = [
+            make_episode("1", "Roman Empire"),
+            make_episode("2", "Physics"),
+        ]
+        await tap(bot, context, "menu:person")
+        await text(bot, context, "caesar")
+        assert session_of(context).current.screen is Screen.GLOBAL
+
+        update = await text(bot, context, "roman")
+        shown = payloads(update.markup)
+        assert f"{kb.EPISODE_PREFIX}:1" in shown
+        assert f"{kb.EPISODE_PREFIX}:2" not in shown
+        assert kb.ACTION_CLEAR_FILTER in shown
+
+    async def test_the_filter_matches_the_show_name_too(
+        self, bot, context, client
+    ):
+        # On a cross-feed list the show is half of what each button says.
+        client.episodes = [
+            make_episode("1", "Roman Empire"),
+            make_episode("2", "Physics"),
+        ]
+        await tap(bot, context, "menu:person")
+        await text(bot, context, "caesar")
+
+        update = await text(bot, context, "some show")
+        shown = payloads(update.markup)
+        assert f"{kb.EPISODE_PREFIX}:1" in shown
+        assert f"{kb.EPISODE_PREFIX}:2" in shown
+
+    async def test_typing_on_the_recent_list_narrows_it(self, bot, context):
+        session = session_of(context)
+        session.recents = [
+            make_episode("1", "Roman Empire"),
+            make_episode("2", "Physics"),
+        ]
+        session.recents_loaded = True
+        await tap(bot, context, "menu:recent")
+
+        update = await text(bot, context, "physics")
+        shown = payloads(update.markup)
+        assert f"{kb.EPISODE_PREFIX}:2" in shown
+        assert f"{kb.EPISODE_PREFIX}:1" not in shown
+
+    async def test_a_filter_matching_nothing_says_so_with_a_way_out(
+        self, bot, context, client
+    ):
+        client.episodes = [make_episode("1", "Roman Empire")]
+        await tap(bot, context, "menu:person")
+        await text(bot, context, "caesar")
+
+        update = await text(bot, context, "zzz-nothing")
+        assert "zzz-nothing" in update.shown
+        assert kb.ACTION_CLEAR_FILTER in payloads(update.markup)

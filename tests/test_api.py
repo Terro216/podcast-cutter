@@ -12,6 +12,69 @@ def settings():
     )
 
 
+class TestCaching:
+    """Identical directory queries within the TTL cost one network call."""
+
+    def _client(self, settings, payload):
+        client = PodcastIndexClient(settings)
+        calls: list[str] = []
+
+        async def fake_fetch(path, params):
+            calls.append(path)
+            return payload
+
+        client._fetch = fake_fetch
+        return client, calls
+
+    async def test_identical_searches_hit_the_network_once(self, settings):
+        client, calls = self._client(
+            settings, {"feeds": [{"id": 1, "title": "Show", "author": "A"}]}
+        )
+        first, _ = await client.search_feeds("radiolab")
+        second, _ = await client.search_feeds("radiolab")
+        assert first == second
+        assert len(calls) == 1
+
+    async def test_different_queries_are_not_conflated(self, settings):
+        client, calls = self._client(
+            settings, {"feeds": [{"id": 1, "title": "Show", "author": "A"}]}
+        )
+        await client.search_feeds("radiolab")
+        await client.search_feeds("serial")
+        assert len(calls) == 2
+
+    async def test_random_is_never_cached(self, settings):
+        # Its whole point is a different answer each time.
+        client, calls = self._client(
+            settings,
+            {
+                "episodes": [
+                    {
+                        "id": 9,
+                        "title": "Ep",
+                        "feedTitle": "Show",
+                        "enclosureUrl": "https://cdn.example.com/9.mp3",
+                    }
+                ]
+            },
+        )
+        await client.random_episode()
+        await client.random_episode()
+        assert len(calls) == 2
+
+    async def test_an_expired_entry_is_refetched(self, settings):
+        client, calls = self._client(
+            settings, {"feeds": [{"id": 1, "title": "Show", "author": "A"}]}
+        )
+        await client.search_feeds("radiolab")
+        # Age every entry past its TTL rather than sleeping through one.
+        client._cache = {
+            key: (0.0, payload) for key, (_, payload) in client._cache.items()
+        }
+        await client.search_feeds("radiolab")
+        assert len(calls) == 2
+
+
 class TestFeedParsing:
     def test_parses_a_normal_feed(self):
         parsed = Feed.from_api({"id": 42, "title": "Show", "author": "Me"})

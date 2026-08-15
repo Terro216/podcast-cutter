@@ -8,16 +8,21 @@ Two conventions hold everywhere:
 * Every screen offers a way out. Lists carry ``‹ Back``, and destructive or
   terminal actions are coloured with Bot API 9.4's button styles so the primary
   action is obvious at a glance.
+
+Labels come from :mod:`~podcast_cutter.i18n`, so every builder takes the
+language it renders in. Callback data never does: a payload is a name, not a
+sentence, and a button pressed after its owner switched languages must still
+route the same.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import TypeVar
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+from .i18n import LANGUAGE_NAMES, LANGUAGES, t
 from .states import FORMAT_AUDIO, FORMAT_NOTE, FORMAT_VIDEO, FORMAT_VOICE
 from .text import button_label, format_duration
 
@@ -31,36 +36,39 @@ STYLE_DANGER = "danger"
 
 # -- main menu -------------------------------------------------------------
 
-BTN_SEARCH_PODCAST = "🔍 Search a podcast"
-BTN_SEARCH_PERSON = "🧑 Search by person"
-BTN_TRENDING = "🔥 Trending"
-BTN_SURPRISE = "🎲 Surprise me"
-BTN_RECENT = "🕘 Recent"
-BTN_HELP = "❓ Help"
-
-MENU_BUTTONS = (
-    BTN_SEARCH_PODCAST,
-    BTN_SEARCH_PERSON,
-    BTN_TRENDING,
-    BTN_SURPRISE,
-    BTN_RECENT,
-    BTN_HELP,
+#: i18n label key → what the button does. The reply keyboard sends its label
+#: back as plain text, so the router recognises a press by looking the text up
+#: across *every* language: the labels on a client's screen change only when a
+#: new keyboard is sent, and a Russian button must keep working after the user
+#: switches the bot to English.
+_MENU_LABEL_ACTIONS = (
+    ("btn_search_podcast", "search"),
+    ("btn_search_person", "person"),
+    ("btn_trending", "trending"),
+    ("btn_surprise", "surprise"),
+    ("btn_recent", "recent"),
+    ("btn_help", "help"),
 )
 
+_MENU_ACTIONS: dict[str, str] = {
+    t(lang, key): action
+    for lang in LANGUAGES
+    for key, action in _MENU_LABEL_ACTIONS
+}
 
-def menu_regex(*labels: str) -> str:
-    """Exact-match regex for reply-keyboard buttons, emoji included."""
-    alternatives = "|".join(re.escape(label) for label in labels)
-    return f"^(?:{alternatives})$"
+
+def menu_action(text: str) -> str | None:
+    """The action a reply-keyboard label triggers, in any language."""
+    return _MENU_ACTIONS.get(text)
 
 
-def main_menu() -> ReplyKeyboardMarkup:
+def main_menu(lang: str = "en") -> ReplyKeyboardMarkup:
     """The persistent shortcut bar, always one tap away."""
     return ReplyKeyboardMarkup(
         [
-            [BTN_SEARCH_PODCAST, BTN_SEARCH_PERSON],
-            [BTN_TRENDING, BTN_SURPRISE],
-            [BTN_RECENT, BTN_HELP],
+            [t(lang, "btn_search_podcast"), t(lang, "btn_search_person")],
+            [t(lang, "btn_trending"), t(lang, "btn_surprise")],
+            [t(lang, "btn_recent"), t(lang, "btn_help")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -78,6 +86,8 @@ LENGTH_PREFIX = "len"
 MOVE_PREFIX = "mv"
 #: Post-cut actions.
 SHIFT_PREFIX = "shift"
+#: The language chooser.
+LANG_PREFIX = "lang"
 
 NAV_BACK = f"{NAV_PREFIX}:back"
 NAV_MENU = f"{NAV_PREFIX}:menu"
@@ -98,26 +108,26 @@ ACTION_FIND = "act:find"
 FORMAT_PREFIX = "fmt"
 SKIN_PREFIX = "skin"
 
-_FORMAT_LABELS = (
-    (FORMAT_AUDIO, "🎵 Audio"),
-    (FORMAT_VOICE, "🎤 Voice"),
-    (FORMAT_NOTE, "⭕ Circle"),
-    (FORMAT_VIDEO, "🎬 Video"),
+_FORMAT_LABEL_KEYS = (
+    (FORMAT_AUDIO, "fmt_audio"),
+    (FORMAT_VOICE, "fmt_voice"),
+    (FORMAT_NOTE, "fmt_note"),
+    (FORMAT_VIDEO, "fmt_video"),
 )
 
-#: Skin key → button label. The keys must equal ``video.SKINS`` — a test
-#: holds them together — but the labels live here because this module is the
-#: UI vocabulary and must not import the ffmpeg half of the world.
+#: Skin key → i18n label key. The keys must equal ``video.SKINS`` — a test
+#: holds them together — but the labels live in the i18n tables because this
+#: module is the UI vocabulary and must not import the ffmpeg half of the world.
 SKIN_LABELS = {
-    "bars": "🎚 Bars",
-    "spectrum": "🌈 Spectrum",
-    "scope": "🟢 Scope",
-    "cover": "🖼 Cover",
-    "party": "🪩 Party",
-    "vhs": "📼 VHS",
-    "matrix": "💊 Matrix",
-    "aurora": "🌌 Aurora",
-    "lava": "🌋 Lava",
+    "bars": "skin_bars",
+    "spectrum": "skin_spectrum",
+    "scope": "skin_scope",
+    "cover": "skin_cover",
+    "party": "skin_party",
+    "vhs": "skin_vhs",
+    "matrix": "skin_matrix",
+    "aurora": "skin_aurora",
+    "lava": "skin_lava",
 }
 
 #: The skin rows split so nine choices do not become nine slivers.
@@ -173,13 +183,13 @@ def pagination_row(page: int, pages: int) -> list[InlineKeyboardButton]:
 
 
 def footer_row(
-    *, back: bool = True, menu: bool = True
+    lang: str = "en", *, back: bool = True, menu: bool = True
 ) -> list[InlineKeyboardButton]:
     row = []
     if back:
-        row.append(_button("‹ Back", NAV_BACK))
+        row.append(_button(t(lang, "btn_back"), NAV_BACK))
     if menu:
-        row.append(_button("☰ Menu", NAV_MENU))
+        row.append(_button(t(lang, "btn_menu"), NAV_MENU))
     return row
 
 
@@ -189,8 +199,8 @@ def footer_row(
 ACTION_CLEAR_FILTER = "act:unfilter"
 
 
-def clear_filter_button() -> InlineKeyboardButton:
-    return _button("✕ Clear filter", ACTION_CLEAR_FILTER)
+def clear_filter_button(lang: str = "en") -> InlineKeyboardButton:
+    return _button(t(lang, "btn_clear_filter"), ACTION_CLEAR_FILTER)
 
 
 def choice_keyboard(
@@ -199,13 +209,14 @@ def choice_keyboard(
     id_of: Callable[[T], str],
     label_of: Callable[[T], str],
     *,
+    lang: str = "en",
     page: int = 1,
     pages: int = 1,
     back: bool = True,
     extra_rows: Sequence[Sequence[InlineKeyboardButton]] | None = None,
 ) -> InlineKeyboardMarkup:
     """A page of choices with pagination and a way back."""
-    rows = list(_choice_rows(items, prefix, id_of, label_of))
+    rows = list(_choice_rows(items, prefix, id_of, label_of, lang))
 
     nav = pagination_row(page, pages)
     if nav:
@@ -214,7 +225,7 @@ def choice_keyboard(
     for row in extra_rows or ():
         rows.append(list(row))
 
-    footer = footer_row(back=back)
+    footer = footer_row(lang, back=back)
     if footer:
         rows.append(footer)
 
@@ -226,6 +237,7 @@ def _choice_rows(
     prefix: str,
     id_of: Callable[[T], str],
     label_of: Callable[[T], str],
+    lang: str,
 ) -> Iterable[list[InlineKeyboardButton]]:
     for item in items:
         payload = f"{prefix}:{id_of(item)}"
@@ -233,7 +245,8 @@ def _choice_rows(
         # wrong item, so skip the entry instead.
         if len(payload.encode()) > 64:
             continue
-        yield [_button(button_label(label_of(item)), payload)]
+        label = button_label(label_of(item), fallback=t(lang, "untitled"))
+        yield [_button(label, payload)]
 
 
 #: Clip lengths offered as one-tap presets, in seconds.
@@ -243,14 +256,15 @@ LENGTH_PRESETS = (30, 60, 180, 300)
 MOVE_STEPS = (-60, -15, 15, 60)
 
 
-def _move_label(delta: int) -> str:
+def _move_label(delta: int, lang: str) -> str:
+    minutes, seconds = t(lang, "unit_minutes"), t(lang, "unit_seconds")
     if delta <= -60:
-        return f"◀◀ {delta // 60}m"
+        return f"◀◀ {delta // 60}{minutes}"
     if delta < 0:
-        return f"◀ {delta}s"
+        return f"◀ {delta}{seconds}"
     if delta >= 60:
-        return f"+{delta // 60}m ▶▶"
-    return f"+{delta}s ▶"
+        return f"+{delta // 60}{minutes} ▶▶"
+    return f"+{delta}{seconds} ▶"
 
 
 def interval_keyboard(
@@ -260,6 +274,7 @@ def interval_keyboard(
     send_as: str = FORMAT_AUDIO,
     skin: str = "bars",
     can_search: bool = False,
+    lang: str = "en",
 ) -> InlineKeyboardMarkup:
     """The clip editor: pick a length, slide the window, then cut."""
     presets = [
@@ -278,16 +293,19 @@ def interval_keyboard(
     if presets:
         rows.append(presets)
     rows.append(
-        [_button(_move_label(step), f"{MOVE_PREFIX}:{step}") for step in MOVE_STEPS]
+        [
+            _button(_move_label(step, lang), f"{MOVE_PREFIX}:{step}")
+            for step in MOVE_STEPS
+        ]
     )
     rows.append(
         [
             _button(
-                f"● {label}" if key == send_as else label,
-                f"{FORMAT_PREFIX}:{key}",
-                STYLE_SUCCESS if key == send_as else None,
+                f"● {t(lang, key)}" if fmt == send_as else t(lang, key),
+                f"{FORMAT_PREFIX}:{fmt}",
+                STYLE_SUCCESS if fmt == send_as else None,
             )
-            for key, label in _FORMAT_LABELS
+            for fmt, key in _FORMAT_LABEL_KEYS
         ]
     )
     if send_as in (FORMAT_NOTE, FORMAT_VIDEO):
@@ -298,22 +316,24 @@ def interval_keyboard(
             rows.append(
                 [
                     _button(
-                        f"● {SKIN_LABELS[key]}" if key == skin
-                        else SKIN_LABELS[key],
+                        f"● {t(lang, SKIN_LABELS[key])}" if key == skin
+                        else t(lang, SKIN_LABELS[key]),
                         f"{SKIN_PREFIX}:{key}",
                         STYLE_SUCCESS if key == skin else None,
                     )
                     for key in group
                 ]
             )
-    rows.append([_button("✂️ Cut it", ACTION_CUT, STYLE_PRIMARY)])
+    rows.append([_button(t(lang, "btn_cut"), ACTION_CUT, STYLE_PRIMARY)])
     if can_search:
-        rows.append([_button("🔎 Find a moment by what was said", ACTION_FIND)])
-    rows.append(footer_row())
+        rows.append([_button(t(lang, "btn_find"), ACTION_FIND)])
+    rows.append(footer_row(lang))
     return InlineKeyboardMarkup(rows)
 
 
-def moments_keyboard(moments: Sequence, phrase: str) -> InlineKeyboardMarkup:
+def moments_keyboard(
+    moments: Sequence, phrase: str, lang: str = "en"
+) -> InlineKeyboardMarkup:
     """The answers to a search, each opening the clip editor where it starts.
 
     Numbered and stamped, nothing more: a button is a single short line, and a
@@ -330,69 +350,107 @@ def moments_keyboard(moments: Sequence, phrase: str) -> InlineKeyboardMarkup:
     ]
 
     rows = [picks] if picks else []
-    rows.append([_button("🔎 Search again", ACTION_FIND)])
-    rows.append(footer_row())
+    rows.append([_button(t(lang, "btn_search_again"), ACTION_FIND)])
+    rows.append(footer_row(lang))
     return InlineKeyboardMarkup(rows)
 
 
-def result_keyboard(share_query: str) -> InlineKeyboardMarkup:
-    """Offered after a successful cut: adjust, repeat, or share."""
-    return InlineKeyboardMarkup(
+def result_keyboard(
+    share_query: str, lang: str = "en", episode_url: str | None = None
+) -> InlineKeyboardMarkup:
+    """Offered after a successful cut: adjust, repeat, share — and the way
+    back to the whole episode, which is the attribution a clip owes its
+    source (see ROADMAP §13.4)."""
+    rows = [
         [
-            [
-                _button("↺ 15s earlier", f"{SHIFT_PREFIX}:-15"),
-                _button("15s later ↻", f"{SHIFT_PREFIX}:15"),
-            ],
-            [_button("✂️ Another clip from this episode", ACTION_NEW_CLIP)],
-            [
-                InlineKeyboardButton(
-                    "📤 Share this episode",
-                    switch_inline_query=share_query,
-                )
-            ],
-            [_button("☰ Menu", NAV_MENU)],
-        ]
-    )
+            _button(t(lang, "btn_earlier"), f"{SHIFT_PREFIX}:-15"),
+            _button(t(lang, "btn_later"), f"{SHIFT_PREFIX}:15"),
+        ],
+        [_button(t(lang, "btn_another_clip"), ACTION_NEW_CLIP)],
+        [
+            InlineKeyboardButton(
+                t(lang, "btn_share"),
+                switch_inline_query=share_query,
+            )
+        ],
+    ]
+    if episode_url:
+        rows.append(
+            [InlineKeyboardButton(t(lang, "btn_full_episode"), url=episode_url)]
+        )
+    rows.append([_button(t(lang, "btn_menu"), NAV_MENU)])
+    return InlineKeyboardMarkup(rows)
 
 
-def open_episode(link: str) -> InlineKeyboardMarkup:
+def open_episode(link: str, lang: str = "en") -> InlineKeyboardMarkup:
     """One button, on a message the bot sent unprompted.
 
     A deep link rather than callback data on purpose: the message it sits under
     may outlive the session, the process, or both, and a `?start=ep_…` link is
     the one route back into an episode that needs neither.
     """
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🎧 Open it", url=link)]])
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(t(lang, "btn_open"), url=link)]]
+    )
 
 
-def error_keyboard() -> InlineKeyboardMarkup:
+def error_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Shown when a cut fails: retrying is usually worth one tap."""
     return InlineKeyboardMarkup(
         [
-            [_button("↻ Try again", ACTION_RETRY, STYLE_PRIMARY)],
-            [_button("‹ Back", NAV_BACK), _button("☰ Menu", NAV_MENU)],
+            [_button(t(lang, "btn_retry"), ACTION_RETRY, STYLE_PRIMARY)],
+            footer_row(lang),
         ]
     )
 
 
-def menu_keyboard(has_recent: bool) -> InlineKeyboardMarkup:
+def menu_keyboard(has_recent: bool, lang: str = "en") -> InlineKeyboardMarkup:
     """The inline twin of the reply keyboard, for tap-driven navigation."""
     rows = [
         [
-            _button("🔍 Podcast", "menu:search", STYLE_PRIMARY),
-            _button("🧑 Person", "menu:person"),
+            _button(t(lang, "btn_menu_podcast"), "menu:search", STYLE_PRIMARY),
+            _button(t(lang, "btn_menu_person"), "menu:person"),
         ],
         [
-            _button("🔥 Trending", "menu:trending"),
-            _button("🎲 Surprise", "menu:surprise"),
+            _button(t(lang, "btn_menu_trending"), "menu:trending"),
+            _button(t(lang, "btn_menu_surprise"), "menu:surprise"),
         ],
     ]
     if has_recent:
-        rows.append([_button("🕘 Recent episodes", "menu:recent")])
-    rows.append([_button("❓ How this works", "menu:help")])
+        rows.append([_button(t(lang, "btn_menu_recent"), "menu:recent")])
+    rows.append(
+        [
+            _button(t(lang, "btn_menu_help"), "menu:help"),
+            _button(t(lang, "btn_menu_language"), "menu:language"),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
-def cancel_keyboard() -> InlineKeyboardMarkup:
+def language_keyboard(current: str) -> InlineKeyboardMarkup:
+    """One button per language the bot speaks.
+
+    The names are never translated — someone stuck in a language they cannot
+    read must still be able to find their own — and the current choice is
+    marked rather than hidden, so the screen answers "which is it now?" too.
+    """
+    rows = [
+        [
+            _button(
+                f"● {LANGUAGE_NAMES[lang]}" if lang == current
+                else LANGUAGE_NAMES[lang],
+                f"{LANG_PREFIX}:{lang}",
+                STYLE_SUCCESS if lang == current else None,
+            )
+        ]
+        for lang in LANGUAGES
+    ]
+    rows.append(footer_row(current))
+    return InlineKeyboardMarkup(rows)
+
+
+def cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Attached to prompts that wait for typed input."""
-    return InlineKeyboardMarkup([[_button("✕ Cancel", NAV_CANCEL, STYLE_DANGER)]])
+    return InlineKeyboardMarkup(
+        [[_button(t(lang, "btn_cancel"), NAV_CANCEL, STYLE_DANGER)]]
+    )

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import logging
 import re
 import shutil
@@ -38,6 +39,15 @@ from .api import Episode, PodcastIndexClient
 from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
 from .errors import NotFoundError, PodcastCutterError, TooLargeError
+from .i18n import (
+    DEFAULT_LANGUAGE,
+    LANGUAGES,
+    ordinal,
+    plural,
+    resolve_language,
+    t,
+    t_seq,
+)
 from .indexer import Indexer, TranscriptionDisabled
 from .limits import Budget
 from .listening import QUEUED, TranscriptionQueue
@@ -52,6 +62,7 @@ from .states import (
     Screen,
     Session,
     get_session,
+    peek_session,
     reset_session,
 )
 from .store import Event, Store
@@ -93,40 +104,14 @@ INLINE_EMPTY_CACHE_SECONDS = 5
 #: and a bar that moves more often than this is noise, not information.
 PROGRESS_INTERVAL = 3.0
 
-#: Headline per stage. The bar and the estimate carry the detail.
-_LISTENING_STAGES = {
-    "download": "⬇️ Fetching the episode…",
-    "decode": "🔧 Preparing the audio…",
-    "transcribe": "🎧 Listening to the episode…",
-    "index": "🧭 Indexing what was said…",
+#: Progress-stage → i18n key. The bar and the estimate carry the detail;
+#: the waiting notes live in the i18n tables next to every other sentence.
+_STAGE_KEYS = {
+    "download": "stage_download",
+    "decode": "stage_decode",
+    "transcribe": "stage_transcribe",
+    "index": "stage_index",
 }
-
-#: What "you are Nth in line" reads as. Numbers, not "queued": a wait with no
-#: number is indistinguishable from a hang, and the first thing someone does
-#: about a hang is press the button again.
-_ORDINALS = ("", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th")
-
-
-def _ordinal(place: int) -> str:
-    return _ORDINALS[place] if place < len(_ORDINALS) else f"{place}th"
-
-#: Rotated under the bar while recognition runs, one every few edits.
-#:
-#: Each says something true about what is happening or why it is worth the
-#: wait. That is the whole test for adding one: filler that could appear over
-#: any wait at all makes the screen less trustworthy, not friendlier — a person
-#: reading the same cheerful nothing twice concludes it is a spinner, which is
-#: the impression this exists to remove.
-_WAITING_NOTES = (
-    "This happens once per episode — every later search on it is instant.",
-    "The whole episode gets listened to in one go, so any future question "
-    "about it is already paid for.",
-    "Timestamps come from the words themselves, so a clip opens where the "
-    "phrase actually starts.",
-    "Silence and music are skipped, which is why the bar sometimes jumps.",
-    "Names and jargon are the hard part; common words come out fine.",
-    "Once this is done you can search this episode as many times as you like.",
-)
 
 #: How long a first transcription takes per second of audio, before this
 #: deployment has measured its own. Measured on the production host with
@@ -144,42 +129,15 @@ MAX_ASR_QUEUE = 4
 #: How long each waiting note stays on screen.
 NOTE_SECONDS = 20
 
-GENERIC_ERROR = "Something went wrong on my side. Please try again."
-
-#: The first thing a newcomer reads. The menu that follows says what the
-#: buttons do, so this says the two things the buttons cannot: how a moment is
-#: written, and that the bot works from inside someone else's chat.
-WELCOME_TEXT = (
-    "👋 <b>Welcome!</b>\n\n"
-    "I cut a short piece out of a podcast episode and send it back, so you "
-    "can share the good bit instead of a two-hour link.\n\n"
-    "Once you've picked an episode, tell me when it starts: "
-    "<code>12:30</code> for a clip from there, or <code>12:30-14:00</code> "
-    "for an exact range. The ◀ ▶ buttons nudge it until it's right.\n\n"
-    "In any other chat, type <code>@{username}</code> and a name to hand "
-    "someone an episode without leaving the conversation.\n\n"
-    "Send me a podcast name to start."
-)
-
-HELP_TEXT = (
-    "🎙 <b>Podcast Cutter</b>\n\n"
-    "Find an episode, tell me a moment, get just that part back.\n\n"
-    "<b>Finding something</b>\n"
-    "/search — a podcast by name\n"
-    "/person — episodes mentioning someone\n"
-    "/trending — what's popular\n"
-    "/surprise — a random episode\n"
-    "/recent — episodes you looked at\n"
-    "/cancel — back to the main menu\n"
-    "/help — this message\n\n"
-    "<b>Picking the moment</b>\n"
-    "Send <code>12:30</code> for a clip starting there, or "
-    "<code>12:30-14:00</code> for an exact range.\n"
-    "Then nudge it with the ◀ ▶ buttons until it's right.\n\n"
-    "<b>Anywhere else</b>\n"
-    "Type <code>@{username}</code> in any chat to share an episode "
-    "without leaving the conversation."
-)
+#: What typing means on each screen ``‹ Back`` can restore. Restoring the
+#: screen without restoring this is how a phrase typed into a restored
+#: "what was said?" prompt used to run off as a podcast-name search.
+_SCREEN_AWAITING = {
+    Screen.INTERVAL: Awaiting.INTERVAL,
+    Screen.ASK_PODCAST: Awaiting.PODCAST_NAME,
+    Screen.ASK_PERSON: Awaiting.PERSON,
+    Screen.ASK_PHRASE: Awaiting.PHRASE,
+}
 
 
 def campaign_source(payload: str) -> str | None:
@@ -233,7 +191,9 @@ class StatusEditor:
             )
 
 
-def _listening_text(stage, started: float, estimate: int) -> str:
+def _listening_text(
+    stage, started: float, estimate: int, lang: str = DEFAULT_LANGUAGE
+) -> str:
     """What the waiting screen says right now.
 
     Three things, in the order they answer "has this hung?": which stage, how
@@ -244,13 +204,14 @@ def _listening_text(stage, started: float, estimate: int) -> str:
     if stage.stage == QUEUED:
         place = int(stage.done)
         ahead = place - 1
-        return (
-            f"⏳ <b>{_ordinal(place)} in line</b>\n\n"
-            f"<i>{ahead} episode{'' if ahead == 1 else 's'} ahead of this one. "
-            "Listening starts on its own — nothing to press.</i>"
+        return t(
+            lang, "queue_position",
+            place=ordinal(lang, place),
+            episodes=f"{ahead} {plural(lang, 'episodes', ahead)}",
         )
 
-    lines = [_LISTENING_STAGES.get(stage.stage, "🎧 Working…")]
+    stage_key = _STAGE_KEYS.get(stage.stage, "stage_working")
+    lines = [t(lang, stage_key)]
 
     fraction = stage.fraction
     if fraction is not None:
@@ -261,8 +222,10 @@ def _listening_text(stage, started: float, estimate: int) -> str:
         label = {
             "transcribe": format_duration,
             "index": lambda count: str(int(count)),
-        }.get(stage.stage, human_bytes)
-        lines.append(progress_bar(int(stage.done), int(stage.total), label=label))
+        }.get(stage.stage, lambda count: human_bytes(count, lang))
+        lines.append(
+            progress_bar(int(stage.done), int(stage.total), label=label, lang=lang)
+        )
 
     if stage.stage == "transcribe":
         elapsed = time.monotonic() - started
@@ -276,12 +239,15 @@ def _listening_text(stage, started: float, estimate: int) -> str:
             remaining = max(0, estimate - int(elapsed))
 
         if remaining and remaining >= 10:
-            lines.append(f"<i>about {format_duration(remaining)} left</i>")
+            lines.append(
+                f"<i>{t(lang, 'about_left', duration=format_duration(remaining))}</i>"
+            )
 
         # Rotated on the clock, not on how often this happens to be called:
         # edits are throttled, so counting calls would change the line without
         # anyone seeing it.
-        note = _WAITING_NOTES[int(elapsed // NOTE_SECONDS) % len(_WAITING_NOTES)]
+        notes = t_seq(lang, "waiting_notes")
+        note = notes[int(elapsed // NOTE_SECONDS) % len(notes)]
         lines.append("")
         lines.append(f"<i>{note}</i>")
 
@@ -326,6 +292,10 @@ class PodcastCutterBot:
         #: User ids with a cut in flight — one heavy job per person. Checked
         #: and set with no await in between, or two quick taps both pass.
         self._busy_users: set[int] = set()
+        #: The task actually performing each user's cut, so /cancel can
+        #: reach in and stop it — cancelling kills the ffmpeg underneath
+        #: (see ``audio._run``) instead of letting an unwanted clip finish.
+        self._cut_tasks: dict[int, asyncio.Task] = {}
         self._input_budget = Budget(settings.rate_input_per_minute, 60)
         self._cut_budget = Budget(settings.rate_cuts_per_hour, 3600)
         self._asr_budget = Budget(settings.rate_asr_per_day, 86400)
@@ -385,9 +355,11 @@ class PodcastCutterBot:
         screen = nav.screen if nav else Screen.MENU
 
         if screen is Screen.ASK_PODCAST:
-            return screens.ask_podcast()
+            return screens.ask_podcast(session)
         if screen is Screen.ASK_PERSON:
-            return screens.ask_person()
+            return screens.ask_person(session)
+        if screen is Screen.LANGUAGE:
+            return screens.language(session)
         if screen is Screen.FEEDS:
             return screens.feeds(session, self.settings)
         if screen is Screen.EPISODES:
@@ -433,6 +405,7 @@ class PodcastCutterBot:
             session = reset_session(context.user_data)
             session.was_reset = True
         session.touch()
+        await self._ensure_language(update, session)
 
         # The recent list is the one thing worth surviving a restart, so it
         # lives in the database and is pulled in once per session.
@@ -451,6 +424,25 @@ class PodcastCutterBot:
     def _user_id(update: Update) -> int | None:
         user = update.effective_user
         return user.id if user is not None else None
+
+    async def _language_for_user(self, user) -> str:
+        """The language for a user outside any session — inline mode, resumed
+        jobs. The stored choice wins, then the client's ``language_code``."""
+        stored = (
+            await self.store.user_language(user.id)
+            if self.store is not None and user is not None
+            else None
+        )
+        return resolve_language(
+            stored, getattr(user, "language_code", None) if user else None
+        )
+
+    async def _ensure_language(self, update: Update, session: Session) -> None:
+        """Resolve the session's language once, on its first update."""
+        if session.language_loaded:
+            return
+        session.language_loaded = True
+        session.language = await self._language_for_user(update.effective_user)
 
     async def _log(self, update: Update, action: str, **fields) -> None:
         """Append to the journal, if one is configured."""
@@ -478,6 +470,7 @@ class PodcastCutterBot:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         session = reset_session(context.user_data)
+        await self._ensure_language(update, session)
 
         payload = context.args[0] if context.args else ""
         if payload.startswith(DEEP_LINK_EPISODE):
@@ -487,11 +480,12 @@ class PodcastCutterBot:
             return
 
         await update.effective_message.reply_text(
-            WELCOME_TEXT.format(
-                username=self.bot_username or "podcast_cutter_bot"
+            t(
+                session.language, "welcome",
+                username=self.bot_username or "podcast_cutter_bot",
             ),
             parse_mode="HTML",
-            reply_markup=kb.main_menu(),
+            reply_markup=kb.main_menu(session.language),
         )
         session.go(Screen.MENU)
         await self.render(update, session)
@@ -505,8 +499,9 @@ class PodcastCutterBot:
             episode = await self.client.get_episode(episode_id)
         except PodcastCutterError as exc:
             await update.effective_message.reply_text(
-                f"⚠️ {esc(exc.user_message)}", parse_mode="HTML",
-                reply_markup=kb.main_menu(),
+                f"⚠️ {esc(exc.user_message(session.language))}",
+                parse_mode="HTML",
+                reply_markup=kb.main_menu(session.language),
             )
             session.go(Screen.MENU)
             await self.render(update, session)
@@ -516,7 +511,8 @@ class PodcastCutterBot:
         session.awaiting = Awaiting.INTERVAL
         session.go(Screen.INTERVAL)
         await update.effective_message.reply_text(
-            "🔗 Opened from a shared link.", reply_markup=kb.main_menu()
+            t(session.language, "opened_from_link"),
+            reply_markup=kb.main_menu(session.language),
         )
         await self.render(update, session)
         await self._log(update, "deep_link", episode_id=episode.id)
@@ -534,20 +530,28 @@ class PodcastCutterBot:
             try:
                 await action(update, session)
             except PodcastCutterError as exc:
-                await self._show_failure(update, session, exc.user_message)
+                await self._show_failure(
+                    update, session, exc.user_message(session.language)
+                )
 
         handler.__name__ = getattr(action, "__name__", "command")
         return handler
 
-    async def cmd_help(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE = None
-    ) -> None:
+    async def act_help(self, update: Update, session: Session) -> None:
         await update.effective_message.reply_text(
-            HELP_TEXT.format(username=self.bot_username or "podcast_cutter_bot"),
+            t(
+                session.language, "help",
+                username=self.bot_username or "podcast_cutter_bot",
+            ),
             parse_mode="HTML",
-            reply_markup=kb.main_menu(),
+            reply_markup=kb.main_menu(session.language),
             link_preview_options={"is_disabled": True},
         )
+
+    async def act_language(self, update: Update, session: Session) -> None:
+        session.awaiting = Awaiting.NOTHING
+        session.go(Screen.LANGUAGE)
+        await self.render(update, session)
 
     async def cmd_stats(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -558,6 +562,7 @@ class PodcastCutterBot:
         than "you are not an admin", which would confirm the command exists.
         The caller's id is logged so the owner can discover their own.
         """
+        session = await self.session_for(update, context)
         user_id = self._user_id(update)
         if not self.settings.is_admin(user_id):
             if user_id is not None:
@@ -570,28 +575,40 @@ class PodcastCutterBot:
             return
 
         if self.store is None:
-            await update.effective_message.reply_text("No journal configured.")
+            await update.effective_message.reply_text(
+                t(session.language, "no_journal")
+            )
             return
 
         view = screens.stats(
             await self.store.stats(24),
             await self.store.stats(24 * 7),
             await self.store.size_on_disk(),
+            lang=session.language,
         )
         await update.effective_message.reply_text(view.text, parse_mode="HTML")
 
     async def cmd_unknown(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
+        session = await self.session_for(update, context)
         await update.effective_message.reply_text(
-            "I don't know that command — /help lists the ones I do.",
-            reply_markup=kb.main_menu(),
+            t(session.language, "unknown_command"),
+            reply_markup=kb.main_menu(session.language),
         )
 
     async def cmd_cancel(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
+        # A cut in flight is the one thing "cancel" can actually abort —
+        # everything else it merely navigates away from.
+        user_id = self._user_id(update)
+        task = self._cut_tasks.get(user_id) if user_id is not None else None
+        if task is not None:
+            task.cancel()
+
         session = reset_session(context.user_data)
+        await self._ensure_language(update, session)
         session.go(Screen.MENU)
         await self.render(update, session)
 
@@ -610,7 +627,9 @@ class PodcastCutterBot:
         await self.render(update, session)
 
     async def act_trending(self, update: Update, session: Session) -> None:
-        await self.show(update, screens.working("🔥 Fetching trending…"))
+        await self.show(
+            update, screens.working(t(session.language, "working_trending"))
+        )
         feeds = await self.client.trending_feeds(20)
         session.remember_feeds(feeds)
         session.awaiting = Awaiting.NOTHING
@@ -619,7 +638,9 @@ class PodcastCutterBot:
         await self._log(update, "trending")
 
     async def act_surprise(self, update: Update, session: Session) -> None:
-        await self.show(update, screens.working("🎲 Picking an episode…"))
+        await self.show(
+            update, screens.working(t(session.language, "working_surprise"))
+        )
         episode = await self.client.random_episode()
         await self._select_episode(update, session, episode)
         session.awaiting = Awaiting.INTERVAL
@@ -644,7 +665,12 @@ class PodcastCutterBot:
         self, update: Update, session: Session, query: str, page: int = 1
     ) -> None:
         session.query = query
-        await self.show(update, screens.working(f"🔍 Searching “{esc(query)}”…"))
+        await self.show(
+            update,
+            screens.working(
+                t(session.language, "working_search", query=esc(query))
+            ),
+        )
 
         feeds, has_next = await self.client.search_feeds(query, page)
         session.remember_feeds(feeds, has_next)
@@ -668,7 +694,12 @@ class PodcastCutterBot:
         self, update: Update, session: Session, query: str
     ) -> None:
         session.query = query
-        await self.show(update, screens.working(f"🔎 Searching “{esc(query)}”…"))
+        await self.show(
+            update,
+            screens.working(
+                t(session.language, "working_person", query=esc(query))
+            ),
+        )
 
         session.set_episodes(await self.client.search_episodes_by_person(query))
         session.awaiting = Awaiting.NOTHING
@@ -682,7 +713,9 @@ class PodcastCutterBot:
             return
 
         if not session.episodes:
-            await self.show(update, screens.working("🎧 Loading episodes…"))
+            await self.show(
+                update, screens.working(t(session.language, "working_episodes"))
+            )
             session.set_episodes(await self.client.list_episodes(session.feed.id))
 
         session.awaiting = Awaiting.NOTHING
@@ -737,9 +770,7 @@ class PodcastCutterBot:
 
         if user_id in self._busy_users:
             await self._show_failure(
-                update,
-                session,
-                "One job at a time, please — this one is still running.",
+                update, session, t(session.language, "busy_running")
             )
             return
 
@@ -756,10 +787,7 @@ class PodcastCutterBot:
             if not self._budget_allows(self._asr_budget, update):
                 await self._log(update, "limit", outcome="asr")
                 await self._show_failure(
-                    update,
-                    session,
-                    "🐢 That is the day's budget for first listens spent. "
-                    "Episodes the bot already knows still search instantly.",
+                    update, session, t(session.language, "asr_budget_spent")
                 )
                 return
             # Joining a line that already holds this episode is free: it is one
@@ -772,10 +800,7 @@ class PodcastCutterBot:
             ):
                 await self._log(update, "limit", outcome="asr_queue")
                 await self._show_failure(
-                    update,
-                    session,
-                    "The listening queue is full right now — "
-                    "try again in a few minutes.",
+                    update, session, t(session.language, "asr_queue_full")
                 )
                 return
 
@@ -796,13 +821,15 @@ class PodcastCutterBot:
         indexed: int | None,
     ) -> None:
         """The body of a phrase search, with the busy flag already held."""
+        lang = session.language
         rtf = await self.store.measured_rtf() if self.store else None
         estimate = int((episode.duration or 0) * (rtf or DEFAULT_RTF))
-        opening = "🎧 Getting ready to listen…"
+        opening = t(lang, "getting_ready")
         if estimate >= 30:
             opening += (
-                f"\n\n<i>About {format_duration(estimate)} for this one — "
-                "it only happens once per episode.</i>"
+                "\n\n<i>"
+                + t(lang, "estimate_note", duration=format_duration(estimate))
+                + "</i>"
             )
         progress = StatusEditor(
             await update.effective_message.reply_text(opening, parse_mode="HTML")
@@ -817,7 +844,7 @@ class PodcastCutterBot:
             changed = stage.stage != shown_stage["name"]
             shown_stage["name"] = stage.stage
             await progress.set(
-                _listening_text(stage, started, estimate), force=changed
+                _listening_text(stage, started, estimate, lang), force=changed
             )
 
 
@@ -849,7 +876,7 @@ class PodcastCutterBot:
             outcome = getattr(exc, "code", "error")
             with contextlib.suppress(TelegramError):
                 await progress.message.delete()
-            await self._show_failure(update, session, exc.user_message)
+            await self._show_failure(update, session, exc.user_message(lang))
             return
         finally:
             await self._log(
@@ -897,21 +924,19 @@ class PodcastCutterBot:
         """
         if self.telegram is None:
             return
-        title = truncate(job.episode_title or "that episode", 80)
+        stored = (
+            await self.store.user_language(job.user_id)
+            if self.store is not None
+            else None
+        )
+        lang = resolve_language(stored, None)
+        title = truncate(job.episode_title or t(lang, "that_episode"), 80)
         if transcript_id is None:
-            text = (
-                f"⚠️ I could not finish listening to <b>{esc(title)}</b>. "
-                "Ask again and I will retry it."
-            )
+            text = t(lang, "notify_failed", title=esc(title))
             markup = None
         else:
-            text = (
-                f"✅ I have finished listening to <b>{esc(title)}</b> — "
-                "searching inside it is instant now.\n\n"
-                "<i>Your place in the chat was lost when I restarted, so open "
-                "it again and ask for the phrase.</i>"
-            )
-            markup = kb.open_episode(self.episode_link(job.episode_id))
+            text = t(lang, "notify_done", title=esc(title))
+            markup = kb.open_episode(self.episode_link(job.episode_id), lang)
         try:
             await self.telegram.send_message(
                 job.chat_id, text, parse_mode="HTML", reply_markup=markup
@@ -966,29 +991,26 @@ class PodcastCutterBot:
 
         if not self._budget_allows(self._input_budget, update):
             await self._refuse_rate(
-                update,
-                "input",
-                "🐢 That is a lot of requests in one minute. "
-                "Give it a moment and try again.",
+                update, "input", t(session.language, "rate_input")
             )
             return
 
+        menu_action = kb.menu_action(text)
+
         if session.was_reset:
             session.was_reset = False
-            if text not in kb.MENU_BUTTONS:
+            if menu_action is None:
                 # Their message may answer a prompt that expired with the old
                 # session; whatever happens next, they deserve to know the
                 # context is gone before it does.
                 with contextlib.suppress(TelegramError):
                     await update.effective_message.reply_text(
-                        "⏱ It had been a while, so I started fresh — "
-                        "if this was meant for an earlier screen, "
-                        "just navigate there again."
+                        t(session.language, "started_fresh")
                     )
 
         try:
-            if text in kb.MENU_BUTTONS:
-                await self._handle_menu_button(update, session, text)
+            if menu_action is not None:
+                await self._route_menu(update, session, menu_action)
                 return
 
             if session.awaiting is Awaiting.INTERVAL:
@@ -1015,23 +1037,9 @@ class PodcastCutterBot:
             # a bot the user has never configured, which is the common case.
             await self._search_feeds(update, session, text)
         except PodcastCutterError as exc:
-            await self._show_failure(update, session, exc.user_message)
-
-    async def _handle_menu_button(
-        self, update: Update, session: Session, label: str
-    ) -> None:
-        if label == kb.BTN_SEARCH_PODCAST:
-            await self.act_ask_podcast(update, session)
-        elif label == kb.BTN_SEARCH_PERSON:
-            await self.act_ask_person(update, session)
-        elif label == kb.BTN_TRENDING:
-            await self.act_trending(update, session)
-        elif label == kb.BTN_SURPRISE:
-            await self.act_surprise(update, session)
-        elif label == kb.BTN_RECENT:
-            await self.act_recent(update, session)
-        elif label == kb.BTN_HELP:
-            await self.cmd_help(update, None)
+            await self._show_failure(
+                update, session, exc.user_message(session.language)
+            )
 
     async def _handle_interval_text(
         self, update: Update, session: Session, text: str
@@ -1076,7 +1084,9 @@ class PodcastCutterBot:
         try:
             await self._route_callback(update, session, data, prefix, value)
         except PodcastCutterError as exc:
-            await self._show_failure(update, session, exc.user_message)
+            await self._show_failure(
+                update, session, exc.user_message(session.language)
+            )
 
     async def _route_callback(
         self, update: Update, session: Session, data: str, prefix: str, value: str
@@ -1090,16 +1100,21 @@ class PodcastCutterBot:
             if session.back() is None:
                 await self._to_menu(update, session)
             else:
-                session.awaiting = (
-                    Awaiting.INTERVAL
-                    if session.current and session.current.screen is Screen.INTERVAL
-                    else Awaiting.NOTHING
+                screen = (
+                    session.current.screen if session.current else Screen.MENU
+                )
+                session.awaiting = _SCREEN_AWAITING.get(
+                    screen, Awaiting.NOTHING
                 )
                 await self.render(update, session)
             return
 
         if prefix == "menu":
             await self._route_menu(update, session, value)
+            return
+
+        if prefix == kb.LANG_PREFIX:
+            await self._set_language(update, session, value)
             return
 
         if prefix == kb.PAGE_PREFIX and session.current:
@@ -1216,14 +1231,39 @@ class PodcastCutterBot:
             "trending": self.act_trending,
             "surprise": self.act_surprise,
             "recent": self.act_recent,
+            "help": self.act_help,
+            "language": self.act_language,
         }
         handler = actions.get(action)
         if handler is not None:
             await handler(update, session)
-        elif action == "help":
-            await self.cmd_help(update, None)
         else:
             await self._to_menu(update, session)
+
+    async def _set_language(
+        self, update: Update, session: Session, value: str
+    ) -> None:
+        """An explicit language choice — the one that is written down."""
+        if value not in LANGUAGES:
+            await self._stale(update, session)
+            return
+        changed = value != session.language
+        session.language = value
+        user_id = self._user_id(update)
+        if self.store is not None and user_id is not None:
+            await self.store.set_user_language(user_id, value)
+        if changed:
+            # The reply keyboard's labels live on the client until a new
+            # keyboard arrives, so the confirmation carries one. Only on a
+            # real change: repeating the current choice should not spam.
+            with contextlib.suppress(TelegramError):
+                await update.effective_message.reply_text(
+                    t(value, "language_set"),
+                    reply_markup=kb.main_menu(value),
+                )
+        session.replace(Screen.LANGUAGE)
+        await self.render(update, session)
+        await self._log(update, "language", detail=value)
 
     async def _stale(self, update: Update, session: Session) -> None:
         """A button whose message no longer matches the session."""
@@ -1232,14 +1272,16 @@ class PodcastCutterBot:
         view = self.view_for(session)
         await self.show(
             update,
-            View("⌛ That menu is out of date — here's a fresh start.\n\n" + view.text,
-                 view.keyboard),
+            View(
+                t(session.language, "stale_menu") + "\n\n" + view.text,
+                view.keyboard,
+            ),
         )
 
     async def _show_failure(
         self, update: Update, session: Session, message: str
     ) -> None:
-        await self.show(update, screens.failure(message))
+        await self.show(update, screens.failure(message, session.language))
 
     # ------------------------------------------------------------------
     # Cutting
@@ -1272,7 +1314,7 @@ class PodcastCutterBot:
             await self.show(
                 update,
                 View(
-                    "⏳ Still working on your previous clip — one at a time!",
+                    t(session.language, "busy_previous_clip"),
                     self.view_for(session).keyboard,
                 ),
             )
@@ -1287,18 +1329,14 @@ class PodcastCutterBot:
             session.send_as == FORMAT_NOTE
             and session.clip_length > video.VIDEO_NOTE_SECONDS
         ):
-            refusal = (
-                "⚠️ A circle fits one minute — Telegram's rule. Shorten the "
-                "clip, or pick 🎬 Video to send it square and full-length."
-            )
+            refusal = t(session.language, "circle_rule")
         if (
             session.send_as == FORMAT_VIDEO
             and session.clip_length > video.MAX_VIDEO_SECONDS
         ):
-            refusal = (
-                "⚠️ Video is capped at "
-                f"{format_duration(video.MAX_VIDEO_SECONDS)} — "
-                "shorten the clip or switch back to audio."
+            refusal = t(
+                session.language, "video_cap",
+                limit=format_duration(video.MAX_VIDEO_SECONDS),
             )
         if refusal is not None:
             await self.show(
@@ -1310,8 +1348,7 @@ class PodcastCutterBot:
             await self.show(
                 update,
                 View(
-                    "🐢 That was a lot of clips for one hour. "
-                    "The budget resets as the hour rolls on — try again soon.",
+                    t(session.language, "rate_cuts"),
                     self.view_for(session).keyboard,
                 ),
             )
@@ -1329,18 +1366,33 @@ class PodcastCutterBot:
             status_message = await self.show(
                 update,
                 screens.working(
-                    "⏳ Queued — waiting for a free slot…"
-                    if queued
-                    else "⏳ Working on it…"
+                    t(
+                        session.language,
+                        "queued_slot" if queued else "working_on_it",
+                    )
                 ),
             )
             if status_message is None:
                 return
 
-            await self._perform_cut(
-                update, session, episode, interval, StatusEditor(status_message)
+            cut = asyncio.create_task(
+                self._perform_cut(
+                    update, session, episode, interval,
+                    StatusEditor(status_message),
+                )
             )
+            self._cut_tasks[user_id] = cut
+            try:
+                await cut
+            except asyncio.CancelledError:
+                # The task being cancelled is /cancel doing its job — it has
+                # already cleaned up and journalled. Anything else means *this*
+                # handler is being cancelled, and the cut must go down with it.
+                if not cut.cancelled():
+                    cut.cancel()
+                    raise
         finally:
+            self._cut_tasks.pop(user_id, None)
             self._busy_users.discard(user_id)
 
     async def _perform_cut(
@@ -1353,13 +1405,15 @@ class PodcastCutterBot:
     ) -> None:
         message = update.effective_message
         chat = update.effective_chat
+        lang = session.language
 
         async def on_status(text: str) -> None:
             await status.set(text, force=True)
 
         async def on_progress(done: int, total: int | None) -> None:
             await status.set(
-                f"⬇️ Downloading the episode…\n\n{progress_bar(done, total)}"
+                t(lang, "downloading_episode")
+                + f"\n\n{progress_bar(done, total, lang=lang)}"
             )
 
         started = time.monotonic()
@@ -1382,16 +1436,18 @@ class PodcastCutterBot:
                     metadata=self._id3_tags(episode, interval),
                     voice=session.as_voice,
                     proxy=self.media_proxy,
+                    lang=lang,
                 )
 
                 if session.send_as in (FORMAT_NOTE, FORMAT_VIDEO):
-                    await status.set("🎨 Painting the sound…", force=True)
+                    await status.set(t(lang, "painting"), force=True)
                     result = await self._render_video(
                         session, episode, interval, result, workdir
                     )
 
                 await status.set(
-                    f"📤 Uploading {human_bytes(result.size)}…", force=True
+                    t(lang, "uploading", size=human_bytes(result.size, lang)),
+                    force=True,
                 )
                 if chat is not None:
                     with contextlib.suppress(TelegramError):
@@ -1416,25 +1472,34 @@ class PodcastCutterBot:
                     details.append("route=proxy")
                 detail = " ".join(details) or None
 
+            except asyncio.CancelledError:
+                # /cancel while cutting. audio._run has already killed the
+                # subprocess; say so on the status message the menu will sit
+                # under, journal it, and let the cancellation continue out.
+                outcome = "cancelled"
+                await status.show(screens.working(t(lang, "cut_cancelled")))
+                raise
             except PodcastCutterError as exc:
                 # The stable code, not the class name: grouping failures in SQL
-                # keeps working across refactors.
+                # keeps working across refactors. The journal reads English;
+                # the user reads their own language.
                 outcome = exc.code
-                detail = exc.user_message
-                await status.show(screens.failure(exc.user_message))
+                detail = exc.user_message()
+                await status.show(
+                    screens.failure(exc.user_message(lang), lang)
+                )
             except TelegramError as exc:
                 logger.exception("Failed to deliver the cut: %s", exc)
                 outcome, detail = "upload_rejected", str(exc)
                 await status.show(
-                    screens.failure(
-                        "I cut the audio but Telegram refused the upload. "
-                        "Try a shorter clip."
-                    )
+                    screens.failure(t(lang, "upload_rejected"), lang)
                 )
             except Exception as exc:
                 logger.exception("Unexpected failure while cutting %s", episode.id)
                 outcome, detail = "crash", f"{type(exc).__name__}: {exc}"
-                await status.show(screens.failure(GENERIC_ERROR))
+                await status.show(
+                    screens.failure(t(lang, "generic_error"), lang)
+                )
             finally:
                 # One directory per job, so nothing can survive a crash here.
                 shutil.rmtree(workdir, ignore_errors=True)
@@ -1526,9 +1591,9 @@ class PodcastCutterBot:
         size = path.stat().st_size
         if size > self.settings.max_upload_bytes:
             raise TooLargeError(
-                f"The video is {size // (1024 * 1024)} MB, above the "
-                f"{self.settings.max_upload_bytes // (1024 * 1024)} MB "
-                "Telegram limit. Please pick a shorter interval."
+                "err_video_too_large",
+                size=size // (1024 * 1024),
+                limit=self.settings.max_upload_bytes // (1024 * 1024),
             )
         return replace(result, path=path, size=size, transcoded=True)
 
@@ -1540,10 +1605,14 @@ class PodcastCutterBot:
         interval: Interval,
         result,
     ) -> None:
+        # The last line is the attribution: a clip is a citation, and a
+        # citation names its source in the same message (ROADMAP §13.4).
+        source = html.escape(episode.enclosure_url, quote=True)
         caption = (
             f"<b>{esc(truncate(episode.title, 90))}</b>\n"
             f"{esc(truncate(episode.feed_title, 60))} · "
-            f"{format_duration(interval.start)}–{format_duration(interval.end)}"
+            f"{format_duration(interval.start)}–{format_duration(interval.end)}\n"
+            f'<a href="{source}">{t(session.language, "full_episode_link")}</a>'
         )
         timeouts = {
             "read_timeout": self.settings.upload_timeout,
@@ -1618,9 +1687,10 @@ class PodcastCutterBot:
         """
         inline = update.inline_query
         query = one_line(inline.query)
+        lang = await self._language_for_user(update.effective_user)
 
         open_button = InlineQueryResultsButton(
-            text="Open Podcast Cutter", start_parameter="menu"
+            text=t(lang, "inline_open_bot"), start_parameter="menu"
         )
 
         if len(query) < 2:
@@ -1659,7 +1729,7 @@ class PodcastCutterBot:
             return
 
         results = [
-            self._inline_result(episode)
+            self._inline_result(episode, lang)
             for episode in episodes[:INLINE_RESULT_LIMIT]
         ]
         with contextlib.suppress(TelegramError):
@@ -1685,10 +1755,12 @@ class PodcastCutterBot:
 
         feeds, _ = await self.client.search_feeds(query)
         if not feeds:
-            raise NotFoundError(f"No podcasts found for “{one_line(query)}”.")
+            raise NotFoundError("err_no_podcasts", query=one_line(query))
         return await self.client.list_episodes(feeds[0].id)
 
-    def _inline_result(self, episode: Episode) -> InlineQueryResultArticle:
+    def _inline_result(
+        self, episode: Episode, lang: str = DEFAULT_LANGUAGE
+    ) -> InlineQueryResultArticle:
         link = self.episode_link(episode.id)
         length = (
             f" · {format_duration(episode.duration)}" if episode.duration else ""
@@ -1700,7 +1772,7 @@ class PodcastCutterBot:
             input_message_content=InputTextMessageContent(
                 f"🎧 <b>{esc(truncate(episode.title, 120))}</b>\n"
                 f"{esc(truncate(episode.feed_title, 60))}{length}\n\n"
-                f'<a href="{link}">✂️ Cut a clip from this</a>',
+                f'<a href="{link}">{t(lang, "inline_cut_link")}</a>',
                 parse_mode="HTML",
                 link_preview_options={"is_disabled": True},
             ),
@@ -1727,14 +1799,26 @@ class PodcastCutterBot:
         if message is None:
             return
 
+        # Without a routed session, the best guess is whatever session already
+        # exists, then the client's language — never a crash on top of a crash.
+        session = peek_session(getattr(context, "user_data", None))
+        if session is not None:
+            lang = session.language
+        else:
+            user = update.effective_user
+            lang = resolve_language(
+                None, user.language_code if user else None
+            )
+
         text = (
-            context.error.user_message
+            context.error.user_message(lang)
             if isinstance(context.error, PodcastCutterError)
-            else GENERIC_ERROR
+            else t(lang, "generic_error")
         )
         with contextlib.suppress(TelegramError):
             await message.reply_text(
-                f"⚠️ {esc(text)}", parse_mode="HTML", reply_markup=kb.main_menu()
+                f"⚠️ {esc(text)}", parse_mode="HTML",
+                reply_markup=kb.main_menu(lang),
             )
 
 

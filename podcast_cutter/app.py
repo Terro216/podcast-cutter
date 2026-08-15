@@ -32,45 +32,12 @@ from .audio import ensure_ffmpeg_available
 from .config import Settings, load_settings
 from .embeddings import build_embedder
 from .handlers import PodcastCutterBot
+from .i18n import DEFAULT_LANGUAGE, LANGUAGES, bot_commands, t
 from .indexer import Indexer
 from .states import Screen
 from .store import Event, Store
 
 logger = logging.getLogger(__name__)
-
-#: Shown in Telegram's own command menu. Without this the commands work but
-#: are invisible unless someone reads /help.
-BOT_COMMANDS = [
-    ("search", "Find a podcast by name"),
-    ("person", "Find episodes mentioning someone"),
-    ("trending", "What is popular right now"),
-    ("surprise", "A random episode"),
-    ("recent", "Episodes you looked at"),
-    ("cancel", "Back to the main menu"),
-    ("reset", "Start over if something looks stuck"),
-    ("help", "How this works"),
-]
-
-#: Shown in the bot's profile and in the preview of a t.me link — the only
-#: words most people read before deciding whether to press Start. Telegram
-#: caps it at 120 characters.
-SHORT_DESCRIPTION = (
-    "Turns a podcast episode into a short clip you can send to someone — "
-    "pick the moment, share just that part."
-)
-
-#: Shown on the empty chat screen, above the Start button, and nowhere else.
-#: Plain text only: Telegram renders no markup here. Capped at 512 characters.
-DESCRIPTION = (
-    "I make shareable clips out of podcasts.\n\n"
-    "Find an episode by the podcast's name or by who is in it, tell me when "
-    "the good part starts — 12:30, or 12:30-14:00 for an exact range — and I "
-    "send that piece back as an audio file or a voice note.\n\n"
-    "Works without opening me, too: type @{username} and a name in any chat "
-    "to hand someone an episode mid-conversation.\n\n"
-    "Press START and send me a podcast name."
-)
-
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 
@@ -219,9 +186,18 @@ async def _on_startup(application: Application) -> None:
         await bot.listening.resume()
 
     try:
+        # The default set serves every client Telegram has no dedicated
+        # translation for; each non-default language gets its own on top.
         await application.bot.set_my_commands(
-            [BotCommand(name, description) for name, description in BOT_COMMANDS]
+            [BotCommand(n, d) for n, d in bot_commands(DEFAULT_LANGUAGE)]
         )
+        for lang in LANGUAGES:
+            if lang == DEFAULT_LANGUAGE:
+                continue
+            await application.bot.set_my_commands(
+                [BotCommand(n, d) for n, d in bot_commands(lang)],
+                language_code=lang,
+            )
         await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     except TelegramError as exc:
         # Cosmetic; never worth refusing to start over.
@@ -231,10 +207,22 @@ async def _on_startup(application: Application) -> None:
         # Owned by the code, not by @BotFather: whatever is set there is
         # overwritten on the next start. The avatar and the inline placeholder
         # have no API and remain BotFather's alone.
-        await application.bot.set_my_short_description(SHORT_DESCRIPTION)
-        await application.bot.set_my_description(
-            DESCRIPTION.format(username=bot.bot_username or "podcast_cutter_bot")
+        username = bot.bot_username or "podcast_cutter_bot"
+        await application.bot.set_my_short_description(
+            t(DEFAULT_LANGUAGE, "short_description")
         )
+        await application.bot.set_my_description(
+            t(DEFAULT_LANGUAGE, "description", username=username)
+        )
+        for lang in LANGUAGES:
+            if lang == DEFAULT_LANGUAGE:
+                continue
+            await application.bot.set_my_short_description(
+                t(lang, "short_description"), language_code=lang
+            )
+            await application.bot.set_my_description(
+                t(lang, "description", username=username), language_code=lang
+            )
     except TelegramError as exc:
         logger.warning("Could not publish the bot's description: %s", exc)
 
@@ -271,7 +259,10 @@ async def _on_shutdown(application: Application) -> None:
 def register_handlers(application: Application, bot: PodcastCutterBot) -> None:
     # /start carries deep-link payloads, so it must see its arguments.
     application.add_handler(CommandHandler("start", bot.cmd_start))
-    application.add_handler(CommandHandler("help", bot.cmd_help))
+    application.add_handler(CommandHandler("help", bot.command(bot.act_help)))
+    application.add_handler(
+        CommandHandler("language", bot.command(bot.act_language))
+    )
     # /reset is the same full reset under the name people actually reach for
     # when a screen looks stuck; /cancel reads as "abort this one thing".
     application.add_handler(CommandHandler(["cancel", "reset"], bot.cmd_cancel))
@@ -387,4 +378,4 @@ def run() -> None:
     )
 
 
-__all__ = ["BOT_COMMANDS", "Screen", "build_application", "run"]
+__all__ = ["Screen", "build_application", "run"]

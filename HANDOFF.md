@@ -548,6 +548,40 @@ difference on the decoder rather than on the feed.
 
 ---
 
+## 3c. Two languages — built, tested, not yet redeployed (2026-08-15)
+
+The bot now speaks English and Russian end to end: every screen, button,
+error, progress line, the inline mode, and the Telegram profile
+(`set_my_commands` / descriptions are published per `language_code`).
+
+How it hangs together — the parts a future change must not break:
+
+- **`i18n.py` is the only home of user-visible sentences.** One flat table
+  per language, English as the reference; `tests/test_i18n.py` holds the
+  other tables to the same key set and the same `{placeholders}`, so an
+  untranslated key is a failing test, not a silent English sentence.
+- **Errors carry keys, not sentences.** `PodcastCutterError(message, **params)`
+  resolves at *display* time via `user_message(lang)`; `str(exc)`, logs and
+  the journal's `detail` column stay English so SQL grouping does not fork by
+  reader. A literal that is not a key passes through untranslated — that is
+  the operator path (config, ffmpeg missing, SpeechKit detail).
+- **Resolution order: stored choice → Telegram `language_code` → en.** The
+  choice lives in the new `users` table (added via `CREATE TABLE IF NOT
+  EXISTS` — deliberately *no* `SCHEMA_VERSION` bump, which would rebuild the
+  transcript tables). Auto-detection is never written down, so an undecided
+  user follows their client. `/language`, the 🌐 menu button and `lang:*`
+  callbacks set it; the confirmation message carries the re-labelled reply
+  keyboard, because Telegram only relabels reply keyboards on send.
+- **Reply-keyboard routing is label-based and therefore multilingual:**
+  `keyboards.menu_action(text)` looks the label up across every language, so
+  the Russian buttons still on screen keep working after a switch to English
+  (`tests/test_language_flow.py` pins this).
+- Left English on purpose: ID3 `comment` tag, `api.py` data fallbacks
+  ("Untitled episode" — parse time has no user), operator-only startup errors.
+
+The running container predates this change; it picks the code up on the next
+`docker compose up -d --build podcast-cutter` (see §6 for the tunnel caveat).
+
 ## 4. Deliberate decisions worth not re-litigating
 
 * **No `ConversationHandler`.** A screen stack in `Session` plus an explicit
@@ -689,11 +723,14 @@ difference on the decoder rather than on the feed.
    for the guard and private for ffmpeg's own second resolution; closing it
    needs the validated address pinned into the fetch, fragile for https, so
    it is a separate phase. (c) ~~feeds pagination re-rendering page 1~~ — fixed: a page
-   flip on FEEDS now fetches that page through `_search_feeds`. (d)
-   `‹ Back` restores a prompt screen without restoring `awaiting`, so
-   typing into a restored "send a phrase" prompt runs a podcast-name
-   search instead. (e) Typing on GLOBAL/RECENT sets `episode_filter`, which
-   those screens ignore. (f) ~~the progress bar rendering seconds as
+   flip on FEEDS now fetches that page through `_search_feeds`. ~~(d)
+   `‹ Back` restores a prompt screen without restoring `awaiting`~~ —
+   **fixed** (2026-08-15): `_SCREEN_AWAITING` maps every restorable prompt
+   back to what typing there means. ~~(e) Typing on GLOBAL/RECENT sets
+   `episode_filter`, which those screens ignore~~ — **fixed** (2026-08-15):
+   both lists honour the filter (matching the show name too, since on a
+   cross-feed list it is half of what each button says), with the same
+   count heading and ✕ Clear filter as EPISODES. (f) ~~the progress bar rendering seconds as
    kilobytes~~ — fixed; the bar now takes a unit renderer, and the
    embedding stage got a real bar of its own. (g) `MAX_CUT_SECONDS` below 60
    passes validation but the default clip is a fixed 60. (h)
@@ -752,8 +789,20 @@ difference on the decoder rather than on the feed.
    published from `_on_startup` and overwrite anything set there by hand.
 7. `MAX_CUT_SECONDS` is still 900. A fifteen-minute extract is hard to call a
    citation; see `ROADMAP.md` §13.4.
-8. Caching of directory searches — identical queries each hit the API.
-9. Cancel during a cut leaves ffmpeg running.
+8. ~~Caching of directory searches~~ — **done** (2026-08-15): a 300 s TTL
+   cache in `PodcastIndexClient._get`, capped at 256 entries;
+   `/episodes/random` is exempt because its whole point is a different
+   answer each time.
+9. ~~Cancel during a cut leaves ffmpeg running~~ — **done** (2026-08-15):
+   the cut runs as a per-user task `/cancel` cancels; `audio._run` kills
+   its subprocess on cancellation, the journal records `outcome=cancelled`,
+   and the status message says so.
+9a. **Attribution shipped, the ceiling deliberately kept** (2026-08-15,
+   ROADMAP §13.4's proportionate half): every captioned format links the
+   full episode in the caption's last line, and the result screen carries a
+   🎧 full-episode URL button — which is also what the captionless video
+   note gets. `MAX_CUT_SECONDS` stays 900 for explicit ranges; the default
+   clip was already 60 s. The denylist/complaint command remains open.
 10. Chapter-aware clip boundaries; embedded cover art in clips.
 11. The audio detour has no monitoring beyond the startup check and the
     journal. `gatus` already runs on DE and could watch the proxy directly —

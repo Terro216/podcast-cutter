@@ -536,7 +536,7 @@ async def render_clip(
                 reason[:300],
             )
     logger.error("Video render failed: %s", reason[:500])
-    raise AudioError("Could not render the video for this clip.")
+    raise AudioError("err_render_failed")
 
 
 async def _render_once(

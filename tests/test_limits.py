@@ -124,14 +124,16 @@ class TestWiring:
 
         monkeypatch.setattr(bot, "_perform_cut", slow_perform)
 
-        one = asyncio.create_task(
-            bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
-        )
-        refused = FakeUpdate(callback=kb.ACTION_CUT)
-        two = asyncio.create_task(bot.on_callback(refused, context))
+        first = FakeUpdate(callback=kb.ACTION_CUT)
+        second = FakeUpdate(callback=kb.ACTION_CUT)
+        one = asyncio.create_task(bot.on_callback(first, context))
+        two = asyncio.create_task(bot.on_callback(second, context))
         await asyncio.sleep(0.01)
         hold.set()
         await asyncio.gather(one, two)
 
         assert calls == [1]
-        assert "Still working" in refused.effective_message.last
+        # Which of the two identical taps wins the race is scheduling luck;
+        # what matters is that exactly one was refused, in so many words.
+        shown = [first.effective_message.last, second.effective_message.last]
+        assert sum("Still working" in text for text in shown) == 1

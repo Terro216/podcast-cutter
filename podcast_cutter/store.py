@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_at ON events (at);
 CREATE INDEX IF NOT EXISTS events_action_at ON events (action, at);
 
+-- The user's chosen interface language. A row exists only after an explicit
+-- choice: auto-detection from Telegram's language_code is deliberately not
+-- written down, so it keeps following the client until the user decides.
+CREATE TABLE IF NOT EXISTS users (
+    user_id  INTEGER PRIMARY KEY,
+    language TEXT    NOT NULL,
+    at       REAL    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS recents (
     user_id       INTEGER NOT NULL,
     episode_id    TEXT    NOT NULL,
@@ -1072,6 +1081,35 @@ class Store:
             (cutoff,),
         )
         return len(rows)
+
+    # ------------------------------------------------------------------
+    # Users
+    # ------------------------------------------------------------------
+
+    async def user_language(self, user_id: int) -> str | None:
+        """The explicitly chosen language, or ``None`` when never chosen."""
+        try:
+            rows = await self._run(
+                "SELECT language FROM users WHERE user_id = ?", (user_id,)
+            )
+        except Exception:
+            logger.exception("Could not read a user's language")
+            return None
+        return rows[0]["language"] if rows else None
+
+    async def set_user_language(self, user_id: int, language: str) -> None:
+        """Record an explicit language choice. Never raises."""
+        try:
+            await self._run(
+                """
+                INSERT INTO users (user_id, language, at) VALUES (?,?,?)
+                ON CONFLICT (user_id) DO UPDATE
+                    SET language = excluded.language, at = excluded.at
+                """,
+                (user_id, language, time.time()),
+            )
+        except Exception:
+            logger.exception("Could not save a user's language")
 
     # ------------------------------------------------------------------
     # Recent episodes

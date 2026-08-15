@@ -66,10 +66,7 @@ PROGRESS_TICK = 2.0
 class TranscriptionDisabled(PodcastCutterError):
     """The kill switch is on."""
 
-    default_message = (
-        "Searching inside episodes is switched off right now. "
-        "You can still cut by timestamp."
-    )
+    message_key = "err_asr_disabled"
     code = "asr_disabled"
 
 
@@ -133,9 +130,7 @@ async def _decode_for_asr(source: Path, output: Path, timeout: float) -> None:
         timeout,
     )
     if code != 0 or not output.exists() or output.stat().st_size == 0:
-        raise AudioError(
-            "Could not decode this episode's audio for transcription."
-        )
+        raise AudioError("err_decode_failed")
 
 
 class Indexer:
@@ -294,7 +289,7 @@ class Indexer:
             and info.duration > self.settings.max_source_seconds
         ):
             source.unlink(missing_ok=True)
-            raise AudioError("This episode is too long to transcribe.")
+            raise AudioError("err_episode_too_long_asr")
 
         await say("decode", "Preparing the audio")
         await _decode_for_asr(source, decoded, self.settings.ffmpeg_timeout)
