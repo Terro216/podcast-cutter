@@ -164,7 +164,9 @@ class StatusEditor:
         self._message = message
         self._min_interval = min_interval
         self._last_text: str | None = None
-        self._last_edit = 0.0
+        # -inf, not 0.0: monotonic() counts from boot, so on a freshly
+        # started host 0.0 is "recently" and the first edit gets throttled.
+        self._last_edit = float("-inf")
 
     @property
     def message(self) -> Message:
