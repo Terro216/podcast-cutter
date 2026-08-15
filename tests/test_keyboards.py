@@ -241,6 +241,33 @@ class TestResultKeyboard:
         assert share.switch_inline_query == "some episode"
 
 
+class TestReskinOnResult:
+    def test_skins_are_offered_after_a_visual_format(self):
+        for fmt in ("note", "video"):
+            markup = kb.result_keyboard("x", send_as=fmt, skin="bars")
+            data = payloads(markup)
+            for skin in kb.SKIN_LABELS:
+                assert f"{kb.RESKIN_PREFIX}:{skin}" in data
+
+    def test_no_skins_after_plain_audio(self):
+        # Nine buttons that each spend a cut have no business under an mp3.
+        for fmt in (None, "audio", "voice"):
+            markup = kb.result_keyboard("x", send_as=fmt)
+            data = [p for p in payloads(markup) if p]
+            assert not any(p.startswith(f"{kb.RESKIN_PREFIX}:") for p in data)
+
+    def test_the_sent_skin_is_marked(self):
+        markup = kb.result_keyboard("x", send_as="note", skin="matrix")
+        active = next(
+            b
+            for row in markup.inline_keyboard
+            for b in row
+            if b.callback_data == f"{kb.RESKIN_PREFIX}:matrix"
+        )
+        assert active.text.startswith("●")
+        assert active.style == kb.STYLE_SUCCESS
+
+
 class TestErrorKeyboard:
     def test_retry_is_one_tap_and_prominent(self):
         markup = kb.error_keyboard()

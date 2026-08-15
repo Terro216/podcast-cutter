@@ -684,3 +684,69 @@ class TestCancel:
 
         failures = dict((await store.stats(24)).failures)
         assert failures.get("cancelled") == 1
+
+
+class TestReskin:
+    """One tap on the result screen re-renders the same clip in another
+    look — nobody should have to walk the editor again for a skin."""
+
+    async def _send_a_note(self, bot, context, ready, monkeypatch, record):
+        ready.send_as = FORMAT_NOTE
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch, record=record)
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+        await bot.on_callback(update, context)
+        assert update.effective_message.sent_video_note is not None
+        return update
+
+    async def test_one_tap_rerenders_with_the_new_skin(
+        self, bot, context, ready, monkeypatch
+    ):
+        record: dict = {}
+        await self._send_a_note(bot, context, ready, monkeypatch, record)
+        assert record["skin"] == "bars"
+
+        retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:matrix")
+        await bot.on_callback(retap, context)
+
+        assert record["skin"] == "matrix"
+        assert ready.skin == "matrix"
+        assert retap.effective_message.sent_video_note is not None
+        # The clip itself did not move.
+        assert ready.clip_start == 600 and ready.clip_length == 60
+
+    async def test_the_current_skin_is_a_no_op(
+        self, bot, context, ready, monkeypatch
+    ):
+        record: dict = {}
+        await self._send_a_note(bot, context, ready, monkeypatch, record)
+
+        renders_before = dict(record)
+        retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:bars")
+        await bot.on_callback(retap, context)
+        assert record == renders_before
+        assert retap.effective_message.sent_video_note is None
+
+    async def test_a_forged_skin_is_a_stale_button(
+        self, bot, context, ready, monkeypatch
+    ):
+        record: dict = {}
+        await self._send_a_note(bot, context, ready, monkeypatch, record)
+
+        retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:nonsense")
+        await bot.on_callback(retap, context)
+        assert ready.skin == "bars"
+        assert retap.effective_message.sent_video_note is None
+
+    async def test_the_result_screen_offers_the_switch(
+        self, bot, context, ready, monkeypatch
+    ):
+        record: dict = {}
+        update = await self._send_a_note(bot, context, ready, monkeypatch, record)
+        data = [
+            b.callback_data
+            for row in update.markup.inline_keyboard
+            for b in row
+            if b.callback_data
+        ]
+        assert f"{kb.RESKIN_PREFIX}:lava" in data

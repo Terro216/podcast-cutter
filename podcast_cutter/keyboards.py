@@ -88,6 +88,11 @@ MOVE_PREFIX = "mv"
 SHIFT_PREFIX = "shift"
 #: The language chooser.
 LANG_PREFIX = "lang"
+#: Re-render the clip just sent with another skin, from the result screen.
+#: Its own prefix rather than ``skin:`` because the two mean different
+#: things: ``skin:`` picks a look for the *next* cut, ``reskin:`` spends a
+#: cut right now.
+RESKIN_PREFIX = "reskin"
 
 NAV_BACK = f"{NAV_PREFIX}:back"
 NAV_MENU = f"{NAV_PREFIX}:menu"
@@ -356,16 +361,39 @@ def moments_keyboard(
 
 
 def result_keyboard(
-    share_query: str, lang: str = "en", episode_url: str | None = None
+    share_query: str,
+    lang: str = "en",
+    episode_url: str | None = None,
+    send_as: str | None = None,
+    skin: str = "bars",
 ) -> InlineKeyboardMarkup:
-    """Offered after a successful cut: adjust, repeat, share — and the way
-    back to the whole episode, which is the attribution a clip owes its
-    source (see ROADMAP §13.4)."""
+    """Offered after a successful cut: adjust, re-skin, repeat, share — and
+    the way back to the whole episode, which is the attribution a clip owes
+    its source (see ROADMAP §13.4).
+
+    The skin rows appear only when a visual format was just sent: they spend
+    a real cut on one tap, and offering that under an audio file would be
+    nine buttons of noise."""
     rows = [
         [
             _button(t(lang, "btn_earlier"), f"{SHIFT_PREFIX}:-15"),
             _button(t(lang, "btn_later"), f"{SHIFT_PREFIX}:15"),
         ],
+    ]
+    if send_as in (FORMAT_NOTE, FORMAT_VIDEO):
+        for group in _SKIN_ROWS:
+            rows.append(
+                [
+                    _button(
+                        f"● {t(lang, SKIN_LABELS[key])}" if key == skin
+                        else t(lang, SKIN_LABELS[key]),
+                        f"{RESKIN_PREFIX}:{key}",
+                        STYLE_SUCCESS if key == skin else None,
+                    )
+                    for key in group
+                ]
+            )
+    rows += [
         [_button(t(lang, "btn_another_clip"), ACTION_NEW_CLIP)],
         [
             InlineKeyboardButton(

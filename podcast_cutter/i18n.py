@@ -134,6 +134,10 @@ _EN = {
         "I cut the audio but Telegram refused the upload. Try a shorter clip."
     ),
     "cut_cancelled": "✂️ Cancelled — nothing was sent.",
+    "reskin_hint": (
+        "Fancy another look? Tap a skin below — I'll re-render this same "
+        "clip, nothing to set up again."
+    ),
     "full_episode_link": "Full episode",
     "btn_full_episode": "🎧 Open the full episode",
     "status_cutting": "✂️ Cutting the segment…",
@@ -527,6 +531,10 @@ _RU = {
         "Попробуйте клип покороче."
     ),
     "cut_cancelled": "✂️ Отменено — ничего не отправлено.",
+    "reskin_hint": (
+        "Хочется другой вид? Нажмите скин ниже — я перерисую этот же клип, "
+        "ничего заново выбирать не нужно."
+    ),
     "full_episode_link": "Полный выпуск",
     "btn_full_episode": "🎧 Открыть полный выпуск",
     "status_cutting": "✂️ Вырезаю фрагмент…",

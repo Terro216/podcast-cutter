@@ -443,20 +443,28 @@ def result(session: Session, bot_username: str) -> View:
     heading = _episode_heading(episode) if episode else ""
     share = episode.title if episode else ""
 
-    return View(
+    body = (
         breadcrumb(session)
         + f"{heading}\n\n"
         + t(
             lang, "result_sent",
             start=format_duration(session.clip_start),
             end=format_duration(session.clip_end),
-        ),
+        )
+    )
+    if episode and session.send_as in (FORMAT_NOTE, FORMAT_VIDEO):
+        body += f"\n\n<i>{t(lang, 'reskin_hint')}</i>"
+
+    return View(
+        body,
         kb.result_keyboard(
             truncate(share, 40),
             lang,
             # Attribution: the way back to the whole episode rides on the
             # result screen, which is also what a captionless video note has.
             episode_url=episode.enclosure_url if episode else None,
+            send_as=session.send_as,
+            skin=session.skin,
         ),
     )
 

@@ -1201,6 +1201,19 @@ class PodcastCutterBot:
             await self._start_cut(update, session)
             return
 
+        if prefix == kb.RESKIN_PREFIX:
+            # Same clip, another look — a real cut, spent from the result
+            # screen so nobody has to walk the editor again for it.
+            if value not in kb.SKIN_LABELS:
+                await self._stale(update, session)
+                return
+            if value == session.skin:
+                # The marked current skin: nothing to re-render.
+                return
+            session.skin = value
+            await self._start_cut(update, session)
+            return
+
         # --- searching inside the episode ---------------------------------
         if data == kb.ACTION_FIND:
             await self.act_ask_phrase(update, session)
