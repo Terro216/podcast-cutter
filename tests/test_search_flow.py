@@ -256,7 +256,7 @@ class TestSearching:
             "SELECT outcome, detail FROM events WHERE action = 'search_audio'"
         )
         assert rows and rows[0]["outcome"] == "ok"
-        assert rows[0]["detail"] == "фолдинг"
+        assert rows[0]["detail"] is None
 
     async def test_an_empty_result_is_journalled_differently(
         self, bot, context, store
@@ -306,7 +306,8 @@ class TestWaitingInLine:
             await asyncio.sleep(0.01)
         return False
 
-    async def test_the_place_in_line_is_a_number(self, bot):
+    async def test_the_place_in_line_is_a_number(self, bot, store):
+        await store.accept_terms(2, "en", bot.settings.terms_version)
         held = asyncio.Event()
 
         async def slow(path, language=None, on_segment=None):
@@ -330,6 +331,7 @@ class TestWaitingInLine:
 
         held.set()
         await asyncio.gather(first, waiting)
+        await bot.listening.stop()
         assert shown
         assert any("2nd in line" in text for text in waited)
 
@@ -521,6 +523,7 @@ class TestWithoutTranscription:
     async def test_losing_recognition_costs_the_search_not_the_bot(
         self, settings, client, store, context
     ):
+        await store.accept_terms(1, "en", settings.terms_version)
         bot = PodcastCutterBot(settings, client, store, None)
         bot.bot_username = "podcast_cutter_bot"
         session = session_of(context)

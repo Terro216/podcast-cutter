@@ -11,6 +11,7 @@ FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc
 RUN apk add --no-cache \
     bash=5.2.37-r0 ca-certificates=20260611-r0 coreutils=9.7-r1 \
     curl=8.14.1-r3 findutils=4.10.0-r0 jq=1.8.1-r0 sqlite=3.49.2-r1 \
+    sqlcipher=4.6.1-r0 \
     tar=1.35-r3 util-linux=2.41-r9
 COPY --from=restic /usr/bin/restic /usr/local/bin/restic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone

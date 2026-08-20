@@ -36,6 +36,9 @@ def make_episode(
         feed_title="Some Show",
         enclosure_url=f"https://cdn.example.com/{episode_id}.mp3",
         duration=duration,
+        feed_id="1",
+        author="Some Author",
+        episode_url=f"https://example.com/episodes/{episode_id}",
     )
 
 
@@ -325,6 +328,14 @@ def indexer(settings, store, monkeypatch, tmp_path) -> Indexer:
 
 @pytest.fixture
 def bot(settings, client, store, indexer) -> PodcastCutterBot:
+    # Most behavioural tests exercise an existing user. Dedicated legal-flow
+    # tests cover first-use acceptance; an empty stored language preserves
+    # Telegram language auto-detection here.
+    store._execute(
+        "INSERT INTO users (user_id, language, at, terms_version, "
+        "terms_accepted_at) VALUES (1, '', 0, ?, 0)",
+        (settings.terms_version,),
+    )
     instance = PodcastCutterBot(settings, client, store, indexer)
     instance.bot_username = "podcast_cutter_bot"
     return instance

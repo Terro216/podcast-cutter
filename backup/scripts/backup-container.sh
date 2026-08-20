@@ -5,18 +5,20 @@
 # overnight of CPU, a SpeechKit pass costs real money). Audio is never cached
 # and the models are re-downloadable, so neither is backed up.
 #
-# The database is snapshotted with the SQLite Online Backup API, not `cp`:
-# journal_mode is WAL and a plain copy under a concurrent writer is a torn
-# file. Only after the copy passes `PRAGMA quick_check` is anything handed to
-# restic. Mirrors cinemarr/vaultwarden: same repo layout, same flock, same
-# current/previous rotation, same "any error leaves the last good backup
-# untouched and exits nonzero".
+# The database is snapshotted with sqlcipher_export(), not `cp`: journal_mode
+# is WAL and a plain copy under a concurrent writer is a torn file. Only after
+# the encrypted copy passes SQLCipher HMAC and SQLite consistency checks is
+# anything handed to restic. Mirrors cinemarr/vaultwarden: same repo layout,
+# same flock, same current/previous rotation, same "any error leaves the last
+# good backup untouched and exits nonzero".
 set -Eeuo pipefail
 umask 077
 
-for name in BACKUP_PASSWORD YANDEX_DISK_TARGET; do
+for name in BACKUP_PASSWORD YANDEX_DISK_TARGET DATABASE_KEY; do
     [ -n "${!name:-}" ] || { echo "Missing environment variable: $name" >&2; exit 1; }
 done
+[[ "$DATABASE_KEY" =~ ^[0-9a-fA-F]{64}$ ]] \
+    || { echo 'DATABASE_KEY must be exactly 64 hexadecimal characters' >&2; exit 1; }
 
 export RESTIC_PASSWORD="${BACKUP_PASSWORD}"
 export RESTIC_REPOSITORY="${YANDEX_DISK_TARGET}"
@@ -51,13 +53,56 @@ trap cleanup EXIT
 rm -rf "$PENDING"
 mkdir -p "$PENDING"/{data,repo}
 
-echo '==> podcast-cutter database: SQLite Online Backup API'
+echo '==> podcast-cutter database: authenticated SQLCipher export'
 [ -f "$DB" ] || { echo "Database not found at $DB" >&2; exit 1; }
-sqlite3 "$DB" ".backup '$PENDING/data/podcast_cutter.db'"
-[ "$(sqlite3 "$PENDING/data/podcast_cutter.db" 'PRAGMA quick_check;')" = ok ] \
+SNAPSHOT_DB="$PENDING/data/podcast_cutter.db"
+user_version="$(sqlcipher -batch "$DB" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+PRAGMA user_version;
+SQL
+)"
+[[ "$user_version" =~ ^[0-9]+$ ]] \
+    || { echo 'could not read encrypted database version' >&2; exit 1; }
+sqlcipher -batch "$DB" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+ATTACH DATABASE '$SNAPSHOT_DB' AS snapshot KEY "x'$DATABASE_KEY'";
+SELECT sqlcipher_export('snapshot');
+PRAGMA snapshot.user_version = $user_version;
+DETACH DATABASE snapshot;
+SQL
+[ "$(sqlcipher -batch "$SNAPSHOT_DB" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+PRAGMA quick_check;
+SQL
+)" = ok ] \
     || { echo 'database quick_check failed' >&2; exit 1; }
-transcripts="$(sqlite3 "$PENDING/data/podcast_cutter.db" 'SELECT count(*) FROM transcripts;')"
-events="$(sqlite3 "$PENDING/data/podcast_cutter.db" 'SELECT count(*) FROM events;')"
+[ -z "$(sqlcipher -batch "$SNAPSHOT_DB" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+PRAGMA cipher_integrity_check;
+SQL
+)" ] || { echo 'database cipher_integrity_check failed' >&2; exit 1; }
+transcripts="$(sqlcipher -batch "$SNAPSHOT_DB" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+SELECT count(*) FROM transcripts;
+SQL
+)"
+events="$(sqlcipher -batch "$SNAPSHOT_DB" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+SELECT count(*) FROM events;
+SQL
+)"
 echo "    ${transcripts} transcripts, ${events} journal rows"
 
 # The declarative side of the deployment, so a restore reconstructs the stack
@@ -75,7 +120,8 @@ jq -n \
     --arg created_at "$(date -u +%FT%TZ)" \
     --argjson transcripts "$transcripts" \
     --argjson events "$events" \
-    '{format:1,created_at:$created_at,artifacts:["db","repo"],
+    '{format:2,created_at:$created_at,database:"sqlcipher4",
+      artifacts:["db","repo"],
       counts:{transcripts:$transcripts,events:$events}}' \
     >"$PENDING/manifest.json"
 
@@ -95,6 +141,10 @@ snapshot_id="$(jq -rs 'map(select(.message_type == "summary"))[-1].snapshot_id' 
 restic snapshots --json "$snapshot_id" | jq -e --arg id "$snapshot_id" 'any(.[]; .id == $id)' >/dev/null
 restic forget --group-by host,tags --host big-one --tag podcast-cutter \
     --keep-daily "$KEEP_DAILY" --keep-weekly "$KEEP_WEEKLY"
+
+# The remote restic snapshot is encrypted and now owns the recovery copy of
+# `.env`. Do not retain a decrypted duplicate in the local staging rotation.
+rm -f "$PENDING/repo/env"
 
 # Only after the remote snapshot is confirmed: rotate the local staging copy so
 # the last good backup survives a failed next run.

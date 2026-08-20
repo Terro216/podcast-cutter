@@ -120,6 +120,9 @@ class Session:
     recents: list[Episode] = field(default_factory=list)
     #: Whether the recent list has been pulled from the database yet.
     recents_loaded: bool = False
+    #: A deep-link episode waits here while a first-time user reads and accepts
+    #: the current Terms; acceptance must not silently discard their intent.
+    pending_start_payload: str = ""
     #: Typed filter narrowing the episode list, without discarding it.
     episode_filter: str = ""
 

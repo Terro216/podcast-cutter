@@ -190,6 +190,16 @@ class TestRetention:
     async def test_purging_an_empty_journal_is_fine(self, store):
         assert await store.purge(1) == 0
 
+    async def test_finished_asr_rows_use_the_short_hour_window(self, store):
+        job_id = await store.enqueue_asr_job(make_episode("42"), 7, 70)
+        await store.finish_asr_jobs([job_id], "done", "ok")
+        store._execute(
+            "UPDATE asr_jobs SET finished_at = ? WHERE id = ?",
+            (time.time() - 25 * 3600, job_id),
+        )
+
+        assert await store.purge_asr_jobs_hours(24) == 1
+
 
 class TestRecents:
     async def test_round_trip(self, store):
@@ -203,6 +213,9 @@ class TestRecents:
         assert recents[0].title == "The Big One"
         assert recents[0].duration == 1234
         assert recents[0].enclosure_url == episode.enclosure_url
+        assert recents[0].feed_id == episode.feed_id
+        assert recents[0].author == episode.author
+        assert recents[0].episode_url == episode.episode_url
 
     async def test_newest_first(self, store):
         for index in range(3):
@@ -256,6 +269,30 @@ class TestDisconnected:
 
     async def test_size_of_a_missing_file_is_zero(self, tmp_path):
         assert await Store(tmp_path / "missing.db").size_on_disk() == 0
+
+
+class TestUserControls:
+    async def test_terms_acceptance_is_versioned(self, store):
+        await store.accept_terms(7, "ru", "v1")
+        assert await store.terms_accepted(7, "v1")
+        assert not await store.terms_accepted(7, "v2")
+
+    async def test_delete_removes_every_user_linked_table(self, store):
+        await store.accept_terms(7, "en", "v1")
+        await store.remember_recent(7, make_episode("42"))
+        await store.record(Event(action="start", user_id=7))
+        await store.enqueue_asr_job(make_episode("42"), 7, 70)
+
+        removed = await store.delete_user_data(7)
+
+        assert all(removed.values())
+        data = await store.user_data(7)
+        assert data == {
+            "profile": None,
+            "recents": [],
+            "events": 0,
+            "asr_jobs": 0,
+        }
 
 
 class TestConcurrency:

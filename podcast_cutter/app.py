@@ -8,6 +8,7 @@ which handler shadows which — the routers themselves decide.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from logging.handlers import RotatingFileHandler
@@ -167,7 +168,16 @@ async def _on_startup(application: Application) -> None:
             purged,
             settings.log_retention_days,
         )
-    await store.purge_asr_jobs(settings.log_retention_days)
+    await store.purge_asr_jobs_hours(settings.asr_job_retention_hours)
+    await store.purge_inactive_user_data(settings.user_data_retention_days)
+    removed_transcripts = await store.delete_transcripts_for_feeds(
+        settings.podcast_blocklist
+    )
+    if removed_transcripts:
+        logger.info(
+            "Removed %d transcript(s) covered by PODCAST_BLOCKLIST",
+            removed_transcripts,
+        )
 
     await _report_media_proxy(bot, store, settings)
 
@@ -259,10 +269,19 @@ async def _on_shutdown(application: Application) -> None:
 def register_handlers(application: Application, bot: PodcastCutterBot) -> None:
     # /start carries deep-link payloads, so it must see its arguments.
     application.add_handler(CommandHandler("start", bot.cmd_start))
-    application.add_handler(CommandHandler("help", bot.command(bot.act_help)))
     application.add_handler(
-        CommandHandler("language", bot.command(bot.act_language))
+        CommandHandler("help", bot.command(bot.act_help, requires_terms=False))
     )
+    application.add_handler(
+        CommandHandler(
+            "language", bot.command(bot.act_language, requires_terms=False)
+        )
+    )
+    application.add_handler(CommandHandler("terms", bot.cmd_terms))
+    application.add_handler(CommandHandler("privacy", bot.cmd_privacy))
+    application.add_handler(CommandHandler("mydata", bot.cmd_mydata))
+    application.add_handler(CommandHandler("delete_me", bot.cmd_delete_me))
+    application.add_handler(CommandHandler("copyright", bot.cmd_copyright))
     # /reset is the same full reset under the name people actually reach for
     # when a screen looks stuck; /cancel reads as "abort this one thing".
     application.add_handler(CommandHandler(["cancel", "reset"], bot.cmd_cancel))
@@ -326,7 +345,7 @@ def build_indexer(settings: Settings, store: Store) -> Indexer | None:
 def build_application(settings: Settings, store: Store | None = None) -> Application:
     client = PodcastIndexClient(settings)
     if store is None:
-        store = Store(settings.database_path)
+        store = Store(settings.database_path, key=settings.database_key)
         store.connect()
     bot = PodcastCutterBot(settings, client, store, build_indexer(settings, store))
 
@@ -366,6 +385,9 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
 
 
 def run() -> None:
+    # New databases, WAL files, logs and temporary media start private even on
+    # hosts whose service manager inherited a permissive default umask.
+    os.umask(0o077)
     configure_logging()
     settings = load_settings()
     add_file_logging(settings)

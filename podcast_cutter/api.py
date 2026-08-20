@@ -18,9 +18,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -84,6 +85,13 @@ class Episode:
     #: none — and for episodes rebuilt from the recents table, which predates
     #: the field; everything using it treats missing artwork as normal.
     image: str = ""
+    #: Stable Podcast Index feed id. This is the enforcement key for the
+    #: operator's takedown blocklist; titles and URLs are mutable.
+    feed_id: str = ""
+    author: str = ""
+    #: Publisher-facing page for the episode. The enclosure is only a media
+    #: file and is a poor attribution target when a canonical page exists.
+    episode_url: str = ""
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> Episode | None:
@@ -113,7 +121,41 @@ class Episode:
             enclosure_url=url,
             duration=duration,
             image=image,
+            feed_id=str(raw.get("feedId") or ""),
+            author=one_line(raw.get("feedAuthor") or raw.get("author"), ""),
+            episode_url=_public_url(raw.get("link")),
         )
+
+
+def _public_url(value: Any) -> str:
+    value = (value or "").strip() if isinstance(value, str) else ""
+    return value if value.startswith(("http://", "https://")) else ""
+
+
+@dataclass(frozen=True, slots=True)
+class _Fetched:
+    payload: dict[str, Any]
+    cache_seconds: int
+
+
+def _cache_seconds(headers: httpx.Headers) -> int:
+    """The response's explicit cache permission, capped for freshness.
+
+    No header means no cache. Podcast Index's terms prohibit retaining cached
+    API content longer than the cache header permits, so the old unconditional
+    five-minute cache was not a safe fallback.
+    """
+    control = headers.get("cache-control", "")
+    directives = {item.strip().lower() for item in control.split(",") if item}
+    if {"no-store", "no-cache"} & directives:
+        return 0
+    for directive in directives:
+        match = re.fullmatch(r"max-age\s*=\s*\"?(\d+)\"?", directive)
+        if match:
+            raw_age = headers.get("age", "")
+            age = int(raw_age) if raw_age.isdigit() else 0
+            return max(0, min(CACHE_SECONDS, int(match.group(1)) - age))
+    return 0
 
 
 def _parse_all(model: type, items: Sequence[dict[str, Any]] | None) -> list:
@@ -161,18 +203,22 @@ class PodcastIndexClient:
             if cached is not None and cached[0] > time.monotonic():
                 return cached[1]
 
-        payload = await self._fetch(path, params)
+        fetched = await self._fetch(path, params)
+        payload = fetched.payload
 
-        if cacheable:
+        if cacheable and fetched.cache_seconds > 0:
             if len(self._cache) >= _CACHE_LIMIT:
                 for stale in sorted(
                     self._cache, key=lambda item: self._cache[item][0]
                 )[: _CACHE_LIMIT // 2]:
                     del self._cache[stale]
-            self._cache[key] = (time.monotonic() + CACHE_SECONDS, payload)
+            self._cache[key] = (
+                time.monotonic() + fetched.cache_seconds,
+                payload,
+            )
         return payload
 
-    async def _fetch(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _fetch(self, path: str, params: dict[str, Any]) -> _Fetched:
         last_error: Exception | None = None
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -187,7 +233,7 @@ class PodcastIndexClient:
                     path,
                     attempt,
                     _MAX_ATTEMPTS,
-                    exc,
+                    type(exc).__name__,
                 )
             else:
                 if response.status_code < 400:
@@ -197,7 +243,7 @@ class PodcastIndexClient:
                         raise ApiError("err_api_malformed") from exc
                     if not isinstance(payload, dict):
                         raise ApiError("err_api_malformed")
-                    return payload
+                    return _Fetched(payload, _cache_seconds(response.headers))
 
                 if response.status_code in (401, 403):
                     # Bad credentials are a deployment problem, not a user one.
@@ -273,6 +319,10 @@ class PodcastIndexClient:
         )
 
         episodes = _parse_all(Episode, payload.get("items"))
+        episodes = [
+            episode if episode.feed_id else replace(episode, feed_id=str(feed_id))
+            for episode in episodes
+        ]
         if not episodes:
             raise NotFoundError("err_no_episodes")
         return episodes

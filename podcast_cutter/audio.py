@@ -198,6 +198,11 @@ def parse_moment_or_range(
 class SourceInfo:
     codec: str | None
     duration: int | None
+    #: A deliberately small allowlist of provenance/rightsholder tags.  Raw
+    #: podcast files sometimes carry multi-megabyte comments and descriptions;
+    #: blindly copying all global metadata makes a tiny cut enormous and can
+    #: also publish arbitrary source fields the bot never intended to expose.
+    metadata: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,7 +323,7 @@ async def probe(
         "-select_streams",
         "a:0",
         "-show_entries",
-        "stream=codec_name:format=duration",
+        "stream=codec_name:format=duration:format_tags",
         "-of",
         "json",
         str(source),
@@ -363,7 +368,40 @@ async def probe(
         if value > 0:
             duration = int(value)
 
-    return SourceInfo(codec=codec, duration=duration)
+    raw_tags = (payload.get("format") or {}).get("tags") or {}
+    # Keep only fields that identify the work/rightsholder or its canonical
+    # source.  Values are bounded so a hostile or merely eccentric feed cannot
+    # smuggle a giant tag into every generated clip.
+    allowed = {
+        "artist",
+        "album_artist",
+        "copyright",
+        "organization",
+        "publisher",
+        "purl",
+        "webpage_url",
+    }
+    safe_metadata: list[tuple[str, str]] = []
+    for raw_key, raw_value in raw_tags.items():
+        key = str(raw_key).strip().lower()
+        value = str(raw_value).strip()
+        if key in allowed and value:
+            safe_metadata.append((key, value[:512]))
+
+    return SourceInfo(
+        codec=codec,
+        duration=duration,
+        metadata=tuple(safe_metadata),
+    )
+
+
+def _clip_metadata(
+    source: SourceInfo, supplied: dict[str, str] | None
+) -> dict[str, str]:
+    """Merge bounded source attribution with the bot's canonical clip tags."""
+    merged = dict(source.metadata)
+    merged.update(supplied or {})
+    return merged
 
 
 def _cut_command(
@@ -394,9 +432,9 @@ def _cut_command(
         "-map",
         "0:a:0",
         "-vn",
-        # Drop the source's metadata. Feeds routinely carry enormous ID3 tags —
-        # one popular show ships an 18 MB tag — and ffmpeg copies the whole
-        # thing into the cut, so a 30-second clip came out at 20 MB.
+        # Never copy source metadata wholesale: real feeds carry enormous or
+        # arbitrary tags. ``probe`` extracts a bounded provenance allowlist,
+        # which the caller passes back explicitly below.
         "-map_metadata",
         "-1",
     ]
@@ -669,6 +707,7 @@ async def cut_episode(
     # settled on. ``None`` when the feature is off, i.e. inherit our env.
     remote_env = proxy.subprocess_env(route)
     info = await probe(resolved_url, settings.probe_timeout, env=remote_env)
+    effective_metadata = _clip_metadata(info, metadata)
 
     check_length(info.duration)
     if info.duration is not None and interval.start >= info.duration:
@@ -688,13 +727,13 @@ async def cut_episode(
             encode=encode,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
-            metadata=metadata,
+            metadata=effective_metadata,
             env=remote_env,
         )
         if reason is None:
             return await _finalize(
                 output, encode, interval, workdir, settings, status,
-                metadata, shrink_with, route, lang,
+                effective_metadata, shrink_with, route, lang,
             )
         logger.info("Streaming cut failed (encode=%s): %s", encode, reason[:500])
 
@@ -706,6 +745,7 @@ async def cut_episode(
     )
 
     local_info = await probe(local_source, settings.probe_timeout)
+    effective_metadata = _clip_metadata(local_info, metadata)
     # The remote probe can come back with nothing at all — a host that refuses
     # ffprobe still downloads fine — so this is the first length we see for
     # some episodes, not a repeat of the check above.
@@ -727,13 +767,13 @@ async def cut_episode(
             encode=encode,
             timeout=settings.ffmpeg_timeout,
             verify_timeout=settings.probe_timeout,
-            metadata=metadata,
+            metadata=effective_metadata,
         )
         if reason is None:
             local_source.unlink(missing_ok=True)
             return await _finalize(
                 output, encode, interval, workdir, settings, status,
-                metadata, shrink_with, route, lang,
+                effective_metadata, shrink_with, route, lang,
             )
         failures.append(reason)
         logger.info("Local cut failed (encode=%s): %s", encode, reason[:500])

@@ -9,6 +9,7 @@ first user request.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +18,10 @@ from dotenv import load_dotenv
 from .errors import ConfigError
 
 DEFAULT_API_BASE_URL = "https://api.podcastindex.org/api/1.0"
+DEFAULT_LEGAL_BASE_URL = (
+    "https://github.com/Terro216/podcast-cutter/blob/main/docs"
+)
+CURRENT_TERMS_VERSION = "2026-08-18"
 
 # The Bot API rejects uploads above 50 MB. Stay under it so a slightly
 # oversized ID3 header or container overhead cannot push us over the edge.
@@ -54,6 +59,15 @@ class Settings:
     api_key: str
     api_secret: str
     api_base_url: str = DEFAULT_API_BASE_URL
+
+    # --- content and legal policy ----------------------------------------
+    #: Podcast Index feed ids that must not be opened. Empty is the intended
+    #: public-beta default: the list is an operational takedown control, not a
+    #: claim that every unlisted feed granted a licence.
+    podcast_blocklist: frozenset[str] = frozenset()
+    terms_version: str = CURRENT_TERMS_VERSION
+    legal_base_url: str = DEFAULT_LEGAL_BASE_URL
+    legal_contact: str = "podcast_cutter@inbox.ru"
 
     # --- paging -----------------------------------------------------------
     podcasts_per_page: int = 5
@@ -132,8 +146,18 @@ class Settings:
     #: Database and log files live here. Mount it, or a redeploy takes the
     #: history with it: recreating a container discards its json log.
     data_dir: Path = field(default_factory=lambda: Path("data"))
+    #: Raw 256-bit SQLCipher key encoded as exactly 64 hexadecimal digits.
+    #: Empty remains available to directly constructed disposable test stores;
+    #: load_settings() requires DATABASE_KEY for a real process.
+    database_key: str = ""
     #: Journal rows older than this are deleted at startup. 0 keeps everything.
     log_retention_days: int = 90
+    #: Terminal queue rows still contain Telegram and chat ids but serve no
+    #: delivery purpose. Keep a short diagnostic window, independently of the
+    #: longer anonymous/product journal.
+    asr_job_retention_hours: int = 24
+    #: Stored language, acceptance and recents for inactive users.
+    user_data_retention_days: int = 365
     #: Rotating log file size and count, alongside stdout.
     log_file_bytes: int = 10 * 1024 * 1024
     log_file_count: int = 5
@@ -225,6 +249,9 @@ class Settings:
     def is_admin(self, user_id: int | None) -> bool:
         return user_id is not None and user_id in self.admin_ids
 
+    def is_podcast_blocked(self, feed_id: str | None) -> bool:
+        return bool(feed_id) and str(feed_id) in self.podcast_blocklist
+
     def __post_init__(self) -> None:
         if self.max_cut_seconds <= 0:
             raise ConfigError("MAX_CUT_SECONDS must be positive.")
@@ -239,6 +266,20 @@ class Settings:
             raise ConfigError("MAX_CONCURRENT_JOBS must be at least 1.")
         if self.log_retention_days < 0:
             raise ConfigError("LOG_RETENTION_DAYS cannot be negative.")
+        if self.asr_job_retention_hours < 0:
+            raise ConfigError("ASR_JOB_RETENTION_HOURS cannot be negative.")
+        if self.user_data_retention_days < 0:
+            raise ConfigError("USER_DATA_RETENTION_DAYS cannot be negative.")
+        if self.database_key and not re.fullmatch(
+            r"[0-9a-fA-F]{64}", self.database_key
+        ):
+            raise ConfigError(
+                "DATABASE_KEY must contain exactly 64 hexadecimal characters."
+            )
+        if not self.terms_version:
+            raise ConfigError("TERMS_VERSION cannot be empty.")
+        if not self.legal_base_url.startswith(("http://", "https://")):
+            raise ConfigError("LEGAL_BASE_URL must be an http(s) URL.")
         if self.asr_backend not in ASR_BACKENDS:
             raise ConfigError(
                 f"ASR_BACKEND must be one of {', '.join(ASR_BACKENDS)}, "
@@ -351,6 +392,11 @@ def _id_set(name: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _string_set(name: str) -> frozenset[str]:
+    """Parse a comma- or whitespace-separated set of opaque ids."""
+    return frozenset(_env(name).replace(",", " ").split())
+
+
 def load_settings() -> Settings:
     """Read the environment (and ``.env``) into a validated :class:`Settings`."""
     load_dotenv()
@@ -369,6 +415,15 @@ def load_settings() -> Settings:
         api_key=_required("PODCAST_API_KEY"),
         api_secret=_required("PODCAST_API_SECRET"),
         api_base_url=base_url,
+        podcast_blocklist=_string_set("PODCAST_BLOCKLIST"),
+        terms_version=_env("TERMS_VERSION") or CURRENT_TERMS_VERSION,
+        legal_base_url=(
+            _env("LEGAL_BASE_URL") or DEFAULT_LEGAL_BASE_URL
+        ).rstrip("/"),
+        legal_contact=(
+            _env("LEGAL_CONTACT")
+            or "podcast_cutter@inbox.ru"
+        ),
         max_cut_seconds=_positive_int("MAX_CUT_SECONDS", Settings.max_cut_seconds),
         max_source_seconds=_positive_int(
             "MAX_SOURCE_SECONDS", Settings.max_source_seconds
@@ -387,8 +442,15 @@ def load_settings() -> Settings:
         ),
         work_dir=Path(_env("WORK_DIR") or "/tmp/podcast-cutter"),
         data_dir=Path(_env("DATA_DIR") or "data"),
+        database_key=_required("DATABASE_KEY"),
         log_retention_days=_non_negative_int(
             "LOG_RETENTION_DAYS", Settings.log_retention_days
+        ),
+        asr_job_retention_hours=_non_negative_int(
+            "ASR_JOB_RETENTION_HOURS", Settings.asr_job_retention_hours
+        ),
+        user_data_retention_days=_non_negative_int(
+            "USER_DATA_RETENTION_DAYS", Settings.user_data_retention_days
         ),
         admin_ids=_id_set("ADMIN_IDS"),
         asr_enabled=_flag("ASR_ENABLED", Settings.asr_enabled),

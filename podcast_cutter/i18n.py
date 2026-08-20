@@ -68,6 +68,9 @@ _EN = {
         "/surprise — a random episode\n"
         "/recent — episodes you looked at\n"
         "/language — language / язык\n"
+        "/terms · /privacy — rules and stored data\n"
+        "/mydata · /delete_me — inspect or erase your data\n"
+        "/copyright — rights and takedown requests\n"
         "/cancel — back to the main menu\n"
         "/help — this message\n\n"
         "<b>Picking the moment</b>\n"
@@ -76,7 +79,8 @@ _EN = {
         "Then nudge it with the ◀ ▶ buttons until it's right.\n\n"
         "<b>Anywhere else</b>\n"
         "Type <code>@{username}</code> in any chat to share an episode "
-        "without leaving the conversation."
+        "without leaving the conversation.\n\n"
+        "<i>Independent tool · directory data via Podcast Index.</i>"
     ),
     "unknown_command": "I don't know that command — /help lists the ones I do.",
     "opened_from_link": "🔗 Opened from a shared link.",
@@ -88,6 +92,66 @@ _EN = {
     ),
     "stale_menu": "⌛ That menu is out of date — here's a fresh start.",
     "generic_error": "Something went wrong on my side. Please try again.",
+    "terms_prompt": (
+        "⚖️ <b>Before using Podcast Cutter</b>\n\n"
+        "You choose the material and instruct the bot to process it. By "
+        "continuing, you confirm that you have permission or another lawful "
+        "basis to make and share each clip, and accept responsibility for "
+        "your use. Piracy and infringement are prohibited.\n\n"
+        "<a href=\"{terms_url}\">Terms of Use</a> · "
+        "<a href=\"{privacy_url}\">Privacy Policy</a>\n"
+        "Version: {version}"
+    ),
+    "terms_accepted": "✅ Terms accepted. You can use the bot now.",
+    "terms_declined": (
+        "No problem — the bot will not search, download or process content "
+        "without acceptance. /terms and /privacy remain available."
+    ),
+    "terms_text": (
+        "⚖️ <b>Terms of Use</b>\n\n"
+        "You may process only material you are authorised to use or whose use "
+        "is otherwise lawful. You choose the source, interval and destination "
+        "and are responsible for the resulting clip and its distribution. "
+        "Illegal, infringing, deceptive and commercial use without the "
+        "necessary rights is prohibited. Access may be suspended and content "
+        "may be blocked or deleted. The service is independent, provided as "
+        "is and is not endorsed by Podcast Index or podcast publishers.\n\n"
+        "Full terms: <a href=\"{url}\">{url}</a>"
+    ),
+    "privacy_text": (
+        "🔐 <b>Privacy</b>\n\n"
+        "Stored: Telegram user id, chosen language, Terms acceptance, recent "
+        "episodes and limited operational events. A chat id and episode URL "
+        "are kept while a transcription job is pending; terminal job rows "
+        "expire after {asr_hours} hours. Raw search phrases are not written to "
+        "the journal. User profile data expires after {user_days} days of "
+        "inactivity. Use /mydata to inspect it and /delete_me to erase it.\n\n"
+        "Full policy: <a href=\"{url}\">{url}</a>"
+    ),
+    "mydata_empty": "I have no durable data linked to your Telegram id.",
+    "mydata_text": (
+        "🗂 <b>Your stored data</b>\n\n"
+        "Language: {language}\nTerms accepted: {terms}\n"
+        "Recent episodes: {recents}\nJournal events: {events}\n"
+        "ASR queue rows: {asr_jobs}\n\nUse /delete_me to erase it."
+    ),
+    "delete_me_confirm": (
+        "🗑 <b>Delete your data?</b>\n\nThis removes your language, Terms "
+        "acceptance, recent list, event rows and transcription-queue rows. "
+        "It cannot retract clips already sent to Telegram.\n\n"
+        "Send <code>/delete_me confirm</code> to continue."
+    ),
+    "delete_me_done": (
+        "✅ Your durable user data was deleted. You will need to accept the "
+        "Terms again before using the bot."
+    ),
+    "copyright_text": (
+        "©️ <b>Rights and takedown requests</b>\n\n"
+        "Podcast Cutter is an independent user-directed tool. If material "
+        "should be blocked, send the podcast/episode URL, the right you "
+        "represent and enough information to identify the work to: {contact}. "
+        "Do not include unrelated personal data in a public issue."
+    ),
 
     # -- the language chooser ------------------------------------------
     "language_screen": (
@@ -285,6 +349,8 @@ _EN = {
     "btn_surprise": "🎲 Surprise me",
     "btn_recent": "🕘 Recent",
     "btn_help": "❓ Help",
+    "btn_accept_terms": "✅ I agree",
+    "btn_decline_terms": "Decline",
 
     # -- inline buttons ----------------------------------------------------
     "btn_back": "‹ Back",
@@ -341,6 +407,11 @@ _EN = {
     "cmd_cancel": "Back to the main menu",
     "cmd_reset": "Start over if something looks stuck",
     "cmd_help": "How this works",
+    "cmd_terms": "Terms of Use",
+    "cmd_privacy": "Privacy Policy and stored data",
+    "cmd_mydata": "Show my stored data",
+    "cmd_delete_me": "Delete my stored data",
+    "cmd_copyright": "Rights and takedown requests",
     "short_description": (
         "Turns a podcast episode into a short clip you can send to someone — "
         "pick the moment, share just that part."
@@ -402,6 +473,11 @@ _EN = {
     "err_no_episodes": "This podcast has no downloadable episodes.",
     "err_no_person": "No episodes found for “{query}”.",
     "err_episode_gone": "That episode is no longer available.",
+    "err_content_blocked": (
+        "This podcast is unavailable for processing following a rights or "
+        "policy request."
+    ),
+    "err_user_data_deleted": "Your pending request was stopped and its data deleted.",
     "err_no_trending": "No trending podcasts right now.",
     "err_no_random": "Could not find a random episode. Try again.",
     "err_ts_missing": "A timestamp is missing.",
@@ -473,6 +549,9 @@ _RU = {
         "/surprise — случайный эпизод\n"
         "/recent — эпизоды, которые вы открывали\n"
         "/language — язык / language\n"
+        "/terms · /privacy — правила и сохранённые данные\n"
+        "/mydata · /delete_me — посмотреть или удалить данные\n"
+        "/copyright — обращения о правах и блокировке\n"
         "/cancel — в главное меню\n"
         "/help — это сообщение\n\n"
         "<b>Как выбрать момент</b>\n"
@@ -481,7 +560,8 @@ _RU = {
         "Потом подвиньте кнопками ◀ ▶, пока не станет точно.\n\n"
         "<b>Где угодно ещё</b>\n"
         "Наберите <code>@{username}</code> в любом чате, чтобы поделиться "
-        "эпизодом, не выходя из разговора."
+        "эпизодом, не выходя из разговора.\n\n"
+        "<i>Независимый инструмент · данные каталога через Podcast Index.</i>"
     ),
     "unknown_command": "Такой команды я не знаю — /help перечисляет те, что есть.",
     "opened_from_link": "🔗 Открыто по ссылке.",
@@ -492,6 +572,66 @@ _RU = {
     ),
     "stale_menu": "⌛ Это меню устарело — вот свежее.",
     "generic_error": "Что-то пошло не так на моей стороне. Попробуйте ещё раз.",
+    "terms_prompt": (
+        "⚖️ <b>Перед использованием Podcast Cutter</b>\n\n"
+        "Вы сами выбираете материал и поручаете боту его обработать. Продолжая, "
+        "вы подтверждаете, что имеете разрешение или иное законное основание "
+        "создать и передать каждый клип, и отвечаете за его использование. "
+        "Пиратство и нарушение чужих прав запрещены.\n\n"
+        "<a href=\"{terms_url}\">Условия использования</a> · "
+        "<a href=\"{privacy_url}\">Политика конфиденциальности</a>\n"
+        "Версия: {version}"
+    ),
+    "terms_accepted": "✅ Условия приняты. Теперь ботом можно пользоваться.",
+    "terms_declined": (
+        "Хорошо — без принятия условий бот не будет искать, загружать или "
+        "обрабатывать материалы. Команды /terms и /privacy остаются доступны."
+    ),
+    "terms_text": (
+        "⚖️ <b>Условия использования</b>\n\n"
+        "Можно обрабатывать только материалы, на которые у вас есть права, "
+        "разрешение или иное законное основание. Вы выбираете источник, "
+        "интервал и получателя и отвечаете за полученный клип и его "
+        "распространение. Запрещены незаконное использование, нарушение прав, "
+        "обман и коммерческое использование без необходимых прав. Доступ может "
+        "быть ограничен, а материал — заблокирован или удалён. Сервис независим, "
+        "предоставляется как есть и не одобрен Podcast Index или авторами.\n\n"
+        "Полный текст: <a href=\"{url}\">{url}</a>"
+    ),
+    "privacy_text": (
+        "🔐 <b>Конфиденциальность</b>\n\n"
+        "Хранятся Telegram ID, выбранный язык, принятие условий, недавние "
+        "эпизоды и ограниченный журнал работы. Chat ID и URL эпизода хранятся, "
+        "пока выполняется расшифровка; завершённые строки очереди удаляются "
+        "через {asr_hours} ч. Исходные поисковые фразы в журнал не записываются. "
+        "Профиль удаляется после {user_days} дней неактивности. /mydata покажет "
+        "данные, /delete_me удалит их.\n\n"
+        "Политика полностью: <a href=\"{url}\">{url}</a>"
+    ),
+    "mydata_empty": "У меня нет постоянных данных, связанных с вашим Telegram ID.",
+    "mydata_text": (
+        "🗂 <b>Ваши сохранённые данные</b>\n\n"
+        "Язык: {language}\nУсловия приняты: {terms}\n"
+        "Недавние эпизоды: {recents}\nСобытия журнала: {events}\n"
+        "Строки очереди ASR: {asr_jobs}\n\n/delete_me удалит эти данные."
+    ),
+    "delete_me_confirm": (
+        "🗑 <b>Удалить ваши данные?</b>\n\nБудут удалены язык, принятие "
+        "условий, список недавнего, события журнала и строки очереди "
+        "расшифровки. Уже отправленные в Telegram клипы отозвать нельзя.\n\n"
+        "Для продолжения отправьте <code>/delete_me confirm</code>."
+    ),
+    "delete_me_done": (
+        "✅ Ваши постоянные пользовательские данные удалены. Перед следующим "
+        "использованием потребуется снова принять условия."
+    ),
+    "copyright_text": (
+        "©️ <b>Права и удаление материалов</b>\n\n"
+        "Podcast Cutter — независимый инструмент, которым управляет пользователь. "
+        "Чтобы заблокировать материал, отправьте ссылку на подкаст или эпизод, "
+        "укажите представляемое право и сведения для идентификации произведения: "
+        "{contact}. Не публикуйте лишние персональные данные в открытом issue."
+    ),
 
     "language_screen": (
         "🌐 <b>Language / Язык</b>\n\n"
@@ -685,6 +825,8 @@ _RU = {
     "btn_surprise": "🎲 Удиви меня",
     "btn_recent": "🕘 Недавние",
     "btn_help": "❓ Помощь",
+    "btn_accept_terms": "✅ Принимаю",
+    "btn_decline_terms": "Отказаться",
 
     "btn_back": "‹ Назад",
     "btn_menu": "☰ Меню",
@@ -737,6 +879,11 @@ _RU = {
     "cmd_cancel": "Вернуться в главное меню",
     "cmd_reset": "Начать заново, если что-то зависло",
     "cmd_help": "Как это работает",
+    "cmd_terms": "Условия использования",
+    "cmd_privacy": "Конфиденциальность и данные",
+    "cmd_mydata": "Показать мои данные",
+    "cmd_delete_me": "Удалить мои данные",
+    "cmd_copyright": "Права и удаление материалов",
     "short_description": (
         "Превращает эпизод подкаста в короткий клип: выберите момент — "
         "и поделитесь только им."
@@ -797,6 +944,11 @@ _RU = {
     "err_no_episodes": "У этого подкаста нет эпизодов, доступных для скачивания.",
     "err_no_person": "По запросу «{query}» эпизодов не нашлось.",
     "err_episode_gone": "Этот эпизод больше недоступен.",
+    "err_content_blocked": (
+        "Этот подкаст недоступен для обработки после обращения о правах "
+        "или требования политики."
+    ),
+    "err_user_data_deleted": "Ожидающий запрос остановлен, а его данные удалены.",
     "err_no_trending": "Списка популярных подкастов сейчас нет.",
     "err_no_random": "Не удалось найти случайный эпизод. Попробуйте ещё раз.",
     "err_ts_missing": "Не хватает таймкода.",
@@ -951,6 +1103,11 @@ def bot_commands(lang: str) -> list[tuple[str, str]]:
         ("surprise", t(lang, "cmd_surprise")),
         ("recent", t(lang, "cmd_recent")),
         ("language", t(lang, "cmd_language")),
+        ("terms", t(lang, "cmd_terms")),
+        ("privacy", t(lang, "cmd_privacy")),
+        ("mydata", t(lang, "cmd_mydata")),
+        ("delete_me", t(lang, "cmd_delete_me")),
+        ("copyright", t(lang, "cmd_copyright")),
         ("cancel", t(lang, "cmd_cancel")),
         ("reset", t(lang, "cmd_reset")),
         ("help", t(lang, "cmd_help")),

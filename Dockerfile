@@ -8,9 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     POETRY_HOME="/opt/poetry" \
     PATH="/opt/poetry/bin:$PATH"
 
-# ffmpeg ships ffprobe too; both are required at runtime. sqlite3 is not used
-# by the bot — it is there so the journal can be queried without copying the
-# database off the host.
+# ffmpeg ships ffprobe too; both are required at runtime. The standard sqlite3
+# shell is retained for legacy/plaintext diagnostics; production data requires
+# SQLCipher and cannot be opened by it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \

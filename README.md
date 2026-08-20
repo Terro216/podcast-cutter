@@ -61,7 +61,12 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `BOT_TOKEN`           | yes      | Telegram bot token                       |
 | `PODCAST_API_KEY`     | yes      | Podcast Index key                        |
 | `PODCAST_API_SECRET`  | yes      | Podcast Index secret                     |
+| `DATABASE_KEY`        | yes      | 64-hex SQLCipher key (`openssl rand -hex 32`) |
 | `PODCAST_API_BASEURL` | no       | Defaults to the public Podcast Index API |
+| `PODCAST_BLOCKLIST`   | no       | Comma-separated blocked feed ids (empty) |
+| `TERMS_VERSION`       | no       | Acceptance version (`2026-08-18`)        |
+| `LEGAL_BASE_URL`      | no       | Public directory containing legal pages  |
+| `LEGAL_CONTACT`       | no       | Rights/privacy contact                    |
 | `MAX_CUT_SECONDS`     | no       | Longest interval a user may request (900)|
 | `MAX_SOURCE_SECONDS`  | no       | Longest episode opened at all (21600)    |
 | `ASR_ENABLED`         | no       | Kill switch for transcription (true)     |
@@ -76,6 +81,8 @@ Copy `.env.example` to `.env` and fill in the three required values:
 | `WORK_DIR`            | no       | Scratch space for in-flight cuts         |
 | `DATA_DIR`            | no       | Database and log files (`/data` in Docker)|
 | `LOG_RETENTION_DAYS`  | no       | Journal retention, 0 keeps everything (90)|
+| `ASR_JOB_RETENTION_HOURS` | no   | Finished queue-row retention (24)         |
+| `USER_DATA_RETENTION_DAYS` | no  | Inactive profile/recents retention (365)  |
 | `ADMIN_IDS`           | no       | Telegram ids allowed to run `/stats`     |
 | `TELEGRAM_PROXY`      | no       | Proxy for the Bot API; empty = direct    |
 | `MEDIA_PROXY`         | no       | Proxy for audio fetches; empty = direct  |
@@ -118,13 +125,24 @@ chat screen. Editing those in @BotFather works until the next restart, which
 overwrites them. Two things have no API and remain BotFather's alone — the
 avatar (`/setuserpic`) and the inline placeholder (`/setinline`).
 
-The journal itself is plain SQLite, so anything the panel does not answer is a
-query away:
+The journal is SQLCipher-encrypted. For an operator-only ad-hoc query, reuse
+the key already present inside the running container rather than putting it on
+the command line:
 
 ```shell
-docker compose exec podcast-cutter \
-  sqlite3 /data/podcast_cutter.db \
-  "SELECT outcome, count(*) FROM events WHERE action='cut' GROUP BY outcome"
+docker compose exec -T podcast-cutter python - <<'PY'
+import os
+from sqlcipher3 import dbapi2 as sqlite3
+from podcast_cutter.database import key_connection
+
+connection = sqlite3.connect("/data/podcast_cutter.db")
+key_connection(connection, os.environ["DATABASE_KEY"])
+print(connection.execute(
+    "SELECT outcome, count(*) FROM events "
+    "WHERE action='cut' GROUP BY outcome"
+).fetchall())
+connection.close()
+PY
 ```
 
 **The volume is not optional.** Container logs do not survive a redeploy:
@@ -132,8 +150,60 @@ docker compose exec podcast-cutter \
 with it. Anything you want to keep has to be under `/data`.
 
 Rows older than `LOG_RETENTION_DAYS` are deleted at startup. The journal stores
-real Telegram user ids alongside what was searched and cut, so pick a retention
-window you are comfortable with, or set `0` to keep everything.
+real Telegram user ids alongside action outcomes and episode metadata, but not
+raw podcast/person/transcript search phrases. Pick a retention window you are
+comfortable with; `0` disables automatic expiry and is not recommended for a
+public bot. Finished ASR delivery rows and inactive profile data have the
+separate, shorter controls listed above.
+
+## Public-use and data controls
+
+The first content request requires explicit acceptance of the current Terms
+version. `/terms`, `/privacy`, `/mydata`, `/delete_me` and `/copyright` remain
+available as user controls. The full bilingual documents are
+[Terms of Use](docs/TERMS.md) and [Privacy Policy](docs/PRIVACY.md).
+
+`PODCAST_BLOCKLIST` is an operational takedown control keyed by stable Podcast
+Index feed id. It is empty for the initial public beta. Empty does **not** mean
+that every podcast granted a licence: users must have permission or another
+lawful basis for each requested use. A block is rechecked before download,
+rendering and transcription, including durable jobs resumed after a restart.
+
+Metadata comes via Podcast Index; Podcast Cutter is independent and is not
+affiliated with or endorsed by Podcast Index, Telegram or podcast publishers.
+API responses are cached only when their response headers explicitly permit
+it. Clips keep source metadata where the output format supports it and link
+back to the publisher-facing episode page when one is available.
+
+Publish the Privacy Policy URL through @BotFather before public use. Durable
+state is encrypted at rest with SQLCipher whenever the application is loaded
+through `load_settings()`; `DATABASE_KEY` is mandatory there. The accepted
+pet-project recovery policy keeps the complete `.env` (including that key)
+beside the encrypted database inside the separately encrypted restic snapshot.
+The live database, WAL and SHM also use a private umask and mode `0600`.
+
+### First SQLCipher migration
+
+Generate `DATABASE_KEY` once and keep it unchanged across deploys and restores:
+
+```bash
+openssl rand -hex 32
+```
+
+Put the result in `.env`. An existing plaintext database is deliberately not
+converted during normal startup: a wrong key or accidental rollback must fail
+closed instead of silently replacing user data. With the bot stopped, run:
+
+```bash
+docker compose run --rm --no-deps podcast-cutter \
+  python -m podcast_cutter.migrate_sqlcipher
+```
+
+The command authenticates the source, exports it into SQLCipher, verifies both
+SQLite consistency and SQLCipher page HMACs, atomically installs it and leaves
+the old database as `podcast_cutter.db.plaintext-<timestamp>`. Keep that file
+only through the first smoke test, then remove it: encryption at rest is not
+complete while a plaintext rollback remains on the volume.
 
 ### Locally
 
@@ -210,7 +280,7 @@ podcast_cutter/
   video.py                 the video note: skins, subtitles, the render
   text.py                  escaping, filenames, progress bars
   states.py                screen stack and the per-user session
-  store.py                 SQLite journal, transcripts and the FTS index
+  store.py                 SQLCipher journal, transcripts and the FTS index
   asr.py                   the recogniser interface, faster-whisper behind it
   transcripts.py           quarantine, windowing, clustering, placement
   indexer.py               transcription pipeline and the search

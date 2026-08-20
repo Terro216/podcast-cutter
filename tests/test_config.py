@@ -9,6 +9,7 @@ REQUIRED = {
     "BOT_TOKEN": "123:abc",
     "PODCAST_API_KEY": "key",
     "PODCAST_API_SECRET": "secret",
+    "DATABASE_KEY": "ab" * 32,
 }
 
 
@@ -22,6 +23,12 @@ def clean_env(monkeypatch):
         "MAX_CONCURRENT_JOBS",
         "WORK_DIR",
         "TELEGRAM_PROXY",
+        "PODCAST_BLOCKLIST",
+        "TERMS_VERSION",
+        "LEGAL_BASE_URL",
+        "LEGAL_CONTACT",
+        "ASR_JOB_RETENTION_HOURS",
+        "USER_DATA_RETENTION_DAYS",
     ):
         monkeypatch.delenv(name, raising=False)
     # load_settings() calls load_dotenv(); stop it from picking up a real .env.
@@ -51,6 +58,12 @@ class TestRequiredValues:
     def test_values_are_stripped(self, monkeypatch):
         with_env(monkeypatch, BOT_TOKEN="  123:abc  ")
         assert load_settings().bot_token == "123:abc"
+
+    @pytest.mark.parametrize("value", ["short", "z" * 64, "ab" * 31])
+    def test_database_key_is_a_raw_256_bit_hex_value(self, monkeypatch, value):
+        with_env(monkeypatch, DATABASE_KEY=value)
+        with pytest.raises(ConfigError, match="DATABASE_KEY"):
+            load_settings()
 
 
 class TestQuotedValues:
@@ -99,6 +112,18 @@ class TestBaseUrl:
         with_env(monkeypatch, PODCAST_API_BASEURL="api.podcastindex.org")
         with pytest.raises(ConfigError, match="PODCAST_API_BASEURL"):
             load_settings()
+
+
+class TestPodcastBlocklist:
+    def test_empty_by_default(self, monkeypatch):
+        with_env(monkeypatch)
+        assert not load_settings().podcast_blocklist
+
+    def test_reads_feed_ids(self, monkeypatch):
+        with_env(monkeypatch, PODCAST_BLOCKLIST="12, 34 56")
+        settings = load_settings()
+        assert settings.podcast_blocklist == frozenset({"12", "34", "56"})
+        assert settings.is_podcast_blocked("34")
 
 
 class TestNumericOverrides:

@@ -98,6 +98,7 @@ MOVE_PREFIX = "mv"
 SHIFT_PREFIX = "shift"
 #: The language chooser.
 LANG_PREFIX = "lang"
+LEGAL_PREFIX = "legal"
 #: Re-render the clip just sent with another skin, from the result screen.
 #: Its own prefix rather than ``skin:`` because the two mean different
 #: things: ``skin:`` picks a look for the *next* cut, ``reskin:`` spends a
@@ -121,6 +122,8 @@ ACTION_DEMO = "act:demo"
 ACTION_TOGGLE_VOICE = "act:voice"
 ACTION_NEW_CLIP = "act:new"
 ACTION_FIND = "act:find"
+LEGAL_ACCEPT = f"{LEGAL_PREFIX}:accept"
+LEGAL_DECLINE = f"{LEGAL_PREFIX}:decline"
 
 #: Delivery format and video-note skin choices on the clip editor.
 FORMAT_PREFIX = "fmt"
@@ -498,6 +501,16 @@ def language_keyboard(current: str) -> InlineKeyboardMarkup:
     ]
     rows.append(footer_row(current))
     return InlineKeyboardMarkup(rows)
+
+
+def terms_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Explicit, versioned acceptance before the bot processes content."""
+    return InlineKeyboardMarkup(
+        [
+            [_button(t(lang, "btn_accept_terms"), LEGAL_ACCEPT, STYLE_SUCCESS)],
+            [_button(t(lang, "btn_decline_terms"), LEGAL_DECLINE, STYLE_DANGER)],
+        ]
+    )
 
 
 def cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:

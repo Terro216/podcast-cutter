@@ -36,6 +36,14 @@
 > 300. Renders run in the cut pool (`_job_slots`), not in the listening
 > queue, by decision — the reasoning is recorded in ROADMAP §6.
 >
+> **Runtime note, 2026-08-20.** Public-launch legal/privacy controls and the
+> SQLCipher cutover are deployed. Production DB/WAL/SHM and `.env` are mode
+> `0600`; no plaintext `.db` remains anywhere under `/data`. Encrypted restic
+> snapshot `ce0de76f` round-tripped twice with 2 transcripts and 163 journal
+> rows. The complete `.env` exists inside encrypted restic, not in local
+> backup/restore staging. Terms, Privacy Policy, takedown blocklist and the
+> user export/deletion controls are documented in README and `docs/`.
+>
 > **Runtime note, 2026-08-14, night (`cc97ad8`).** User feedback landed and
 > was right: the first layout died at the circle's edge — clients crop a
 > note to the inscribed circle, and the title and full-width progress bar
@@ -777,10 +785,11 @@ The running container predates this change; it picks the code up on the next
    not the send succeeds, so a failed send is now also a log line (`ff3814a`).
 5. ~~**Backups.** Nothing is backed up.~~ **Done and live (2026-08-13).**
    Encrypted restic → rclone-native-yandex, the cinemarr/vaultwarden shape:
-   the SQLite database (`.backup`, verified against the live WAL, quick_check)
-   snapshotted daily to `yadisk:/backups/podcast-cutter`, weekly prune/check,
-   monthly read-data check + restore drill. Code in `backup/` and `scripts/`,
-   timers in `deploy/systemd/`, full policy in `docs/backup-policy.md`. The
+   the SQLCipher database (`sqlcipher_export`, `quick_check` and authenticated
+   `cipher_integrity_check`) is snapshotted daily to
+   `yadisk:/backups/podcast-cutter`, with weekly prune/check and monthly
+   read-data check + restore drill. Code in `backup/` and `scripts/`, timers in
+   `deploy/systemd/`, full policy in `docs/backup-policy.md`. The
    Yandex token is the one already shared across stacks — re-authorising would
    have invalidated it for cinemarr/vaultwarden, so it was reused, not
    re-issued. **Owed:** the restic password's Bitwarden copy.

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 
 from .api import Episode
 from .config import Settings
-from .errors import PodcastCutterError
+from .errors import ContentBlockedError, PodcastCutterError
 from .indexer import Indexer, Progress
 from .store import AsrBatch, AsrJob, Store
 
@@ -68,6 +68,7 @@ class Ticket:
 
     job_id: int
     episode_id: str
+    user_id: int
     on_progress: ProgressCallback | None = None
     done: asyncio.Future = field(default_factory=asyncio.Future)
 
@@ -88,6 +89,9 @@ class TranscriptionQueue:
         self.notify = notify
         #: Job id -> the caller waiting for it right now.
         self._tickets: dict[int, Ticket] = {}
+        #: Job ids whose owner requested deletion while a claimed batch still
+        #: holds an in-memory copy. They must never receive the later notice.
+        self._suppressed_job_ids: set[int] = set()
         #: The episode being listened to right now. Progress is fanned out by
         #: episode rather than to the claimed rows, so somebody who asks about
         #: it a minute later watches the same bar instead of being told they
@@ -166,7 +170,10 @@ class TranscriptionQueue:
         """Join the line for this episode and get something to await."""
         job_id = await self.store.enqueue_asr_job(episode, user_id, chat_id)
         ticket = Ticket(
-            job_id=job_id, episode_id=episode.id, on_progress=on_progress
+            job_id=job_id,
+            episode_id=episode.id,
+            user_id=user_id,
+            on_progress=on_progress,
         )
         self._tickets[job_id] = ticket
         self.start()
@@ -175,6 +182,21 @@ class TranscriptionQueue:
         # told theirs before anything else happens.
         await self._say_position(ticket)
         return ticket
+
+    async def forget_user(self, user_id: int) -> int:
+        """Detach live waiters before their durable rows are deleted."""
+        forgotten = 0
+        for job_id, ticket in list(self._tickets.items()):
+            if ticket.user_id != user_id:
+                continue
+            self._tickets.pop(job_id, None)
+            self._suppressed_job_ids.add(job_id)
+            if not ticket.done.done():
+                ticket.done.set_exception(
+                    PodcastCutterError("err_user_data_deleted")
+                )
+            forgotten += 1
+        return forgotten
 
     def release(self, ticket: Ticket) -> None:
         """Stop waiting. The job itself carries on — it is worth finishing for
@@ -207,6 +229,12 @@ class TranscriptionQueue:
 
     async def _run_batch(self, batch: AsrBatch) -> None:
         job = batch.head
+        if self.settings.is_podcast_blocked(job.feed_id):
+            await self.store.delete_transcripts_for_episode(job.episode_id)
+            await self._fail_batch(
+                batch, ContentBlockedError(), ContentBlockedError.code
+            )
+            return
         job_dir = self.settings.work_dir / f"asr-{batch.episode_id}"
 
         async def on_progress(stage: Progress) -> None:
@@ -222,6 +250,7 @@ class TranscriptionQueue:
                 meta={
                     "episode_title": job.episode_title,
                     "feed_title": job.feed_title,
+                    "feed_id": job.feed_id,
                 },
             )
         except asyncio.CancelledError:
@@ -244,8 +273,9 @@ class TranscriptionQueue:
             ticket = self._tickets.pop(waiter.id, None)
             if ticket is not None and not ticket.done.done():
                 ticket.done.set_result(transcript)
-            else:
+            elif waiter.id not in self._suppressed_job_ids:
                 await self._deliver(waiter, transcript)
+            self._suppressed_job_ids.discard(waiter.id)
 
     async def _fail_batch(
         self, batch: AsrBatch, error: Exception, outcome: str
@@ -263,8 +293,9 @@ class TranscriptionQueue:
             ticket = self._tickets.pop(waiter.id, None)
             if ticket is not None and not ticket.done.done():
                 ticket.done.set_exception(error)
-            else:
+            elif waiter.id not in self._suppressed_job_ids:
                 await self._deliver(waiter, None)
+            self._suppressed_job_ids.discard(waiter.id)
 
     async def _deliver(self, job: AsrJob, transcript: int | None) -> None:
         if self.notify is None:

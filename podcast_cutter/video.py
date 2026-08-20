@@ -856,7 +856,10 @@ async def _render_once(
     ]
     if media is not None:
         cmd += [*media_args, *_protocol_args(media), "-i", str(media)]
-    cmd += ["-filter_complex", graph, "-map", "[out]", "-map", "0:a"]
+    cmd += [
+        "-filter_complex", graph, "-map", "[out]", "-map", "0:a",
+        "-map_metadata", "0",
+    ]
     cmd += [*_ENCODE_ARGS, str(output)]
 
     code, stderr = await _run(cmd, timeout)

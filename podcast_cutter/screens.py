@@ -464,7 +464,9 @@ def result(session: Session, bot_username: str) -> View:
             lang,
             # Attribution: the way back to the whole episode rides on the
             # result screen, which is also what a captionless video note has.
-            episode_url=episode.enclosure_url if episode else None,
+            episode_url=(episode.episode_url or episode.enclosure_url)
+            if episode
+            else None,
             send_as=session.send_as,
             skin=session.skin,
         ),

@@ -17,6 +17,7 @@ snapshot="${1:-latest}"
 target=/backup/.restore-pending
 rm -rf "$target"
 mkdir -p "$target"
+trap 'rm -rf "$target"' EXIT
 restic restore "$snapshot" --host big-one --tag podcast-cutter --target "$target"
 
 manifest="$(find "$target" -type f -name manifest.json -print -quit)"
@@ -24,17 +25,52 @@ manifest="$(find "$target" -type f -name manifest.json -print -quit)"
 root="$(dirname "$manifest")"
 
 format="$(jq -er '.format' "$manifest")"
-[ "$format" = 1 ] || { echo "Unsupported manifest format: $format" >&2; exit 1; }
+[[ "$format" = 1 || "$format" = 2 ]] \
+    || { echo "Unsupported manifest format: $format" >&2; exit 1; }
 jq -e '(.artifacts | index("db")) and (.artifacts | index("repo"))' "$manifest" >/dev/null
 
 db="$root/data/podcast_cutter.db"
 [ -f "$db" ] || { echo 'restored database missing' >&2; exit 1; }
-[ "$(sqlite3 "$db" 'PRAGMA quick_check;')" = ok ] \
-    || { echo 'restored database quick_check failed' >&2; exit 1; }
+if [ "$format" = 2 ]; then
+    : "${DATABASE_KEY:?DATABASE_KEY is required for an encrypted snapshot}"
+    [[ "$DATABASE_KEY" =~ ^[0-9a-fA-F]{64}$ ]] \
+        || { echo 'DATABASE_KEY must be exactly 64 hexadecimal characters' >&2; exit 1; }
+    [ "$(sqlcipher -batch "$db" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+PRAGMA quick_check;
+SQL
+)" = ok ] || { echo 'restored database quick_check failed' >&2; exit 1; }
+    [ -z "$(sqlcipher -batch "$db" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+PRAGMA cipher_integrity_check;
+SQL
+)" ] || { echo 'restored cipher_integrity_check failed' >&2; exit 1; }
+    transcripts="$(sqlcipher -batch "$db" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+SELECT count(*) FROM transcripts;
+SQL
+)"
+    events="$(sqlcipher -batch "$db" <<SQL
+.output /dev/null
+PRAGMA key = "x'$DATABASE_KEY'";
+.output stdout
+SELECT count(*) FROM events;
+SQL
+)"
+else
+    [ "$(sqlite3 "$db" 'PRAGMA quick_check;')" = ok ] \
+        || { echo 'restored database quick_check failed' >&2; exit 1; }
+    transcripts="$(sqlite3 "$db" 'SELECT count(*) FROM transcripts;')"
+    events="$(sqlite3 "$db" 'SELECT count(*) FROM events;')"
+fi
 # The transcripts are the reason this backup exists; a snapshot that restored
 # to an empty table would pass quick_check and still be worthless.
-transcripts="$(sqlite3 "$db" 'SELECT count(*) FROM transcripts;')"
-events="$(sqlite3 "$db" 'SELECT count(*) FROM events;')"
 [ -s "$root/repo/declarative-config.tar.gz" ] && tar -tzf "$root/repo/declarative-config.tar.gz" >/dev/null
 
 jq -n \

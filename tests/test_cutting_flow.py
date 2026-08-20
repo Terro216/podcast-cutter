@@ -276,8 +276,9 @@ class TestDelivery:
         await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
 
         tags = record["metadata"]
-        assert tags["artist"] == "Some Show"
+        assert tags["artist"] == "Some Author"
         assert "10:00" in tags["title"]
+        assert tags["purl"] == ready.episode.episode_url
 
     async def test_shows_a_typing_indicator_while_uploading(
         self, bot, context, ready, monkeypatch
@@ -643,7 +644,7 @@ class TestAttribution:
         await bot.on_callback(update, context)
 
         caption = update.effective_message.sent_audio["caption"]
-        assert ready.episode.enclosure_url in caption
+        assert ready.episode.episode_url in caption
         assert "Full episode" in caption
 
     async def test_the_result_screen_offers_the_full_episode(
@@ -658,7 +659,7 @@ class TestAttribution:
         buttons = [
             b for row in update.markup.inline_keyboard for b in row if b.url
         ]
-        assert any(b.url == ready.episode.enclosure_url for b in buttons)
+        assert any(b.url == ready.episode.episode_url for b in buttons)
 
 
 class TestCancel:

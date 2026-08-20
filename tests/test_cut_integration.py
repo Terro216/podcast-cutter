@@ -83,6 +83,7 @@ def _make_bloated_source(directory: Path, name: str) -> Path:
     padding = []
     for tag in BLOAT_TAGS:
         padding += ["-metadata", f"{tag}={'x' * BLOAT_PER_TAG}"]
+    padding += ["-metadata", "copyright=Copyright Example Publisher"]
 
     subprocess.run(
         [
@@ -412,6 +413,7 @@ class TestMetadata:
         tags = read_tags(result.path)
         for tag in BLOAT_TAGS:
             assert "x" * 100 not in tags.get(tag, ""), f"{tag} leaked from the source"
+        assert tags.get("copyright") == "Copyright Example Publisher"
 
     def test_writes_our_own_tags(self, audio_server, tmp_path):
         result = cut(

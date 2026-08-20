@@ -61,6 +61,13 @@ class NotFoundError(ApiError):
     code = "not_found"
 
 
+class ContentBlockedError(PodcastCutterError):
+    """The operator has disabled processing for this publisher/feed."""
+
+    message_key = "err_content_blocked"
+    code = "content_blocked"
+
+
 class AudioError(PodcastCutterError):
     """Downloading, probing or cutting the audio failed."""
 

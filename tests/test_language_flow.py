@@ -96,7 +96,7 @@ class TestChoice:
         self, bot, context, store
     ):
         await tap(bot, context, f"{kb.LANG_PREFIX}:xx")
-        assert await store.user_language(1) is None
+        assert not await store.user_language(1)
         assert get_session(context.user_data).language == "en"
 
 

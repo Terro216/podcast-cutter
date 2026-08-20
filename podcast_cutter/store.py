@@ -22,14 +22,17 @@ import asyncio
 import contextlib
 import json
 import logging
-import sqlite3
+import sqlite3 as stdlib_sqlite3
 import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlcipher3 import dbapi2 as sqlite3
+
 from .api import Episode
+from .database import key_connection
 from .transcripts import (
     Moment,
     TranscriptBuild,
@@ -44,7 +47,7 @@ from .transcripts import (
 logger = logging.getLogger(__name__)
 
 #: Bumped when the schema changes; see ``_migrate``.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -70,9 +73,11 @@ CREATE INDEX IF NOT EXISTS events_action_at ON events (action, at);
 -- choice: auto-detection from Telegram's language_code is deliberately not
 -- written down, so it keeps following the client until the user decides.
 CREATE TABLE IF NOT EXISTS users (
-    user_id  INTEGER PRIMARY KEY,
-    language TEXT    NOT NULL,
-    at       REAL    NOT NULL
+    user_id           INTEGER PRIMARY KEY,
+    language          TEXT    NOT NULL,
+    at                REAL    NOT NULL,
+    terms_version     TEXT,
+    terms_accepted_at REAL
 );
 
 CREATE TABLE IF NOT EXISTS recents (
@@ -82,6 +87,9 @@ CREATE TABLE IF NOT EXISTS recents (
     feed_title    TEXT    NOT NULL,
     enclosure_url TEXT    NOT NULL,
     duration      INTEGER,
+    feed_id       TEXT    NOT NULL DEFAULT '',
+    author        TEXT    NOT NULL DEFAULT '',
+    episode_url   TEXT    NOT NULL DEFAULT '',
     at            REAL    NOT NULL,
     PRIMARY KEY (user_id, episode_id)
 );
@@ -109,6 +117,7 @@ CREATE TABLE IF NOT EXISTS asr_jobs (
     audio_url     TEXT    NOT NULL,
     episode_title TEXT,
     feed_title    TEXT,
+    feed_id       TEXT    NOT NULL DEFAULT '',
     user_id       INTEGER NOT NULL,
     chat_id       INTEGER NOT NULL,
     -- queued → running → done | failed | abandoned
@@ -139,6 +148,7 @@ CREATE TABLE IF NOT EXISTS transcripts (
     episode_id      TEXT    NOT NULL,
     episode_title   TEXT,
     feed_title      TEXT,
+    feed_id         TEXT    NOT NULL DEFAULT '',
     source_url      TEXT    NOT NULL,
     source_sha256   TEXT    NOT NULL,
     source_bytes    INTEGER,
@@ -310,6 +320,7 @@ class AsrJob:
     audio_url: str
     episode_title: str | None
     feed_title: str | None
+    feed_id: str
     user_id: int
     chat_id: int
     attempts: int
@@ -340,6 +351,7 @@ def _as_job(row: sqlite3.Row) -> AsrJob:
         audio_url=row["audio_url"],
         episode_title=row["episode_title"],
         feed_title=row["feed_title"],
+        feed_id=row["feed_id"],
         user_id=int(row["user_id"]),
         chat_id=int(row["chat_id"]),
         attempts=int(row["attempts"]),
@@ -382,8 +394,9 @@ class Store:
     both sufficient and much simpler than an async driver.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, key: str = "") -> None:
         self.path = path
+        self.key = key
         self._lock = threading.Lock()
         self._connection: sqlite3.Connection | None = None
 
@@ -396,7 +409,16 @@ class Store:
         connection = sqlite3.connect(
             self.path, check_same_thread=False, timeout=10.0
         )
+        if self.key:
+            try:
+                key_connection(connection, self.key)
+            except Exception:
+                connection.close()
+                raise
         connection.row_factory = sqlite3.Row
+        # SQLCipher encrypts the main DB and WAL. Keep SQLite's transient sort
+        # and temp pages in RAM so it never creates an unkeyed temp database.
+        connection.execute("PRAGMA temp_store=MEMORY")
         # WAL survives an unclean shutdown and lets reads proceed during writes.
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
@@ -407,7 +429,17 @@ class Store:
         self._migrate(connection)
         connection.commit()
         self._connection = connection
-        logger.info("Store ready at %s", self.path)
+        # SQLCipher creates the encrypted WAL beside the database. Keep both
+        # private as defense in depth around encryption at rest.
+        sidecars = (Path(f"{self.path}-wal"), Path(f"{self.path}-shm"))
+        for candidate in (self.path, *sidecars):
+            with contextlib.suppress(OSError):
+                candidate.chmod(0o600)
+        logger.info(
+            "Store ready at %s (%s)",
+            self.path,
+            "SQLCipher" if self.key else "plaintext test mode",
+        )
 
     @staticmethod
     def _migrate(connection: sqlite3.Connection) -> None:
@@ -433,13 +465,56 @@ class Store:
             return
 
         if 0 < current < SCHEMA_VERSION:
-            # v3 gave windows a lemma column; v4 gave them vectors and the
-            # transcript row an embedding_model. Either way the answer is the
-            # same: derived tables are rebuilt, not migrated.
-            logger.info("Rebuilding transcript tables for schema %s", SCHEMA_VERSION)
-            for table in _DERIVED_TABLES:
-                connection.execute(f"DROP TABLE IF EXISTS {table}")
-            connection.executescript(_SCHEMA)
+            # v5 adds legal acceptance and stable feed ids to durable rows.
+            # Check first so an interrupted migration can safely be retried.
+            columns = {
+                table: {
+                    row[1]
+                    for row in connection.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()
+                }
+                for table in ("users", "recents", "asr_jobs", "transcripts")
+            }
+            additions = {
+                "users": (
+                    ("terms_version", "TEXT"),
+                    ("terms_accepted_at", "REAL"),
+                ),
+                "recents": (
+                    ("feed_id", "TEXT NOT NULL DEFAULT ''"),
+                    ("author", "TEXT NOT NULL DEFAULT ''"),
+                    ("episode_url", "TEXT NOT NULL DEFAULT ''"),
+                ),
+                "asr_jobs": (
+                    ("feed_id", "TEXT NOT NULL DEFAULT ''"),
+                ),
+                "transcripts": (
+                    ("feed_id", "TEXT NOT NULL DEFAULT ''"),
+                ),
+            }
+            for table, table_additions in additions.items():
+                for name, declaration in table_additions:
+                    if name not in columns[table]:
+                        connection.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+                        )
+            # Earlier builds journalled raw directory and transcript-search
+            # phrases. They are not needed for aggregate reliability stats.
+            connection.execute(
+                "UPDATE events SET detail = NULL WHERE action IN "
+                "('search', 'person', 'search_audio', 'inline')"
+            )
+            if current < 4:
+                # v3 gave windows a lemma column; v4 gave them vectors and the
+                # transcript row an embedding_model. Those derived shapes are
+                # rebuilt. v4 -> v5 is additive and preserves transcripts.
+                logger.info(
+                    "Rebuilding transcript tables for schema %s", SCHEMA_VERSION
+                )
+                for table in _DERIVED_TABLES:
+                    connection.execute(f"DROP TABLE IF EXISTS {table}")
+                connection.executescript(_SCHEMA)
 
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -512,7 +587,7 @@ class Store:
             rows = await self._run(
                 "DELETE FROM events WHERE at < ? RETURNING id", (cutoff,)
             )
-        except sqlite3.OperationalError:
+        except (sqlite3.OperationalError, stdlib_sqlite3.OperationalError):
             # RETURNING needs SQLite 3.35; fall back to counting first.
             counted = await self._run(
                 "SELECT count(*) AS n FROM events WHERE at < ?", (cutoff,)
@@ -547,6 +622,28 @@ class Store:
         )
         return int(rows[0]["id"]) if rows else None
 
+    async def delete_transcripts_for_feeds(
+        self, feed_ids: Iterable[str]
+    ) -> int:
+        """Remove indexed content covered by the active takedown list."""
+        ids = [str(feed_id) for feed_id in feed_ids if feed_id]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        rows = await self._run(
+            f"DELETE FROM transcripts WHERE feed_id IN ({placeholders}) "
+            "RETURNING id",
+            ids,
+        )
+        return len(rows)
+
+    async def delete_transcripts_for_episode(self, episode_id: str) -> int:
+        rows = await self._run(
+            "DELETE FROM transcripts WHERE episode_id = ? RETURNING id",
+            (episode_id,),
+        )
+        return len(rows)
+
     def _save_transcript(
         self,
         key: TranscriptKey,
@@ -575,7 +672,7 @@ class Store:
             return self._insert_transcript(
                 key, meta, build, vectors, embedding_model
             )
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError, stdlib_sqlite3.IntegrityError):
             # Two episode ids can serve identical bytes — a show re-published,
             # or a feed listing an episode twice — and `find_transcript` only
             # rules that out at the moment it is asked, twenty minutes before
@@ -627,17 +724,18 @@ class Store:
                 cursor = connection.execute(
                     """
                     INSERT INTO transcripts (
-                        episode_id, episode_title, feed_title, source_url,
+                        episode_id, episode_title, feed_title, feed_id, source_url,
                         source_sha256, source_bytes, duration_s, language,
                         asr_backend, asr_model, chunker_version,
                         normalizer_version, embedding_model, quarantined,
                         ms, at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         key.episode_id,
                         _clip(meta.get("episode_title")),
                         _clip(meta.get("feed_title")),
+                        str(meta.get("feed_id") or ""),
                         meta.get("source_url", ""),
                         key.source_sha256,
                         meta.get("source_bytes"),
@@ -830,9 +928,9 @@ class Store:
                     """,
                     (match, transcript_id, limit),
                 )
-            except sqlite3.OperationalError:
+            except (sqlite3.OperationalError, stdlib_sqlite3.OperationalError):
                 # A query FTS5 cannot parse is a user typing, not a bug.
-                logger.info("Unparseable search query: %r", query)
+                logger.info("FTS5 rejected a user search query")
                 return []
 
             if rows:
@@ -947,9 +1045,9 @@ class Store:
         rows = await self._run(
             """
             INSERT INTO asr_jobs (
-                episode_id, audio_url, episode_title, feed_title,
+                episode_id, audio_url, episode_title, feed_title, feed_id,
                 user_id, chat_id, state, at
-            ) VALUES (?,?,?,?,?,?, 'queued', ?)
+            ) VALUES (?,?,?,?,?,?,?, 'queued', ?)
             RETURNING id
             """,
             (
@@ -957,6 +1055,7 @@ class Store:
                 episode.enclosure_url,
                 _clip(episode.title),
                 _clip(episode.feed_title),
+                episode.feed_id,
                 user_id,
                 chat_id,
                 time.time(),
@@ -1082,6 +1181,18 @@ class Store:
         )
         return len(rows)
 
+    async def purge_asr_jobs_hours(self, older_than_hours: int) -> int:
+        """Drop terminal queue rows after their short diagnostic window."""
+        if older_than_hours <= 0:
+            return 0
+        cutoff = time.time() - older_than_hours * 3600
+        rows = await self._run(
+            "DELETE FROM asr_jobs WHERE state NOT IN ('queued', 'running') "
+            "AND finished_at < ? RETURNING id",
+            (cutoff,),
+        )
+        return len(rows)
+
     # ------------------------------------------------------------------
     # Users
     # ------------------------------------------------------------------
@@ -1096,6 +1207,30 @@ class Store:
             logger.exception("Could not read a user's language")
             return None
         return rows[0]["language"] if rows else None
+
+    async def terms_accepted(self, user_id: int, version: str) -> bool:
+        rows = await self._run(
+            "SELECT 1 FROM users WHERE user_id = ? AND terms_version = ?",
+            (user_id, version),
+        )
+        return bool(rows)
+
+    async def accept_terms(
+        self, user_id: int, language: str, version: str
+    ) -> None:
+        now = time.time()
+        await self._run(
+            """
+            INSERT INTO users (
+                user_id, language, at, terms_version, terms_accepted_at
+            ) VALUES (?,?,?,?,?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                at = excluded.at,
+                terms_version = excluded.terms_version,
+                terms_accepted_at = excluded.terms_accepted_at
+            """,
+            (user_id, language, now, version, now),
+        )
 
     async def set_user_language(self, user_id: int, language: str) -> None:
         """Record an explicit language choice. Never raises."""
@@ -1122,9 +1257,17 @@ class Store:
                 """
                 INSERT INTO recents (
                     user_id, episode_id, title, feed_title, enclosure_url,
-                    duration, at
-                ) VALUES (?,?,?,?,?,?,?)
-                ON CONFLICT (user_id, episode_id) DO UPDATE SET at = excluded.at
+                    duration, feed_id, author, episode_url, at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT (user_id, episode_id) DO UPDATE SET
+                    title = excluded.title,
+                    feed_title = excluded.feed_title,
+                    enclosure_url = excluded.enclosure_url,
+                    duration = excluded.duration,
+                    feed_id = excluded.feed_id,
+                    author = excluded.author,
+                    episode_url = excluded.episode_url,
+                    at = excluded.at
                 """,
                 (
                     user_id,
@@ -1133,6 +1276,9 @@ class Store:
                     _clip(episode.feed_title),
                     episode.enclosure_url,
                     episode.duration,
+                    episode.feed_id,
+                    episode.author,
+                    episode.episode_url,
                     time.time(),
                 ),
             )
@@ -1144,7 +1290,8 @@ class Store:
         try:
             rows = await self._run(
                 """
-                SELECT episode_id, title, feed_title, enclosure_url, duration
+                SELECT episode_id, title, feed_title, enclosure_url, duration,
+                       feed_id, author, episode_url
                 FROM recents WHERE user_id = ? ORDER BY at DESC LIMIT ?
                 """,
                 (user_id, limit),
@@ -1160,6 +1307,9 @@ class Store:
                 feed_title=row["feed_title"],
                 enclosure_url=row["enclosure_url"],
                 duration=row["duration"],
+                feed_id=row["feed_id"],
+                author=row["author"],
+                episode_url=row["episode_url"],
             )
             for row in rows
         ]
@@ -1179,6 +1329,55 @@ class Store:
             )
         except Exception:
             logger.exception("Could not trim the recent list")
+
+    async def user_data(self, user_id: int) -> dict:
+        """A compact export of every user-linked durable row."""
+        users = await self._run(
+            "SELECT language, terms_version, terms_accepted_at, at "
+            "FROM users WHERE user_id = ?",
+            (user_id,),
+        )
+        recent = await self._run(
+            "SELECT episode_id, title, feed_title, at FROM recents "
+            "WHERE user_id = ? ORDER BY at DESC",
+            (user_id,),
+        )
+        counts = {}
+        for table in ("events", "asr_jobs"):
+            row = await self._run(
+                f"SELECT count(*) AS n FROM {table} WHERE user_id = ?",
+                (user_id,),
+            )
+            counts[table] = int(row[0]["n"])
+        return {
+            "profile": dict(users[0]) if users else None,
+            "recents": [dict(row) for row in recent],
+            **counts,
+        }
+
+    async def delete_user_data(self, user_id: int) -> dict[str, int]:
+        """Delete every durable row directly associated with a Telegram id."""
+        removed = {}
+        for table in ("events", "recents", "asr_jobs", "users"):
+            rows = await self._run(
+                f"DELETE FROM {table} WHERE user_id = ? RETURNING 1",
+                (user_id,),
+            )
+            removed[table] = len(rows)
+        return removed
+
+    async def purge_inactive_user_data(self, older_than_days: int) -> int:
+        """Expire profiles and recents for users inactive past the policy."""
+        if older_than_days <= 0:
+            return 0
+        cutoff = time.time() - older_than_days * 86400
+        recents = await self._run(
+            "DELETE FROM recents WHERE at < ? RETURNING 1", (cutoff,)
+        )
+        users = await self._run(
+            "DELETE FROM users WHERE at < ? RETURNING 1", (cutoff,)
+        )
+        return len(recents) + len(users)
 
     # ------------------------------------------------------------------
     # Aggregates

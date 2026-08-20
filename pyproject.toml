@@ -21,6 +21,8 @@ python-telegram-bot = { extras = [
 # directly for the Podcast Index client and episode downloads.
 httpx = ">=0.27,<1.0"
 python-dotenv = "^1.0.1"
+# DB-API-compatible bindings with statically linked SQLCipher.
+sqlcipher3 = "^0.6.2"
 # Speech recognition, for finding a moment by what was said rather than by
 # timestamp. CTranslate2 underneath, CPU-only here: the production host has no
 # GPU and no AVX2, where `base` measured at RTF 0.07 and `small` at 0.23.

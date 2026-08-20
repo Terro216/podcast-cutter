@@ -38,7 +38,12 @@ from . import screens, video
 from .api import Episode, PodcastIndexClient
 from .audio import Interval, cut_episode, parse_moment_or_range
 from .config import Settings
-from .errors import NotFoundError, PodcastCutterError, TooLargeError
+from .errors import (
+    ContentBlockedError,
+    NotFoundError,
+    PodcastCutterError,
+    TooLargeError,
+)
 from .i18n import (
     DEFAULT_LANGUAGE,
     LANGUAGES,
@@ -309,6 +314,10 @@ class PodcastCutterBot:
         #: Refusals are throttled separately: a flood of over-budget messages
         #: must not become a flood of scolding replies.
         self._limit_notice = Budget(1, 30)
+        #: Fallback only for tests or an intentionally stateless embedding.
+        #: Production always has Store and persists versioned acceptance.
+        self._accepted_users: set[int] = set()
+        self._deleted_users: set[int] = set()
 
     def _budget_allows(self, budget: Budget, update: Update) -> bool:
         """Charge one event, unless the user is an admin — admins are the
@@ -451,18 +460,93 @@ class PodcastCutterBot:
         session.language_loaded = True
         session.language = await self._language_for_user(update.effective_user)
 
+    @property
+    def terms_url(self) -> str:
+        return f"{self.settings.legal_base_url}/TERMS.md"
+
+    @property
+    def privacy_url(self) -> str:
+        return f"{self.settings.legal_base_url}/PRIVACY.md"
+
+    async def _terms_accepted(self, update: Update) -> bool:
+        user_id = self._user_id(update)
+        if user_id is None:
+            return False
+        if self.store is None:
+            return user_id in self._accepted_users
+        return await self.store.terms_accepted(
+            user_id, self.settings.terms_version
+        )
+
+    async def _show_terms(self, update: Update, session: Session) -> None:
+        await self.show(
+            update,
+            View(
+                t(
+                    session.language,
+                    "terms_prompt",
+                    terms_url=html.escape(self.terms_url, quote=True),
+                    privacy_url=html.escape(self.privacy_url, quote=True),
+                    version=esc(self.settings.terms_version),
+                ),
+                kb.terms_keyboard(session.language),
+            ),
+        )
+
+    async def _require_terms(self, update: Update, session: Session) -> bool:
+        if await self._terms_accepted(update):
+            return True
+        await self._show_terms(update, session)
+        return False
+
+    async def _resolve_episode(self, episode: Episode) -> Episode:
+        """Refresh old persisted episodes that predate stable feed ids."""
+        if episode.feed_id:
+            return episode
+        try:
+            return await self.client.get_episode(episode.id)
+        except PodcastCutterError:
+            return episode
+
+    async def _require_episode_allowed(self, episode: Episode) -> None:
+        if self.settings.is_podcast_blocked(episode.feed_id):
+            if self.store is not None:
+                await self.store.delete_transcripts_for_episode(episode.id)
+            raise ContentBlockedError
+        # Once a blocklist exists, an unidentifiable episode must not become a
+        # bypass through an old Recent row or malformed directory response.
+        if self.settings.podcast_blocklist and not episode.feed_id:
+            raise ContentBlockedError
+
+    def _allowed_feeds(self, feeds):
+        return [
+            feed
+            for feed in feeds
+            if not self.settings.is_podcast_blocked(feed.id)
+        ]
+
+    def _allowed_episodes(self, episodes):
+        return [
+            episode
+            for episode in episodes
+            if not self.settings.is_podcast_blocked(episode.feed_id)
+        ]
+
     async def _log(self, update: Update, action: str, **fields) -> None:
         """Append to the journal, if one is configured."""
-        if self.store is None:
+        user_id = self._user_id(update)
+        if self.store is None or user_id in self._deleted_users:
             return
         await self.store.record(
-            Event(action=action, user_id=self._user_id(update), **fields)
+            Event(action=action, user_id=user_id, **fields)
         )
 
     async def _select_episode(
         self, update: Update, session: Session, episode: Episode
     ) -> None:
         """Open an episode and remember it for the Recent list."""
+        episode = await self._resolve_episode(episode)
+        await self._require_episode_allowed(episode)
         session.select_episode(episode, self.settings.default_clip_seconds)
         user_id = self._user_id(update)
         if self.store is not None and user_id is not None:
@@ -480,6 +564,10 @@ class PodcastCutterBot:
         await self._ensure_language(update, session)
 
         payload = context.args[0] if context.args else ""
+        if not await self._terms_accepted(update):
+            session.pending_start_payload = payload
+            await self._show_terms(update, session)
+            return
         if payload.startswith(DEEP_LINK_EPISODE):
             await self._open_shared_episode(
                 update, session, payload[len(DEEP_LINK_EPISODE) :]
@@ -504,6 +592,7 @@ class PodcastCutterBot:
         """Follow a ``t.me/bot?start=ep_…`` link straight to the clip editor."""
         try:
             episode = await self.client.get_episode(episode_id)
+            await self._select_episode(update, session, episode)
         except PodcastCutterError as exc:
             await update.effective_message.reply_text(
                 f"⚠️ {esc(exc.user_message(session.language))}",
@@ -514,7 +603,6 @@ class PodcastCutterBot:
             await self.render(update, session)
             return
 
-        await self._select_episode(update, session, episode)
         session.awaiting = Awaiting.INTERVAL
         session.go(Screen.INTERVAL)
         await update.effective_message.reply_text(
@@ -524,7 +612,7 @@ class PodcastCutterBot:
         await self.render(update, session)
         await self._log(update, "deep_link", episode_id=episode.id)
 
-    def command(self, action: MenuAction):
+    def command(self, action: MenuAction, *, requires_terms: bool = True):
         """Adapt a session action into a plain command handler.
 
         Errors surface as a message with a retry, never as a silent no-op.
@@ -534,6 +622,8 @@ class PodcastCutterBot:
             update: Update, context: ContextTypes.DEFAULT_TYPE
         ) -> None:
             session = await self.session_for(update, context)
+            if requires_terms and not await self._require_terms(update, session):
+                return
             try:
                 await action(update, session)
             except PodcastCutterError as exc:
@@ -543,6 +633,93 @@ class PodcastCutterBot:
 
         handler.__name__ = getattr(action, "__name__", "command")
         return handler
+
+    async def cmd_terms(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        session = await self.session_for(update, context)
+        await update.effective_message.reply_text(
+            t(session.language, "terms_text", url=self.terms_url),
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True},
+        )
+
+    async def cmd_privacy(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        session = await self.session_for(update, context)
+        await update.effective_message.reply_text(
+            t(
+                session.language,
+                "privacy_text",
+                asr_hours=self.settings.asr_job_retention_hours,
+                user_days=self.settings.user_data_retention_days,
+                url=self.privacy_url,
+            ),
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True},
+        )
+
+    async def cmd_mydata(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        session = await self.session_for(update, context)
+        user_id = self._user_id(update)
+        if self.store is None or user_id is None:
+            text = t(session.language, "mydata_empty")
+        else:
+            data = await self.store.user_data(user_id)
+            profile = data["profile"] or {}
+            if not profile and not data["recents"] and not data["events"]:
+                text = t(session.language, "mydata_empty")
+            else:
+                text = t(
+                    session.language,
+                    "mydata_text",
+                    language=esc(profile.get("language") or "—"),
+                    terms=esc(profile.get("terms_version") or "—"),
+                    recents=len(data["recents"]),
+                    events=data["events"],
+                    asr_jobs=data["asr_jobs"],
+                )
+        await update.effective_message.reply_text(text, parse_mode="HTML")
+
+    async def cmd_delete_me(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        session = await self.session_for(update, context)
+        confirmed = bool(context.args) and context.args[0].lower() == "confirm"
+        if not confirmed:
+            await update.effective_message.reply_text(
+                t(session.language, "delete_me_confirm"), parse_mode="HTML"
+            )
+            return
+        user_id = self._user_id(update)
+        if user_id is not None:
+            if self.listening is not None:
+                await self.listening.forget_user(user_id)
+            if self.store is not None:
+                await self.store.delete_user_data(user_id)
+            self._accepted_users.discard(user_id)
+            self._deleted_users.add(user_id)
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            t(session.language, "delete_me_done"), parse_mode="HTML"
+        )
+
+    async def cmd_copyright(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        session = await self.session_for(update, context)
+        await update.effective_message.reply_text(
+            t(
+                session.language,
+                "copyright_text",
+                contact=esc(self.settings.legal_contact),
+            ),
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True},
+        )
 
     async def act_help(self, update: Update, session: Session) -> None:
         await update.effective_message.reply_text(
@@ -637,7 +814,9 @@ class PodcastCutterBot:
         await self.show(
             update, screens.working(t(session.language, "working_trending"))
         )
-        feeds = await self.client.trending_feeds(20)
+        feeds = self._allowed_feeds(await self.client.trending_feeds(20))
+        if not feeds:
+            raise NotFoundError("err_no_trending")
         session.remember_feeds(feeds)
         session.awaiting = Awaiting.NOTHING
         session.go(Screen.TRENDING)
@@ -649,6 +828,7 @@ class PodcastCutterBot:
             update, screens.working(t(session.language, "working_surprise"))
         )
         episode = await self.client.random_episode()
+        await self._require_episode_allowed(episode)
         await self._select_episode(update, session, episode)
         session.awaiting = Awaiting.INTERVAL
         session.go(Screen.INTERVAL)
@@ -680,6 +860,9 @@ class PodcastCutterBot:
         )
 
         feeds, has_next = await self.client.search_feeds(query, page)
+        feeds = self._allowed_feeds(feeds)
+        if not feeds:
+            raise NotFoundError("err_no_podcasts", query=one_line(query))
         session.remember_feeds(feeds, has_next)
         session.awaiting = Awaiting.NOTHING
 
@@ -695,7 +878,7 @@ class PodcastCutterBot:
             session.go(Screen.FEEDS, page)
         await self.render(update, session)
         if page == 1:
-            await self._log(update, "search", detail=query)
+            await self._log(update, "search")
 
     async def _search_people(
         self, update: Update, session: Session, query: str
@@ -708,11 +891,16 @@ class PodcastCutterBot:
             ),
         )
 
-        session.set_episodes(await self.client.search_episodes_by_person(query))
+        episodes = self._allowed_episodes(
+            await self.client.search_episodes_by_person(query)
+        )
+        if not episodes:
+            raise NotFoundError("err_no_person", query=one_line(query))
+        session.set_episodes(episodes)
         session.awaiting = Awaiting.NOTHING
         session.go(Screen.GLOBAL)
         await self.render(update, session)
-        await self._log(update, "person", detail=query)
+        await self._log(update, "person")
 
     async def _load_episodes(self, update: Update, session: Session) -> None:
         if session.feed is None:
@@ -723,7 +911,12 @@ class PodcastCutterBot:
             await self.show(
                 update, screens.working(t(session.language, "working_episodes"))
             )
-            session.set_episodes(await self.client.list_episodes(session.feed.id))
+            episodes = self._allowed_episodes(
+                await self.client.list_episodes(session.feed.id)
+            )
+            if not episodes:
+                raise NotFoundError("err_no_episodes")
+            session.set_episodes(episodes)
 
         session.awaiting = Awaiting.NOTHING
         session.go(Screen.EPISODES)
@@ -748,6 +941,7 @@ class PodcastCutterBot:
         if session.episode is None:
             await self._stale(update, session)
             return
+        await self._require_episode_allowed(session.episode)
 
         transcript = await self.indexer.store.transcript_for_episode(
             session.episode.id
@@ -774,6 +968,7 @@ class PodcastCutterBot:
         session.phrase = phrase
         user_id = update.effective_user.id if update.effective_user else 0
         episode = session.episode
+        await self._require_episode_allowed(episode)
 
         if user_id in self._busy_users:
             await self._show_failure(
@@ -873,6 +1068,7 @@ class PodcastCutterBot:
                     meta={
                         "episode_title": episode.title,
                         "feed_title": episode.feed_title,
+                        "feed_id": episode.feed_id,
                     },
                 )
             else:
@@ -893,7 +1089,6 @@ class PodcastCutterBot:
                 episode_id=episode.id,
                 feed_title=episode.feed_title,
                 episode_title=episode.title,
-                detail=phrase[:100],
                 ms=int((time.monotonic() - started) * 1000),
             )
 
@@ -954,8 +1149,9 @@ class PodcastCutterBot:
             # where a finished transcript reaches nobody, and silence here
             # would make that indistinguishable from a queue that never ran.
             logger.warning(
-                "Could not tell %s that %s is ready: %s", job.chat_id,
-                job.episode_id, exc,
+                "Could not deliver the ready notice for episode %s: %s",
+                job.episode_id,
+                exc,
             )
         if self.store is not None:
             await self.store.record(
@@ -991,6 +1187,8 @@ class PodcastCutterBot:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         session = await self.session_for(update, context)
+        if not await self._require_terms(update, session):
+            return
         text = one_line(update.effective_message.text)
 
         if not text:
@@ -1076,17 +1274,23 @@ class PodcastCutterBot:
         if data == kb.NAV_NOOP:
             return
 
+        session = await self.session_for(update, context)
+        prefix, value = kb.parse_callback(data)
+        if prefix == kb.LEGAL_PREFIX:
+            await self._route_legal(update, session, value)
+            return
+
         if not self._budget_allows(self._input_budget, update):
             # The spinner is already answered; a refusal here is silence plus
             # a journal row, which is exactly what a button-masher deserves.
             await self._log(update, "limit", outcome="input")
             return
 
-        session = await self.session_for(update, context)
         # A button press lands on a rendered screen, so no notice is owed —
         # but the flag must not survive to decorate some unrelated later text.
         session.was_reset = False
-        prefix, value = kb.parse_callback(data)
+        if not await self._require_terms(update, session):
+            return
 
         try:
             await self._route_callback(update, session, data, prefix, value)
@@ -1094,6 +1298,43 @@ class PodcastCutterBot:
             await self._show_failure(
                 update, session, exc.user_message(session.language)
             )
+
+    async def _route_legal(
+        self, update: Update, session: Session, value: str
+    ) -> None:
+        if value == "decline":
+            session.pending_start_payload = ""
+            await self.show(
+                update, View(t(session.language, "terms_declined"), None)
+            )
+            return
+        if value != "accept":
+            await self._show_terms(update, session)
+            return
+
+        user_id = self._user_id(update)
+        if user_id is None:
+            await self._show_terms(update, session)
+            return
+        if self.store is None:
+            self._accepted_users.add(user_id)
+        else:
+            await self.store.accept_terms(
+                user_id, session.language, self.settings.terms_version
+            )
+        self._deleted_users.discard(user_id)
+        await update.effective_message.reply_text(
+            t(session.language, "terms_accepted"),
+            reply_markup=kb.main_menu(session.language),
+        )
+        payload, session.pending_start_payload = session.pending_start_payload, ""
+        if payload.startswith(DEEP_LINK_EPISODE):
+            await self._open_shared_episode(
+                update, session, payload[len(DEEP_LINK_EPISODE) :]
+            )
+            return
+        session.go(Screen.MENU)
+        await self.render(update, session)
 
     async def _route_callback(
         self, update: Update, session: Session, data: str, prefix: str, value: str
@@ -1313,17 +1554,17 @@ class PodcastCutterBot:
 
     @staticmethod
     def _id3_tags(episode: Episode, interval: Interval) -> dict[str, str]:
-        """Tags written onto the cut, replacing the source's.
-
-        The source tags are dropped wholesale because feeds ship huge embedded
-        artwork, so the clip needs its own or it arrives untitled.
-        """
+        """Source-preserving tags added to the cut."""
         span = f"{format_duration(interval.start)}–{format_duration(interval.end)}"
+        source = episode.episode_url or episode.enclosure_url
         return {
             "title": truncate(one_line(episode.title), 120) + f" [{span}]",
-            "artist": truncate(one_line(episode.feed_title), 120),
+            "artist": truncate(
+                one_line(episode.author or episode.feed_title), 120
+            ),
             "album": truncate(one_line(episode.feed_title), 120),
-            "comment": "Cut with @podcast_cutter_bot",
+            "comment": f"Source: {source} · Cut with @podcast_cutter_bot",
+            "purl": source,
         }
 
     async def _start_cut(self, update: Update, session: Session) -> None:
@@ -1331,6 +1572,7 @@ class PodcastCutterBot:
         if episode is None:
             await self._stale(update, session)
             return
+        await self._require_episode_allowed(episode)
 
         user = update.effective_user
         user_id = user.id if user else 0
@@ -1556,6 +1798,7 @@ class PodcastCutterBot:
         if episode is None or session.send_as not in (FORMAT_NOTE, FORMAT_VIDEO):
             await self._stale(update, session)
             return
+        await self._require_episode_allowed(episode)
 
         user = update.effective_user
         user_id = user.id if user else 0
@@ -1880,12 +2123,15 @@ class PodcastCutterBot:
     ) -> None:
         # The last line is the attribution: a clip is a citation, and a
         # citation names its source in the same message (ROADMAP §13.4).
-        source = html.escape(episode.enclosure_url, quote=True)
+        source = html.escape(
+            episode.episode_url or episode.enclosure_url, quote=True
+        )
         caption = (
             f"<b>{esc(truncate(episode.title, 90))}</b>\n"
             f"{esc(truncate(episode.feed_title, 60))} · "
             f"{format_duration(interval.start)}–{format_duration(interval.end)}\n"
             f'<a href="{source}">{t(session.language, "full_episode_link")}</a>'
+            " · <a href=\"https://podcastindex.org\">Podcast Index</a>"
         )
         timeouts = {
             "read_timeout": self.settings.upload_timeout,
@@ -1966,6 +2212,15 @@ class PodcastCutterBot:
             text=t(lang, "inline_open_bot"), start_parameter="menu"
         )
 
+        if not await self._terms_accepted(update):
+            await inline.answer(
+                [],
+                cache_time=INLINE_EMPTY_CACHE_SECONDS,
+                is_personal=True,
+                button=open_button,
+            )
+            return
+
         if len(query) < 2:
             await inline.answer(
                 [],
@@ -2007,9 +2262,10 @@ class PodcastCutterBot:
                 await inline.answer(
                     [], cache_time=INLINE_EMPTY_CACHE_SECONDS, button=open_button
                 )
-            await self._log(update, "inline", detail=query, outcome=exc.code)
+            await self._log(update, "inline", outcome=exc.code)
             return
 
+        episodes = self._allowed_episodes(episodes)
         results = [
             self._inline_result(episode, lang)
             for episode in episodes[:INLINE_RESULT_LIMIT]
@@ -2019,7 +2275,7 @@ class PodcastCutterBot:
                 results, cache_time=INLINE_CACHE_SECONDS, button=open_button
             )
         await self._log(
-            update, "inline", detail=query, outcome="ok", size_bytes=len(results)
+            update, "inline", outcome="ok", size_bytes=len(results)
         )
 
     async def _inline_episodes(self, query: str) -> list[Episode]:

@@ -1,6 +1,14 @@
+import httpx
 import pytest
 
-from podcast_cutter.api import Episode, Feed, PodcastIndexClient
+from podcast_cutter.api import (
+    CACHE_SECONDS,
+    Episode,
+    Feed,
+    PodcastIndexClient,
+    _cache_seconds,
+    _Fetched,
+)
 from podcast_cutter.config import Settings
 from podcast_cutter.errors import NotFoundError
 
@@ -21,7 +29,7 @@ class TestCaching:
 
         async def fake_fetch(path, params):
             calls.append(path)
-            return payload
+            return _Fetched(payload, CACHE_SECONDS)
 
         client._fetch = fake_fetch
         return client, calls
@@ -42,6 +50,21 @@ class TestCaching:
         await client.search_feeds("radiolab")
         await client.search_feeds("serial")
         assert len(calls) == 2
+
+    def test_no_header_means_no_cache_permission(self):
+        assert _cache_seconds(httpx.Headers()) == 0
+
+    def test_honours_no_store(self):
+        headers = httpx.Headers({"Cache-Control": "public, max-age=300, no-store"})
+        assert _cache_seconds(headers) == 0
+
+    def test_honours_and_caps_max_age(self):
+        assert _cache_seconds(
+            httpx.Headers({"Cache-Control": "public, max-age=120", "Age": "20"})
+        ) == 100
+        assert _cache_seconds(
+            httpx.Headers({"Cache-Control": "max-age=9999"})
+        ) == CACHE_SECONDS
 
     async def test_random_is_never_cached(self, settings):
         # Its whole point is a different answer each time.
@@ -104,6 +127,9 @@ class TestEpisodeParsing:
                 "id": 7,
                 "title": "Ep 7",
                 "feedTitle": "Show",
+                "feedId": 42,
+                "feedAuthor": "Publisher",
+                "link": "https://example.com/episodes/7",
                 "enclosureUrl": "https://cdn.example.com/7.mp3",
                 "duration": 3600,
             }
@@ -111,6 +137,9 @@ class TestEpisodeParsing:
         assert parsed.id == "7"
         assert parsed.enclosure_url == "https://cdn.example.com/7.mp3"
         assert parsed.duration == 3600
+        assert parsed.feed_id == "42"
+        assert parsed.author == "Publisher"
+        assert parsed.episode_url == "https://example.com/episodes/7"
 
     @pytest.mark.parametrize(
         "raw",

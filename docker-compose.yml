@@ -81,8 +81,9 @@ services:
   # Offsite backup to Yandex Disk, the same restic+rclone shape as the cinemarr
   # and vaultwarden stacks. Behind a profile and depended on by nothing, so it
   # is inert unless run explicitly (`scripts/backup.sh`) or by the systemd
-  # timers in deploy/systemd. It reads the data volume read-only, mounts a host
-  # staging dir and its own rclone config, and never gets the Docker socket.
+  # timers in deploy/systemd. SQLCipher's CLI needs a writable mount for SQLite
+  # WAL locks even though the script only reads the source and writes its
+  # export to staging. It never gets the Docker socket.
   backup:
     profiles: ["backup"]
     build:
@@ -96,7 +97,7 @@ services:
     environment:
       - TZ=${TZ:-Europe/Moscow}
     volumes:
-      - podcast-data:/sources/data:ro
+      - podcast-data:/sources/data:rw
       - ${BACKUP_STAGE:-/srv/podcast-cutter-backup}:/backup
       # rclone persists refreshed OAuth tokens, so this is read-write. Its own
       # copy — tying the offsite path to another stack's volume is exactly the
