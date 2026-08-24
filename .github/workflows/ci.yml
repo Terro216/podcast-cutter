@@ -36,13 +36,17 @@ jobs:
         # The SSRF lock (`-max_redirects 0` in audio.py) only exists in
         # ffmpeg >= 7.1; production runs 7.1.x, while Ubuntu 24.04's apt
         # ffmpeg is 6.1 and fails every remote probe with "Option not
-        # found". Pin CI to the same 7.1 line via BtbN's static builds.
+        # found". Pin CI to the same 7.1 line via BtbN's static builds. Use
+        # an immutable release asset: the moving `latest` release no longer
+        # carries 7.1 builds.
         run: |
           curl -fsSL -o /tmp/ffmpeg.tar.xz \
-            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-16-13-00/ffmpeg-n7.1.5-16-g9a4bb2c579-linux64-gpl-7.1.tar.xz
+          echo "21a55e0ad14423572523c04425fd2f7a03bee0436d25a36e629362b99e45fb00  /tmp/ffmpeg.tar.xz" \
+            | sha256sum --check --strict
           tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
-          sudo install /tmp/ffmpeg-n7.1-latest-linux64-gpl-7.1/bin/ffmpeg \
-            /tmp/ffmpeg-n7.1-latest-linux64-gpl-7.1/bin/ffprobe /usr/local/bin/
+          sudo install /tmp/ffmpeg-n7.1.5-16-g9a4bb2c579-linux64-gpl-7.1/bin/ffmpeg \
+            /tmp/ffmpeg-n7.1.5-16-g9a4bb2c579-linux64-gpl-7.1/bin/ffprobe /usr/local/bin/
           ffprobe -version | head -1
 
       - name: Install Poetry
