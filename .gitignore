@@ -166,3 +166,7 @@ cython_debug/
 # Never let a copy of the secrets slip in
 .env*
 !.env.example
+
+# Local evaluation transcripts contain full third-party speech. Keep them for
+# repeatable operator-side quality checks, but never publish them in Git.
+/private/

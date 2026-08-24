@@ -136,6 +136,10 @@ class Session:
     #: ``video.SKINS`` — a test holds those two sets equal, so a bare string
     #: here cannot quietly drift from either.
     skin: str = "cover"
+    #: Burn transcript lines into visual formats. A transcript that already
+    #: exists enables this when the episode is opened; otherwise the explicit
+    #: editor toggle opts into the several-minute first listen.
+    subtitles: bool = False
 
     # -- searching inside an episode ---------------------------------------
     #: The phrase last looked for, kept so the results screen can say what it
@@ -145,9 +149,9 @@ class Session:
     #: transcript that outlives the session, so a stale one costs a re-search
     #: rather than a re-transcription.
     moments: list = field(default_factory=list)
-    #: Whether this episode has already been listened to. Read once, when the
-    #: search screen opens, because the screen has to promise either "instant"
-    #: or "a few minutes" and rendering is not the place to query a database.
+    #: Whether this episode has already been listened to. Read when the episode
+    #: opens (and refreshed before search/cut), because rendering is not the
+    #: place to query a database for subtitle/search timing promises.
     episode_transcribed: bool = False
 
     # ------------------------------------------------------------------
@@ -257,6 +261,8 @@ class Session:
         self.episode = episode
         self.clip_start = 0
         self.clip_length = default_length
+        self.subtitles = False
+        self.episode_transcribed = False
         self.remember_recent(episode)
 
     def set_clip(self, start: int, length: int) -> None:

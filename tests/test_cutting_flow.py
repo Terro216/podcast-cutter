@@ -9,6 +9,7 @@ isolation.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -115,8 +116,9 @@ class TestDelivery:
         self, bot, context, ready, monkeypatch
     ):
         ready.send_as = FORMAT_NOTE
+        render: dict = {}
         stub_cut(monkeypatch)
-        stub_render(monkeypatch)
+        stub_render(monkeypatch, record=render)
         update = FakeUpdate(callback=kb.ACTION_CUT)
 
         await bot.on_callback(update, context)
@@ -126,6 +128,20 @@ class TestDelivery:
         assert sent["duration"] == 60
         assert sent["length"] == video_mod.NOTE_SIZE
         assert update.effective_message.sent_audio is None
+        assert render["watermark"] is True
+
+    async def test_an_old_random_skin_button_now_selects_roblox(
+        self, bot, context, ready
+    ):
+        bot.settings.brainrot_dir.mkdir(parents=True)
+        filename = video_mod.LOOP_SKINS[video_mod.SKIN_ROBLOX]
+        (bot.settings.brainrot_dir / filename).write_bytes(b"loop")
+
+        await bot.on_callback(
+            FakeUpdate(callback=f"{kb.SKIN_PREFIX}:random"), context
+        )
+
+        assert ready.skin == video_mod.SKIN_ROBLOX
 
     async def test_the_circle_is_rendered_round_and_the_video_square(
         self, bot, context, ready, monkeypatch
@@ -237,6 +253,7 @@ class TestDelivery:
             build([Utterance(start=610, end=615, text="про фолдинг белков")]),
         )
         ready.send_as = FORMAT_NOTE
+        ready.subtitles = True
         record: dict = {}
         stub_cut(monkeypatch)
         stub_render(monkeypatch, record=record)
@@ -246,6 +263,35 @@ class TestDelivery:
         lines = record["subtitles"]
         assert lines and lines[0].text == "про фолдинг белков"
         assert lines[0].start == pytest.approx(10.0)
+
+    async def test_subtitle_toggle_only_updates_the_editor(
+        self, bot, context, ready
+    ):
+        ready.send_as = FORMAT_NOTE
+        update = FakeUpdate(callback=kb.ACTION_SUBTITLES)
+
+        await bot.on_callback(update, context)
+
+        assert ready.subtitles is True
+        assert update.effective_message.sent_video_note is None
+        assert ready.current.screen is Screen.INTERVAL
+
+    async def test_requested_subtitles_trigger_the_first_listen_before_cut(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_NOTE
+        ready.subtitles = True
+        ready.set_clip(120, 60)
+        render: dict = {}
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch, record=render)
+
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_CUT), context)
+
+        lines = render["subtitles"]
+        assert lines and lines[0].text == "и вот тут мы говорим про фолдинг белков"
+        assert ready.episode_transcribed is True
+        await bot.listening.stop()
 
     async def test_a_render_failure_is_a_failed_cut_not_a_crash(
         self, bot, context, ready, monkeypatch, store
@@ -332,7 +378,7 @@ class TestNudging:
         )[0]
         assert (row["outcome"], row["detail"]) == ("ok", None)
 
-    async def test_shifting_moves_the_clip_and_recuts(
+    async def test_shifting_moves_the_clip_but_waits_for_cut(
         self, bot, context, ready, monkeypatch
     ):
         record: dict = {}
@@ -341,7 +387,9 @@ class TestNudging:
         await bot.on_callback(FakeUpdate(callback=f"{kb.SHIFT_PREFIX}:-15"), context)
 
         assert ready.clip_start == 585
-        assert record["interval"].start == 585
+        assert record == {}
+        assert ready.current.screen is Screen.INTERVAL
+        assert ready.awaiting is Awaiting.INTERVAL
 
     async def test_another_clip_returns_to_the_editor(
         self, bot, context, ready, monkeypatch
@@ -644,6 +692,10 @@ class TestAttribution:
         await bot.on_callback(update, context)
 
         caption = update.effective_message.sent_audio["caption"]
+        assert caption.startswith(
+            '✂️ <a href="https://t.me/podcast_cutter_bot">'
+            "@podcast_cutter_bot</a>"
+        )
         assert ready.episode.episode_url in caption
         assert "Full episode" in caption
 
@@ -660,6 +712,51 @@ class TestAttribution:
             b for row in update.markup.inline_keyboard for b in row if b.url
         ]
         assert any(b.url == ready.episode.episode_url for b in buttons)
+
+
+class TestSkinDemo:
+    async def test_demo_uses_five_seconds_and_marks_every_circle(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_NOTE
+        cut: dict = {}
+        render: dict = {}
+        stub_cut(monkeypatch, record=cut)
+        stub_render(monkeypatch, record=render)
+        update = FakeUpdate(callback=kb.ACTION_DEMO)
+
+        await bot.on_callback(update, context)
+
+        available = video_mod.available_skins(
+            False, settings=bot.settings
+        )
+        assert cut["interval"].duration == handlers_mod.DEMO_SECONDS == 5
+        assert len(update.effective_message.sent_video_notes) == len(available)
+        assert render["watermark"] is True
+        source_cards = [
+            text
+            for text, _ in update.effective_message.replies
+            if "@podcast_cutter_bot" in text
+        ]
+        assert len(source_cards) == len(available)
+        assert all(ready.episode.episode_url in text for text in source_cards)
+
+    async def test_square_demo_captions_each_video_with_source_and_bot(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.send_as = FORMAT_VIDEO
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch)
+        update = FakeUpdate(callback=kb.ACTION_DEMO)
+
+        await bot.on_callback(update, context)
+
+        assert update.effective_message.sent_videos
+        for sent in update.effective_message.sent_videos:
+            assert "@podcast_cutter_bot" in sent["caption"]
+            assert ready.episode.episode_url in sent["caption"]
+            assert sent["duration"] == 5
+            assert sent["parse_mode"] == "HTML"
 
 
 class TestCancel:
@@ -741,10 +838,17 @@ class TestCancel:
 
 
 class TestReskin:
-    """One tap on the result screen re-renders the same clip in another
-    look — nobody should have to walk the editor again for a skin."""
+    """A result-screen skin tap edits the next version but never sends it."""
 
     async def _send_a_note(self, bot, context, ready, monkeypatch, record):
+        ready.episode = replace(
+            ready.episode, image="https://cdn.example.com/cover.jpg"
+        )
+
+        async def usable_cover(url, workdir, settings):
+            return workdir / "cover.jpg"
+
+        monkeypatch.setattr(video_mod, "fetch_cover", usable_cover)
         ready.send_as = FORMAT_NOTE
         stub_cut(monkeypatch)
         stub_render(monkeypatch, record=record)
@@ -753,7 +857,7 @@ class TestReskin:
         assert update.effective_message.sent_video_note is not None
         return update
 
-    async def test_one_tap_rerenders_with_the_new_skin(
+    async def test_one_tap_selects_the_skin_and_reopens_the_editor(
         self, bot, context, ready, monkeypatch
     ):
         record: dict = {}
@@ -763,13 +867,39 @@ class TestReskin:
         retap = FakeUpdate(callback=f"{kb.RESKIN_PREFIX}:matrix")
         await bot.on_callback(retap, context)
 
-        assert record["skin"] == "matrix"
+        assert record["skin"] == "cover"
         assert ready.skin == "matrix"
-        assert retap.effective_message.sent_video_note is not None
+        assert retap.effective_message.sent_video_note is None
+        assert ready.current.screen is Screen.INTERVAL
+        assert ready.awaiting is Awaiting.INTERVAL
         # The clip itself did not move.
         assert ready.clip_start == 600 and ready.clip_length == 60
 
-    async def test_the_current_skin_is_a_no_op(
+    async def test_a_broken_advertised_cover_falls_back_to_aurora(
+        self, bot, context, ready, monkeypatch
+    ):
+        ready.episode = replace(
+            ready.episode, image="https://cdn.example.com/broken.jpg"
+        )
+        ready.send_as = FORMAT_NOTE
+        ready.skin = "cover"
+        record: dict = {}
+        stub_cut(monkeypatch)
+        stub_render(monkeypatch, record=record)
+
+        async def broken_cover(url, workdir, settings):
+            return None
+
+        monkeypatch.setattr(video_mod, "fetch_cover", broken_cover)
+
+        update = FakeUpdate(callback=kb.ACTION_CUT)
+        await bot.on_callback(update, context)
+
+        assert record["skin"] == "aurora"
+        assert ready.skin == "aurora"
+        assert update.effective_message.sent_video_note is not None
+
+    async def test_the_current_skin_still_opens_the_editor_without_sending(
         self, bot, context, ready, monkeypatch
     ):
         record: dict = {}
@@ -780,6 +910,7 @@ class TestReskin:
         await bot.on_callback(retap, context)
         assert record == renders_before
         assert retap.effective_message.sent_video_note is None
+        assert ready.current.screen is Screen.INTERVAL
 
     async def test_a_forged_skin_is_a_stale_button(
         self, bot, context, ready, monkeypatch
@@ -804,3 +935,18 @@ class TestReskin:
             if b.callback_data
         ]
         assert f"{kb.RESKIN_PREFIX}:lava" in data
+
+    async def test_format_can_change_after_send_without_sending_again(
+        self, bot, context, ready, monkeypatch
+    ):
+        record: dict = {}
+        await self._send_a_note(bot, context, ready, monkeypatch, record)
+        await bot.on_callback(FakeUpdate(callback=kb.ACTION_NEW_CLIP), context)
+
+        change = FakeUpdate(callback=f"{kb.FORMAT_PREFIX}:{FORMAT_VIDEO}")
+        await bot.on_callback(change, context)
+
+        assert ready.send_as == FORMAT_VIDEO
+        assert ready.current.screen is Screen.INTERVAL
+        assert change.effective_message.sent_video is None
+        assert change.effective_message.sent_video_note is None

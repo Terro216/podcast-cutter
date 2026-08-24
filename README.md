@@ -24,20 +24,28 @@ Telegram bot: https://t.me/podcast_cutter_bot
   circle is the round video note that plays right in the conversation; the
   video is the same picture as a square file with a caption, for clips longer
   than the minute Telegram allows a circle. Both draw the sound in one of
-  nine skins in three families. The artwork shelf: cover (the episode art
+  up to twelve skins in four families (choices whose artwork or operator loop is
+  unavailable are hidden). The artwork shelf: cover (the episode art
   with a slow Ken Burns zoom), vinyl (the art spinning like the record it
-  decorates) and DVD (the art ricocheting off the edges, corner hit and
-  all). The glow shelf: aurora (the spectrum melted into a ridge of
+  decorates). The glow shelf: aurora (the spectrum melted into a ridge of
   northern lights that breathes with the voice), party (a mirrored neon
   soundwave over a dark dance floor, spinning through the colour wheel) and
-  lava (a lava lamp that flares with the speech). The brainrot shelf:
+  lava (rising wax blobs that merge and flare with the speech). The generated
+  and meme shelf:
   matrix (chunky green streams falling down the frame), fractal (an endless
-  Mandelbrot dive) and brainrot itself — the operator's own gameplay loops
-  behind big centred subtitles, see docs/video-skins.md. Every skin carries
+  Mandelbrot dive) and DVD (the artwork, or a music-note fallback, ricocheting
+  inside the visible boundary). The loop shelf is four curated videos — Roblox
+  Parkour, GTA Mega Ramp, ASMR Cutting and Subway Surfers — each starting at a
+  fresh random offset behind optional centred subtitles, see
+  docs/video-skins.md. Every skin carries
   the title on up to two lines, a progress bar with a running clock, and
-  subtitles when the episode has already been listened to for search.
+  subtitles when their bottom-of-editor toggle is enabled. A stored transcript
+  makes that instant; otherwise the button warns that the first listen adds a
+  few minutes before the clip is cut.
 - **Nudge after the fact.** The result offers `↺ 15s earlier` / `15s later ↻`
-  and re-cuts, so finding the exact line is a couple of taps.
+  plus visual choices. They reopen the full editor and change its values; only
+  the blue Cut button sends another file, so a correction cannot spend a cut
+  by accident and the format can change too.
 - **Share from anywhere.** Type `@podcast_cutter_bot some words` in any chat to
   post an episode with a link that opens the clip editor for whoever taps it.
 
@@ -245,13 +253,17 @@ start error and the false-hit rate beside it, RU and EN kept apart.
 what the shipped model actually produced from the same audio. Neither number
 means much alone — the gap between them is the price of running `base`, and
 without it there is no telling whether to change the recogniser or the
-retriever. Both transcripts are committed, so both runs are seconds of pure CPU
-with no model and no network, which is what lets the comparison live in the
-test suite instead of in a script nobody remembers to run:
+retriever. Full transcripts reproduce third-party speech, so they live only in
+the gitignored `private/eval-fixtures/` (or `EVAL_FIXTURES_DIR`), not in this
+public repository. With that local directory present both runs are seconds of
+pure CPU with no model and no network:
 
 ```shell
 poetry run pytest tests/test_baskets.py -s
 ```
+
+Public CI still validates basket syntax, size and query classes, but skips the
+transcript-derived rows when those private files are absent.
 
 A basket does not assert an absolute quality bar — nobody knows in advance what
 `hit@3` should be on four particular episodes. It carries the numbers it last
@@ -324,21 +336,25 @@ exit successfully having written an unplayable fragment.
 ### How a video note is made
 
 A circle or a video is the cut audio drawn by an ffmpeg visualiser under a
-skin — title, time span, a progress bar, and subtitles from the stored
-transcript when the episode has been listened to for search (quarantined
-spans are excluded there too: an invented line must not be burned into a
-video). The render is a couple of seconds for a one-minute clip, so it runs
-as the tail of the same cut job, in the same concurrency slot.
+skin — title, time span, a progress bar, and optional subtitles from the stored
+transcript (quarantined spans are excluded there too: an invented line must
+not be burned into a video). If the user explicitly asks for subtitles before
+a transcript exists, the durable listening queue prepares it first. The render
+then runs as the tail of the same cut job, in the same concurrency slot.
 
-The two formats share the renderer but not the layout. Telegram crops a note
-to the circle inscribed in the square — at 384 px a centred line at the top
-edge has barely 200 px of visible chord — so the round layout moves every
+The two formats share the 512 px renderer but not the layout. Telegram crops
+a note to the circle inscribed in the square, so the round layout moves every
 piece of text inside the circle, shortens the title to what the chord fits,
 and shrinks the progress bar to a centred track. The square video uses the
 full frame and carries the attribution in its caption; a note cannot
-(`sendVideoNote` has no caption), so there it lives on the result screen.
+(`sendVideoNote` has no caption), so `@podcast_cutter_bot` is burned into the
+picture and the result screen keeps the source link.
 A circle past one minute is refused with a pointer at the video format,
 never silently converted; a video past five minutes is refused too.
+The demo button renders only five seconds per available skin. Every demo gets
+the full source card, and the bot handle is burned into the pixels so a
+forwarded circle keeps its provenance even though video notes cannot carry a
+caption.
 
 Cover art comes from the episode's own artwork URL, is checked by the same
 source-address rules as audio, and is test-decoded before use — a corrupt
@@ -346,8 +362,9 @@ image would otherwise hang the encoder rather than fail it.
 
 ### How searching inside an episode works
 
-An episode is transcribed once, on the first search anyone makes against it,
-and the result is stored. What is stored is keyed on the **SHA-256 of the audio
+An episode is transcribed once, on the first search or explicit subtitle
+request anyone makes against it, and the result is stored. What is stored is
+keyed on the **SHA-256 of the audio
 that was actually fetched**, not on the episode id: feeds insert advertisements
 dynamically, so the same episode can serve different bytes next month, and
 timestamps taken against the old ones would cut an advert.

@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,6 +116,11 @@ class TestBuildGraph:
             "subs_file": None,
             "with_media": False,
         }
+        resolved = video.LEGACY_SKINS.get(skin, skin)
+        if resolved == video.SKIN_MATRIX:
+            options["matrix_columns"] = video._write_matrix_columns(
+                tmp_path, video.NOTE_SIZE
+            )
         options.update(kwargs)
         return video.build_graph(skin, **options)
 
@@ -140,8 +147,9 @@ class TestBuildGraph:
         # chord, so the full-width square bar would show only its middle.
         square = self.build("aurora", tmp_path)
         round_ = self.build("aurora", tmp_path, round_frame=True)
-        assert f"s={video.NOTE_SIZE}x6" in square
-        assert f"s={video.NOTE_SIZE}x6" not in round_
+        square_bar = max(6, video.NOTE_SIZE // 64)
+        assert f"s={video.NOTE_SIZE}x{square_bar}" in square
+        assert f"s={video.NOTE_SIZE}x{square_bar}" not in round_
 
     def test_an_unknown_skin_is_refused(self, tmp_path):
         with pytest.raises(ValueError):
@@ -211,6 +219,127 @@ class TestWrapTitle:
         # is the seam that keeps the two sets from drifting apart.
         assert set(video.SKINS) == set(kb.SKIN_LABELS)
 
+    def test_artwork_only_skins_are_hidden_without_artwork(self):
+        without = video.available_skins(False)
+        assert "cover" not in without
+        assert "vinyl" not in without
+        assert "dvd" in without
+        assert video.available_skins(True) == video.SKINS
+
+    def test_loop_skins_are_hidden_until_their_files_exist(
+        self, settings, tmp_path
+    ):
+        settings = replace(settings, data_dir=tmp_path)
+        settings.brainrot_dir.mkdir(parents=True)
+        loop_skins = set(video.LOOP_SKINS)
+        assert loop_skins.isdisjoint(
+            video.available_skins(True, settings=settings)
+        )
+
+        # An arbitrary video no longer makes a misleading Random button.
+        (settings.brainrot_dir / "something-else.mp4").write_bytes(b"loop")
+        assert loop_skins.isdisjoint(
+            video.available_skins(True, settings=settings)
+        )
+
+        for skin, filename in video.LOOP_SKINS.items():
+            (settings.brainrot_dir / filename).write_bytes(b"loop")
+            assert skin in video.available_skins(True, settings=settings)
+        available = video.available_skins(True, settings=settings)
+        assert loop_skins.issubset(available)
+
+    def test_a_loop_uses_its_file_at_a_random_valid_offset(
+        self, settings, tmp_path, monkeypatch
+    ):
+        settings = replace(settings, data_dir=tmp_path)
+        settings.brainrot_dir.mkdir(parents=True)
+        filename = video.LOOP_SKINS[video.SKIN_ROBLOX]
+        expected = settings.brainrot_dir / filename
+        expected.write_bytes(b"loop")
+
+        async def fake_probe(path, timeout):
+            assert path == expected
+            return SimpleNamespace(duration=300)
+
+        monkeypatch.setattr(video, "probe", fake_probe)
+        monkeypatch.setattr(video.random, "uniform", lambda low, high: 123.456)
+
+        selected, args = asyncio.run(
+            video._pick_background(settings, need=60, filename=filename)
+        )
+        assert selected == expected
+        assert args == ["-stream_loop", "-1", "-ss", "123.46"]
+
+    def test_demo_watermark_is_burned_into_the_graph(self, tmp_path):
+        graph = video.build_graph(
+            "aurora",
+            duration=5,
+            title_file=tmp_path / "title.txt",
+            span_file=tmp_path / "span.txt",
+            subs_file=None,
+            with_media=False,
+            watermark=True,
+        )
+        assert "@podcast_cutter_bot" in graph
+
+    def test_dvd_hits_the_actual_square_and_round_boundaries(self, tmp_path):
+        square = video.build_graph(
+            "dvd",
+            duration=5,
+            title_file=tmp_path / "title.txt",
+            span_file=tmp_path / "span.txt",
+            subs_file=None,
+            with_media=True,
+            round_frame=False,
+        )
+        span = video.NOTE_SIZE - video.NOTE_SIZE * 3 // 10
+        assert f"overlay=x='abs(mod(97*t,{2 * span})-{span})'" in square
+        assert ":eval=frame:shortest=1" in square
+
+        round_ = video.build_graph(
+            "dvd",
+            duration=5,
+            title_file=tmp_path / "title.txt",
+            span_file=tmp_path / "span.txt",
+            subs_file=None,
+            with_media=False,
+            round_frame=True,
+        )
+        assert "floor(t/2.3)" in round_
+        assert "sqrt(" in round_
+        assert "[bg][item]overlay" in round_
+        assert "boxborderw" not in round_
+
+    def test_lava_is_rising_wax_not_a_rotating_gradient(self, tmp_path):
+        graph = video.build_graph(
+            "lava",
+            duration=5,
+            title_file=tmp_path / "title.txt",
+            span_file=tmp_path / "span.txt",
+            subs_file=None,
+            with_media=False,
+        )
+        assert "gradients=" not in graph
+        assert "geq=lum=" in graph
+        assert "min(1\\," in graph
+        assert graph.count("exp(-(") == 5
+
+    def test_matrix_is_glyph_rain_not_a_spectrogram(self, tmp_path):
+        columns = video._write_matrix_columns(tmp_path, video.NOTE_SIZE)
+        graph = video.build_graph(
+            "matrix",
+            duration=60,
+            title_file=tmp_path / "title.txt",
+            span_file=tmp_path / "span.txt",
+            subs_file=None,
+            with_media=False,
+            matrix_columns=columns,
+        )
+        assert "showspectrum" not in graph
+        assert graph.count("drawtext=") >= len(columns) * 2
+        assert "tmix=frames=4" in graph
+        assert "gblur=sigma=3" in graph
+
 
 @pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -229,8 +358,12 @@ class TestRealRender:
             # fallbacks; the artwork paths ride the cover test below.
             ("vinyl", True),
             ("dvd", False),
-            # The loop skins with an empty loops directory: the honest card.
-            ("random", True),
+            ("dvd", True),
+            # Loop skins with an empty directory fall back to Aurora instead
+            # of sending the old empty card.
+            ("roblox", True),
+            ("gta", False),
+            ("asmr", True),
             ("subway", False),
             # A retired skin arriving from an old button.
             ("vhs", True),

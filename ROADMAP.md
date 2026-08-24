@@ -181,8 +181,11 @@ the M2 Pro, then hand-correct. Twenty minutes per segment instead of an evening.
 measurement bench, not part of the product. The product is what runs on
 `big-one`.
 
-**Wiring:** basket as YAML in the repo, executed by pytest. Evals then live in
-CI and count as engineering quality, not as a slide.
+**Wiring:** basket definitions and baselines stay as YAML in the repo and run
+under pytest. Full transcripts stay in the operator's gitignored
+`private/eval-fixtures/`; public CI validates basket structure and the local
+private-fixture run guards retrieval quality. Evals remain engineering quality,
+not a slide, without publishing third-party speech.
 
 ---
 
@@ -190,7 +193,8 @@ CI and count as engineering quality, not as a slide.
 
 Emotion, cheaply, and every note posted in someone else's chat advertises the
 bot. **Shipped**: a third delivery format on the clip editor, four skins on a
-button, subtitles burned in from the transcript when one exists.
+button, with optional subtitles from a stored transcript or an explicitly
+requested first listen.
 
 **Measured render, 60 s at 384×384, `--cpus 4`:**
 
@@ -213,8 +217,9 @@ formats on the editor, chosen by the user** — a circle past a minute is
 refused with a pointer at the video format, never silently converted, and a
 video past five minutes is refused too: encode time and upload size both
 scale with length, and the busiest skin measures ~3.3 MB a minute.
-`sendVideoNote` has no caption parameter at all, so a note's attribution
-lives on the result screen; the square video carries it in its caption.
+`sendVideoNote` has no caption parameter at all, so a note burns
+`@podcast_cutter_bot` into its pixels and keeps source attribution on the result
+screen; the square video carries the full card in its caption.
 
 **The circle dictated its own layout, and the frames proved it.** Clients
 crop a note to the circle inscribed in the square: at 384 px, a centred line
@@ -250,9 +255,9 @@ reaches ffmpeg through files (`textfile=`, an `.ass` script), never inline
 in the graph, because episode titles contain every character that is an
 operator to the graph parser. Subtitles come from the same transcript the
 search runs on — and pass the same quarantine, because a decoder loop kept
-out of the index has no business burned into a video. An episode nobody has
-searched gets no subtitles rather than a transcription: minutes of CPU for a
-caption is the wrong trade until someone asks for the words.
+out of the index has no business burned into a video. They are explicit in the
+editor: a known transcript is instant, while an unknown one enters the durable
+listening queue only after the user accepts the labelled several-minute cost.
 
 **Found on the way: a corrupt cover image does not fail the render, it hangs
 it.** ffmpeg 7.1.5 given an undecodable second input prints `Invalid data`
@@ -342,16 +347,17 @@ list, logs, and soon transcripts.
 
 ## 9. Cheap points, deliberately not skipped
 
-- **CI** (pytest + ruff) — absent today, and it is worth real points.
-- **Public repository.** The contest offers open-source and Habr support, which
-  only applies to something public.
-- **Real users before submission.** `?start=src_<tag>` and per-source stats
-  already exist; seed tags across podcast chats a few weeks ahead so "value" is
-  a number rather than a claim.
-- **Search caching.** Identical searches each hit the API today; on stage that
-  is latency in front of an audience.
-- **Cancel should kill the ffmpeg job**, not just leave the screen. Small, and
-  exactly the kind of thing a judge pokes.
+- **Done:** public repository, CI (`ruff` + full pytest), 300-second bounded
+  Podcast Index cache, and real cancellation that terminates ffmpeg.
+- **Done:** public-use controls, bilingual Terms/Privacy, blocklist, encrypted
+  SQLCipher state, encrypted off-host backup and proved restore.
+- **Still valuable:** recruit real users through distinct `src_<tag>` links and
+  turn `/stats` into evidence about activation, successful first clip, repeat
+  use and the formats people actually share.
+- **Still manual:** BotFather avatar and inline placeholder; all API-supported
+  commands and descriptions are already published at startup.
+- **Demo polish:** keep a recorded fallback and one current architecture
+  diagram. The in-bot skin parade now uses shareable five-second samples.
 
 Explicitly dropped: **the Mini App.** A waveform in a web view costs a frontend
 and HTTPS hosting and scores less than transcript search.
@@ -375,7 +381,9 @@ artifact, not an afterthought:
 5. **0:30 — numbers from `/stats`, and what is next.**
 
 Plus one architecture diagram, and a recorded video as insurance: venue
-internet fails more often than anyone plans for.
+internet fails more often than anyone plans for. The bot's own skin demo is
+five seconds per available look, carries the full source card, and burns in
+`@podcast_cutter_bot` so a forwarded captionless circle still leads back.
 
 ---
 
@@ -390,21 +398,33 @@ internet fails more often than anyone plans for.
 3. ~~Embeddings on top, negatives.~~ **Done** — hybrid retrieval with a
    measured refusal floor, §16a. The LLM judge remains open.
 4. ~~SpeechKit as the second backend, and the comparison table.~~ **Done** —
-   backend in `asr.py`, all four variants fixtured and guarded by CI, table
-   and verdict in `HANDOFF.md` §3b. Remaining from §4: the spend ceiling,
+   backend in `asr.py`, all four variants fixtured and guarded by the local
+   private-fixture regression run, table and verdict in `HANDOFF.md` §3b.
+   Public CI retains basket/schema checks without publishing transcripts.
+   Remaining from §4: the spend ceiling,
    without which the cloud path stays an operator's manual choice.
 5. ~~Queues, limits, source ceiling, backups.~~ **Done** — §7 is closed but
    for an ETA and LRU eviction; backups are live (§8, `docs/backup-policy.md`).
-6. ~~Video notes with presets and subtitles.~~ **Done** — §6: four skins,
-   subtitles from the warmed transcript, notes up to a minute and square
-   video up to five, rendered in the cut pool by decision rather than by
-   default.
-7. CI, public repo, `src_` links seeded.
+6. ~~Video notes with presets and subtitles.~~ **Done and deployed** — §6: up to twelve
+   availability-aware skins, opt-in subtitles backed by the durable listening
+   queue, notes up
+   to a minute and square video up to five, rendered in the cut pool by
+   decision rather than by default.
+7. ~~CI and public repo.~~ **Done.** Seed `src_` links with real users next.
+8. **Adoption loop:** first-cut funnel, repeat/share signals, then fix the
+   largest observed drop rather than adding another surface on instinct.
+9. **Search quality:** finish the by-ear answer-key pass; only then price an
+   English stemmer or a larger recogniser against measured misses.
+10. **Demo and distribution:** current architecture diagram, recorded
+    3–5-minute run, BotFather avatar/inline placeholder, targeted podcast-chat
+    invitations.
+11. **Operational polish:** copy the backup secret to Bitwarden and add the
+    existing proxy/tunnel to external monitoring. Queue ETA and transcript LRU
+    stay behind evidence that either is a real user problem.
 
-The video note is tempting to pull forward — it is fast and it is the wow. But
-doing it before the baskets risks showing up with a meme instead of an AI
-project. The measurements say the foundation is a couple of evenings, so the
-order holds.
+The foundation and the wow path are both shipped. The next phase is no longer
+"build the bot"; it is "measure whether strangers reach a useful shared clip,
+then remove the biggest obstacle".
 
 ---
 

@@ -49,9 +49,10 @@ VIDEO_NOTE_SECONDS = 60
 #: measured ~3.3 MB per minute, so five minutes stays well under the limit.
 MAX_VIDEO_SECONDS = 300
 
-#: The square's side. 384 is what Telegram clients typically record at, and
-#: it is the size every render was measured at.
-NOTE_SIZE = 384
+#: The square's side. 512 keeps the small clock and subtitles crisp through
+#: Telegram's second encode while staying below sendVideoNote's 640 px limit.
+#: The original 384 px canvas made thin glyphs visibly fray after upload.
+NOTE_SIZE = 512
 
 SKIN_COVER = "cover"
 SKIN_VINYL = "vinyl"
@@ -61,9 +62,12 @@ SKIN_LAVA = "lava"
 SKIN_MATRIX = "matrix"
 SKIN_FRACTAL = "fractal"
 SKIN_DVD = "dvd"
-#: The loop-backed pair: ``random`` plays any file the operator dropped on
-#: the volume, ``subway`` only what lives in the ``subway/`` subdirectory.
-SKIN_RANDOM = "random"
+#: Each loop look names one curated operator-owned file. The file is fixed;
+#: the start offset is random for every render, so two users do not get the
+#: same stretch of gameplay behind their clips.
+SKIN_ROBLOX = "roblox"
+SKIN_GTA = "gta"
+SKIN_ASMR = "asmr"
 SKIN_SUBWAY = "subway"
 
 #: Render behaviour lives here; the matching button labels live in
@@ -78,16 +82,20 @@ SKINS = (
     SKIN_MATRIX,
     SKIN_FRACTAL,
     SKIN_DVD,
-    SKIN_RANDOM,
+    SKIN_ROBLOX,
+    SKIN_GTA,
+    SKIN_ASMR,
     SKIN_SUBWAY,
 )
 
-#: The loop-backed skins, and where each looks for its footage relative to
-#: ``settings.brainrot_dir``: ``random`` sweeps the whole tree, a themed
-#: skin only its own subdirectory.
-LOOP_SKINS: dict[str, str | None] = {
-    SKIN_RANDOM: None,
-    SKIN_SUBWAY: "subway",
+#: The loop-backed skins and their exact file relative to
+#: ``settings.brainrot_dir``. Exact names make a button's promise stable: a
+#: Roblox tap can never randomly serve GTA just because both share a folder.
+LOOP_SKINS: dict[str, str] = {
+    SKIN_ROBLOX: "01-roblox-parkour.mp4",
+    SKIN_GTA: "02-gta-5-mega-ramp.mp4",
+    SKIN_ASMR: "03-asmr-cutting.mp4",
+    SKIN_SUBWAY: "04-subway-surfers.mp4",
 }
 
 #: Retired skins, mapped to their closest living relative. Buttons on
@@ -98,12 +106,18 @@ LEGACY_SKINS = {
     "spectrum": SKIN_AURORA,
     "scope": SKIN_MATRIX,
     "vhs": SKIN_VINYL,
-    "brainrot": SKIN_RANDOM,
+    "brainrot": SKIN_ROBLOX,
+    "random": SKIN_ROBLOX,
 }
 
 #: Skins whose second input is the episode artwork; the caller only fetches
 #: a cover when the skin will actually put it on screen.
 COVER_SKINS = frozenset({SKIN_COVER, SKIN_VINYL, SKIN_DVD})
+
+#: These two looks have no identity without artwork. DVD has a deliberate
+#: bouncing-note fallback, so it remains useful when a feed has no image.
+ARTWORK_REQUIRED_SKINS = frozenset({SKIN_COVER, SKIN_VINYL})
+DEFAULT_NO_ARTWORK_SKIN = SKIN_AURORA
 
 #: Container suffixes accepted as brainrot background loops.
 BACKGROUND_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".webm", ".m4v"})
@@ -114,17 +128,40 @@ MAX_COVER_BYTES = 10 * 1024 * 1024
 
 _DEJAVU = Path("/usr/share/fonts/truetype/dejavu")
 _ENCODE_ARGS = [
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
     # The VBV cap is for the noisy skins: an uncapped Mandelbrot dive
     # measured ~2 Mbit/s, which over a five-minute square video overshoots
     # the upload ceiling. 1 Mbit/s tops out near 40 MB with audio and looks
-    # the same at 384 px.
+    # the same at this display size.
     "-maxrate", "1M", "-bufsize", "2M",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "96k",
     "-movflags", "+faststart",
     "-shortest",
 ]
+
+
+def available_skins(
+    has_artwork: bool, *, settings: Settings | None = None
+) -> tuple[str, ...]:
+    """Return only looks that can produce their promised picture.
+
+    A missing cover used to leave both Cover and Vinyl as identical dark
+    cards in the menu and demo. They are choices only when
+    the episode actually advertises artwork. Loop-backed looks likewise exist
+    only when the operator has supplied footage; every offered skin must be
+    able to produce the picture its label promises.
+    """
+    available = set(SKINS)
+    if not has_artwork:
+        available -= ARTWORK_REQUIRED_SKINS
+    if settings is not None:
+        available -= {
+            skin
+            for skin, filename in LOOP_SKINS.items()
+            if loop_file(settings, filename) is None
+        }
+    return tuple(skin for skin in SKINS if skin in available)
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +325,139 @@ def _dark_card(size: int, dur: float) -> str:
     return f"color=c=0x1a1a2e:s={size}x{size}:d={dur}[canvas];"
 
 
+_MATRIX_GLYPHS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-<=>?"
+
+
+def _matrix_font(bold: bool) -> str:
+    """The image's known monospaced face: aligned columns sell the rain."""
+    suffix = "-Bold" if bold else ""
+    path = _DEJAVU / f"DejaVuSansMono{suffix}.ttf"
+    if path.exists():
+        return f"fontfile='{path}'"
+    return "font='monospace'"
+
+
+def _write_matrix_columns(workdir: Path, size: int) -> tuple[Path, ...]:
+    """Write deterministic vertical glyph streams for the Matrix skin.
+
+    Files keep non-ASCII text and newlines out of the filter expression. A
+    local RNG makes identical clips visually stable without touching the
+    module RNG used to pick background footage and offsets.
+    """
+    rng = random.Random(0x4D4154524958 + size)
+    count = max(14, size // 27)
+    paths = []
+    for index in range(count):
+        length = rng.randint(10, 22)
+        glyphs = [rng.choice(_MATRIX_GLYPHS) for _ in range(length)]
+        path = workdir / f"matrix-{index:02d}.txt"
+        path.write_text("\n".join(glyphs), encoding="utf-8")
+        path.with_suffix(".head.txt").write_text(glyphs[-1], encoding="utf-8")
+        paths.append(path)
+    return tuple(paths)
+
+
+def _matrix_canvas(size: int, dur: float, columns: tuple[Path, ...]) -> str:
+    """Build independently falling glyph columns with crisp heads and trails."""
+    graph = f"color=c=0x010703:s={size}x{size}:d={dur}[rain0];"
+    count = len(columns)
+    font_size = max(16, size // 28)
+    line_height = font_size + max(2, size // 170)
+    usable = size - font_size
+    for index, path in enumerate(columns):
+        x = round(index * usable / max(1, count - 1))
+        # Co-prime-ish speeds and staggered starts stop the rain moving as a
+        # single wallpaper. text_h is evaluated by drawtext for each stream.
+        speed = round(size * (0.20 + (index * 7 % 11) * 0.018))
+        offset = round(size * ((index * 13) % count) / count)
+        alpha = 0.48 + (index % 4) * 0.08
+        source = f"rain{2 * index}"
+        tailed, target = f"rain{2 * index + 1}", f"rain{2 * index + 2}"
+        y = f"mod(t*{speed}+{offset}\\,h+text_h)-text_h"
+        graph += (
+            f"[{source}]drawtext={_matrix_font(bold=False)}:textfile='{path}'"
+            f":fontcolor=0x17e84f@{alpha:.2f}:fontsize={font_size}"
+            f":line_spacing={line_height - font_size}:x={x}:y='{y}'"
+            ":shadowcolor=0x00ff55@0.35:shadowx=0:shadowy=0"
+            f"[{tailed}];"
+        )
+        glyph_count = len(path.read_text(encoding="utf-8").splitlines())
+        block_height = glyph_count * line_height - (line_height - font_size)
+        head_y = (
+            f"mod(t*{speed}+{offset}\\,h+{block_height})"
+            f"-{line_height}"
+        )
+        graph += (
+            f"[{tailed}]drawtext={_matrix_font(bold=True)}"
+            f":textfile='{path.with_suffix('.head.txt')}'"
+            f":fontcolor=0xd8ffe2:fontsize={font_size}:x={x}:y='{head_y}'"
+            ":shadowcolor=0x5cff86@0.85:shadowx=0:shadowy=0"
+            f"[{target}];"
+        )
+
+    last = f"rain{2 * count}"
+    # The unblurred branch preserves recognisable symbols. The short temporal
+    # mix leaves a downward phosphor trail; only its duplicate is blurred and
+    # screened back on for glow, so the text itself never turns mushy.
+    graph += (
+        f"[{last}]tmix=frames=4:weights='1 0.55 0.28 0.12',"
+        "eq=contrast=1.18:saturation=1.2[sharp];"
+        "[sharp]split=2[base][glowin];"
+        "[glowin]gblur=sigma=3[glow];"
+        "[base][glow]blend=all_mode=screen:all_opacity=0.32[canvas];"
+    )
+    return graph
+
+
+def _dvd_position(size: int, item: int, *, round_frame: bool) -> tuple[str, str]:
+    """Return frame-evaluated top-left coordinates for the DVD logo.
+
+    A square video is the familiar independent-axis ping-pong and has no
+    cosmetic inset: zero and ``size - item`` are real collisions. A video
+    note is a circular billiard. Successive points lie on the circle and the
+    logo travels along the chord between them; the radius at each point is
+    adjusted for the square logo's support, so its farthest corner — not an
+    imaginary circumscribed disc — touches the crop exactly.
+    """
+    span = size - item
+    if not round_frame:
+        return (
+            f"abs(mod(97*t,{2 * span})-{span})",
+            f"abs(mod(73*t,{2 * span})-{span})",
+        )
+
+    # A golden-angle step avoids a short repeating polygon. Every 2.3 s is a
+    # visible ricochet; between impacts the interpolation is a straight chord.
+    step = "2.3999632297"
+    phase = "0.7853981634"
+    beat = "2.3"
+    half = item / 2
+    radius = size / 2
+    centre = (size - item) / 2
+
+    def point(axis: str, offset: int) -> str:
+        angle = f"({phase}+(floor(t/{beat})+{offset})*{step})"
+        cosine = f"cos({angle})"
+        sine = f"sin({angle})"
+        # For centre distance d and the corner in the travel direction:
+        # |d*u + corner|^2 = R^2. Solving the quadratic gives this d.
+        support = f"({half:.1f}*(abs({cosine})+abs({sine})))"
+        distance = (
+            f"(-{support}+sqrt({support}*{support}"
+            f"+{radius:.1f}*{radius:.1f}-2*{half:.1f}*{half:.1f}))"
+        )
+        component = cosine if axis == "x" else sine
+        return f"({distance}*{component})"
+
+    fraction = f"mod(t/{beat},1)"
+    x0, x1 = point("x", 0), point("x", 1)
+    y0, y1 = point("y", 0), point("y", 1)
+    return (
+        f"{centre:.1f}+(1-{fraction})*{x0}+{fraction}*{x1}",
+        f"{centre:.1f}+(1-{fraction})*{y0}+{fraction}*{y1}",
+    )
+
+
 def _canvas(
     skin: str,
     *,
@@ -295,6 +465,7 @@ def _canvas(
     dur: float,
     with_media: bool,
     round_frame: bool = False,
+    matrix_columns: tuple[Path, ...] = (),
 ) -> _Canvas:
     """The skin's picture. Every skin paints the whole frame: the inset-box
     geometry of the first generation is what made the visualisers read as
@@ -391,39 +562,62 @@ def _canvas(
         return _Canvas(graph, "0xff4dd2@0.9", "white")
 
     if skin == SKIN_LAVA:
-        # An actual lava lamp: slow warm gradient blobs underneath, and the
-        # aurora treatment of the spectrum screened on top so the glow still
-        # swells with the voice.
+        # Wax, not a rotating gradient. Five soft metaball-like fields rise at
+        # different speeds, wander sideways and merge as their Gaussian edges
+        # overlap. A very faint audio glow changes their heat without changing
+        # the motion into yet another equaliser.
+        centres = (
+            (
+                "W*(0.20+0.08*sin(N/53))",
+                "mod(H*1.35-N*1.15\\,H*1.65)-H*0.25",
+                "0.016",
+            ),
+            (
+                "W*(0.42+0.11*sin(N/71+1.4))",
+                "mod(H*1.60-N*0.82\\,H*1.75)-H*0.30",
+                "0.024",
+            ),
+            (
+                "W*(0.68+0.09*sin(N/61+2.5))",
+                "mod(H*1.25-N*1.42\\,H*1.70)-H*0.22",
+                "0.018",
+            ),
+            (
+                "W*(0.82+0.06*sin(N/89+0.7))",
+                "mod(H*1.75-N*0.67\\,H*1.85)-H*0.35",
+                "0.030",
+            ),
+            (
+                "W*(0.51+0.14*sin(N/97+3.1))",
+                "mod(H*1.10-N*1.73\\,H*1.60)-H*0.20",
+                "0.012",
+            ),
+        )
+        fields = []
+        for x, y, radius in centres:
+            dx = f"(X-{x})"
+            dy = f"(Y-({y}))"
+            fields.append(
+                f"exp(-(({dx}*{dx}+{dy}*{dy})/(W*W*{radius})))"
+            )
+        wax = "+".join(fields)
         graph = (
-            f"gradients=s={size}x{size}:c0=0x1a0005:c1=0x5c0a00:c2=0xd93800"
-            f":c3=0xff9a00:n=4:speed=0.02:d={dur}[grad];"
+            f"nullsrc=s={size}x{size}:r=25:d={dur},"
+            f"geq=lum='255*min(1\\,{wax})':cb=128:cr=128,format=gray,"
+            "gblur=sigma=8,lutrgb=r='18+val*1.10':g='2+val*0.30'"
+            ":b='12+val*0.08'[wax];"
             f"[0:a]showfreqs=s={size}x{size}:mode=bar:ascale=log:fscale=log"
             ":averaging=8:colors=0xff5a00|0xffc040,"
-            "tmix=frames=9,gblur=sigma=16,eq=gamma=0.65[glow];"
-            "[grad][glow]blend=all_mode=screen,eq=saturation=1.4[canvas];"
+            "tmix=frames=9,gblur=sigma=24,eq=gamma=0.55[glow];"
+            "[wax][glow]blend=all_mode=screen:all_opacity=0.22,"
+            "vignette=PI/5,eq=saturation=1.35:contrast=1.08[canvas];"
         )
         return _Canvas(graph, "0xffa030@0.9", "0xffb347")
 
     if skin == SKIN_MATRIX:
-        # The spectrogram falls down the frame — ``orientation=horizontal``
-        # turns the scroll vertical — and a column grid slices it into the
-        # falling green streams of the meme. ``fscale=log`` keeps speech off
-        # the frame's edge; ``drange=48`` keeps the noise floor black.
-        # Rendered at half size and upscaled with nearest-neighbour: the
-        # doubled cells read as chunky glyph streams instead of a fine-grain
-        # spectrogram, and the frame fills twice as fast from a cold start.
-        half = size // 2
-        graph = (
-            f"[0:a]showspectrum=s={half}x{half}:mode=combined"
-            ":color=intensity:scale=sqrt:fscale=log:slide=scroll"
-            ":orientation=horizontal:drange=48[sp];"
-            # vflip: the scroll grows upward on its own, and rain that rises
-            # is not rain — the streams must fall.
-            f"[sp]scale={size}:{size}:flags=neighbor,vflip,"
-            "colorchannelmixer=rr=0:bb=0,"
-            f"drawgrid=w=12:h={size}:t=3:c=black@0.85,"
-            "eq=contrast=1.3[canvas];"
-        )
+        if not matrix_columns:
+            raise ValueError("Matrix skin needs its glyph columns")
+        graph = _matrix_canvas(size, dur, matrix_columns)
         # Boxed: once the streams fill the frame, green-on-green text needs
         # the black pad to stay legible.
         return _Canvas(graph, "0x33ff66@0.9", "0x33ff66", boxed=True)
@@ -448,36 +642,36 @@ def _canvas(
         # The bouncing-logo meme. The episode artwork (or a music note when
         # the feed has none) drifts and ricochets off the edges; everyone
         # waits for the corner hit. Speeds are deliberately not multiples of
-        # each other, so the path takes ages to repeat.
+        # each other, and both axes now collide during a five-second demo.
         #
-        # In the round note the frame's edges are invisible — Telegram crops
-        # to the inscribed circle — so the logo bounces inside the circle's
-        # inscribed *square* instead: a logo whose corner grazes that
-        # square's corner sits exactly on the circle, which reads as
-        # bouncing off the round border rather than off nothing.
+        # Square videos use the literal frame edges. In a round note, moving
+        # inside an inscribed square leaves an obvious gap at almost every
+        # collision. Instead the logo follows straight chords whose endpoints
+        # put its outermost corner exactly on Telegram's circular crop.
         item = size * 3 // 10
-        margin = round(size * (1 - 0.7071) / 2) if round_frame else 0
-        span_w = size - 2 * margin - item
+        dvd_x, dvd_y = _dvd_position(size, item, round_frame=round_frame)
         graph = f"color=c=0x11101c:s={size}x{size}:d={dur}[bg];"
         if with_media:
             graph += (
                 f"[1:v]scale={item}:{item}:force_original_aspect_ratio="
                 f"increase,crop={item}:{item}[item];"
                 "[bg][item]overlay"
-                f"=x='{margin}+abs(mod(43*t,{2 * span_w})-{span_w})'"
-                f":y='{margin}+abs(mod(31*t,{2 * span_w})-{span_w})'[canvas];"
+                f"=x='{dvd_x}':y='{dvd_y}'"
+                ":eval=frame:shortest=1[canvas];"
             )
         else:
-            pad = 2 * margin + 28
+            # Give the no-artwork fallback a known-size logo as well. The old
+            # direct drawtext path had runtime-dependent text/box dimensions,
+            # so its alleged collision coordinate was not the box's edge.
+            note_size = item * 47 // 100
             graph += (
-                "[bg]drawtext=" + _font(bold=True)
-                + ":text='♪':fontcolor=white:fontsize=72"
-                + ":box=1:boxcolor=0x7a2ea8@0.9:boxborderw=14"
-                + f":x='{margin}+abs(mod(43*t,2*(w-{pad}-text_w))"
-                + f"-(w-{pad}-text_w))'"
-                + f":y='{margin}+abs(mod(31*t,2*(h-{pad}-text_h))"
-                + f"-(h-{pad}-text_h))',"
-                + "hue=H=2*PI*t/12[canvas];"
+                f"color=c=0x7a2ea8:s={item}x{item}:d={dur},"
+                "drawtext=" + _font(bold=True)
+                + f":text='♪':fontcolor=white:fontsize={note_size}"
+                + ":x=(w-text_w)/2:y=(h-text_h)/2,"
+                + "hue=H=2*PI*t/12[item];"
+                + f"[bg][item]overlay=x='{dvd_x}':y='{dvd_y}'"
+                + ":eval=frame:shortest=1[canvas];"
             )
         return _Canvas(graph, "0xc084ff@0.9", "white")
 
@@ -528,6 +722,8 @@ def build_graph(
     title2_file: Path | None = None,
     size: int = NOTE_SIZE,
     round_frame: bool = False,
+    matrix_columns: tuple[Path, ...] = (),
+    watermark: bool = False,
 ) -> str:
     """The whole filter graph for one skin, ending in ``[out]``.
 
@@ -553,22 +749,22 @@ def build_graph(
 
     dur = max(0.1, duration)
     if round_frame:
-        title_y, title_size, line_gap = 38, 14, 18
-        span_y, span_size = int(size * 0.8125), 12
-        bar_w, bar_h = int(size * 0.39), 5
+        title_y, title_size, line_gap = int(size * 0.099), size // 27, size // 21
+        span_y, span_size = int(size * 0.8125), size // 32
+        bar_w, bar_h = int(size * 0.39), max(5, size // 77)
         bar_y = int(size * 0.875)
-        clock_size = 11
+        clock_size = size // 35
     else:
-        title_y, title_size, line_gap = 12, 15, 20
-        span_y, span_size = size - 34, 13
-        bar_w, bar_h = size, 6
-        bar_y = size - 14
-        clock_size = 13
+        title_y, title_size, line_gap = size // 32, size // 26, size // 19
+        span_y, span_size = int(size * 0.911), size // 30
+        bar_w, bar_h = size, max(6, size // 64)
+        bar_y = int(size * 0.964)
+        clock_size = size // 30
     bar_x = (size - bar_w) // 2
 
     canvas = _canvas(
         skin, size=size, dur=dur, with_media=with_media,
-        round_frame=round_frame,
+        round_frame=round_frame, matrix_columns=matrix_columns,
     )
     total = f"{int(dur) // 60}\\:{int(dur) % 60:02d}"
 
@@ -628,6 +824,15 @@ def build_graph(
     )
     if subs_file is not None:
         chain += f",subtitles=filename='{subs_file}'"
+    if watermark:
+        chain += "," + _drawtext(
+            text="@podcast_cutter_bot",
+            y=int(size * (0.205 if round_frame else 0.145)),
+            fontsize=max(12, size // 38),
+            color="white@0.82",
+            bold=True,
+            box=True,
+        )
     return chain + "[out]"
 
 
@@ -663,7 +868,12 @@ async def fetch_cover(url: str, workdir: Path, settings: Settings) -> Path | Non
                     if written > MAX_COVER_BYTES:
                         return None
                     handle.write(chunk)
-        return destination if written else None
+        if not written:
+            return None
+        if not await _cover_usable(destination):
+            logger.info("Downloaded cover from %s is not a decodable image", url)
+            return None
+        return destination
     except Exception as exc:
         logger.info("No cover art from %s: %s", url, exc)
         return None
@@ -691,44 +901,32 @@ async def _cover_usable(cover: Path, timeout: float = 30.0) -> bool:
     return code == 0
 
 
-def background_files(settings: Settings, subdir: str | None) -> list[Path]:
-    """The operator's loops for one loop skin.
-
-    ``random`` (``subdir=None``) sweeps the whole tree, so a file filed
-    under ``subway/`` still counts; a themed skin sees only its own folder.
-    """
-    directory = settings.brainrot_dir
-    if subdir is not None:
-        directory = directory / subdir
+def loop_file(settings: Settings, filename: str) -> Path | None:
+    """Return one curated loop only when its exact expected file exists."""
+    path = settings.brainrot_dir / filename
     try:
-        entries = sorted(directory.rglob("*"))
+        usable = path.suffix.lower() in BACKGROUND_SUFFIXES and path.is_file()
     except OSError:
-        return []
-    return [
-        path for path in entries
-        if path.suffix.lower() in BACKGROUND_SUFFIXES and path.is_file()
-    ]
+        return None
+    return path if usable else None
 
 
 async def _pick_background(
-    settings: Settings, need: float, subdir: str | None
+    settings: Settings, need: float, filename: str
 ) -> tuple[Path | None, list[str]]:
-    """A random background loop and the input args that loop it.
+    """One curated background at a random offset, plus args that loop it.
 
-    A random start offset keeps two renders of the same clip from serving
-    the same thirty seconds of gameplay; the file loops if it runs out. The
-    offset needs the file's duration, which the audio probe answers only for
-    loops that ship sound — a silent file just starts from the top.
+    A random start offset keeps two renders of the same skin from serving the
+    same stretch; the file loops if it runs out. Duration comes from the MP4
+    container even though the curated files deliberately have no audio.
     """
-    files = background_files(settings, subdir)
-    if not files:
+    choice = loop_file(settings, filename)
+    if choice is None:
         logger.info(
-            "No background loops for the loop skin under %s; "
-            "rendering the plain card.",
-            settings.brainrot_dir / (subdir or ""),
+            "No background file for the loop skin at %s; falling back.",
+            settings.brainrot_dir / filename,
         )
         return None, []
-    choice = random.choice(files)
     offset = 0.0
     info = await probe(choice, timeout=30.0)
     if info.duration and info.duration > need + 2:
@@ -748,6 +946,7 @@ async def render_clip(
     cover: Path | None,
     settings: Settings,
     round_frame: bool = False,
+    watermark: bool = False,
 ) -> Path:
     """Render the cut audio into a square video, verified before it is sent.
 
@@ -787,16 +986,29 @@ async def render_clip(
             encoding="utf-8",
         )
 
+    matrix_columns = (
+        _write_matrix_columns(workdir, NOTE_SIZE)
+        if skin == SKIN_MATRIX
+        else ()
+    )
+
     media = cover if skin in COVER_SKINS else None
     media_args = ["-loop", "1"]
     if skin in LOOP_SKINS:
         media, media_args = await _pick_background(
             settings, duration, LOOP_SKINS[skin]
         )
+        if media is None:
+            # A loop may disappear after its keyboard was rendered (or an old
+            # button may be pressed). Never turn that race into the old empty
+            # title card: Aurora is a complete audio-driven fallback.
+            skin = DEFAULT_NO_ARTWORK_SKIN
 
     if media is not None and not await _cover_usable(media):
         logger.info("Second input %s is not decodable; dropping it.", media)
         media = None
+        if skin in LOOP_SKINS:
+            skin = DEFAULT_NO_ARTWORK_SKIN
 
     output = workdir / "note.mp4"
     attempts = [media] if media is None else [media, None]
@@ -808,6 +1020,8 @@ async def render_clip(
             title2_file=title2_file, span_file=span_file,
             subs_file=subs_file, media=attempt_media,
             media_args=media_args, round_frame=round_frame,
+            matrix_columns=matrix_columns,
+            watermark=watermark,
             timeout=settings.ffmpeg_timeout,
         )
         if reason is None:
@@ -834,6 +1048,8 @@ async def _render_once(
     media: Path | None,
     media_args: list[str],
     round_frame: bool,
+    matrix_columns: tuple[Path, ...],
+    watermark: bool,
     timeout: float,
 ) -> str | None:
     """One render attempt. ``None`` on success, else the reason it failed."""
@@ -849,6 +1065,8 @@ async def _render_once(
         subs_file=subs_file,
         with_media=media is not None,
         round_frame=round_frame,
+        matrix_columns=matrix_columns,
+        watermark=watermark,
     )
     cmd = [
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",

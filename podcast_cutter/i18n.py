@@ -193,15 +193,12 @@ _EN = {
     "working_on_it": "⏳ Working on it…",
     "downloading_episode": "⬇️ Downloading the episode…",
     "painting": "🎨 Painting the sound…",
+    "preparing_subtitles": "💬 Preparing subtitles…",
     "uploading": "📤 Uploading {size}…",
     "upload_rejected": (
         "I cut the audio but Telegram refused the upload. Try a shorter clip."
     ),
     "cut_cancelled": "✂️ Cancelled — nothing was sent.",
-    "reskin_hint": (
-        "Fancy another look? Tap a skin below — I'll re-render this same "
-        "clip, nothing to set up again."
-    ),
     "full_episode_link": "Full episode",
     "btn_full_episode": "🎧 Open the full episode",
     "btn_demo": "🎨 Demo all skins",
@@ -275,7 +272,8 @@ _EN = {
     # -- screens -----------------------------------------------------------
     "menu_screen": (
         "🎙 <b>Podcast Cutter</b>\n"
-        "Find an episode, pick a moment, get just that part.\n\n"
+        "Find an episode, pick a moment, and get the useful part back as "
+        "audio, a circle, or video — ready to send to friends.\n\n"
         "Tap below, or just send me a podcast name."
     ),
     "ask_podcast": "🔍 <b>Which podcast?</b>\n\nSend me its name.",
@@ -301,7 +299,13 @@ _EN = {
     "interval_editor": (
         "✂️ <b>{start} → {end}</b>   <i>({length})</i>\n\n"
         "Send a timestamp to jump there — <code>12:30</code> for a "
-        "{length} clip, or <code>12:30-14:00</code> for an exact range."
+        "{length} clip, or <code>12:30-14:00</code> for an exact range.\n\n"
+        "Choose a delivery format below. Settings only update this card; "
+        "nothing is sent until you tap the blue <b>✂️ Cut it</b> button."
+    ),
+    "interval_search_hint": (
+        "Not sure about the exact interval? Tap “Find a moment by what was "
+        "said” and send a keyword or phrase from the conversation."
     ),
     "back_to_moments": (
         "‹ Back returns to the {n} {moments} found for “{phrase}”."
@@ -326,7 +330,8 @@ _EN = {
     "moments_tap": "Tap a number to open the clip editor there.",
     "result_sent": (
         "✅ Sent <b>{start} → {end}</b>\n\n"
-        "Not quite the right moment? Nudge it below."
+        "Use the buttons below to change the moment or look. Nothing is sent "
+        "until you press Cut."
     ),
 
     # -- the /stats panel --------------------------------------------------
@@ -349,6 +354,7 @@ _EN = {
     "btn_surprise": "🎲 Surprise me",
     "btn_recent": "🕘 Recent",
     "btn_help": "❓ Help",
+    "btn_language": "🌐 Change language",
     "btn_accept_terms": "✅ I agree",
     "btn_decline_terms": "Decline",
 
@@ -362,17 +368,20 @@ _EN = {
     "btn_search_again": "🔎 Search again",
     "btn_earlier": "↺ 15s earlier",
     "btn_later": "15s later ↻",
-    "btn_another_clip": "✂️ Another clip from this episode",
+    "btn_another_clip": "✏️ Edit and send another version",
     "btn_share": "📤 Share this episode",
     "btn_open": "🎧 Open it",
     "btn_retry": "↻ Try again",
-    "btn_menu_podcast": "🔍 Podcast",
-    "btn_menu_person": "🔎 Episodes",
+    "btn_menu_podcast": "🔍 Search a podcast",
+    "btn_menu_person": "🔎 Find episodes",
     "btn_menu_trending": "🔥 Trending",
-    "btn_menu_surprise": "🎲 Surprise",
-    "btn_menu_recent": "🕘 Recent episodes",
-    "btn_menu_help": "❓ How this works",
-    "btn_menu_language": "🌐 Language",
+    "btn_menu_surprise": "🎲 Surprise me",
+    "btn_menu_recent": "🕘 Recent",
+    "btn_menu_help": "❓ Help",
+    "btn_menu_language": "🌐 Change language",
+    "btn_subtitles_on": "● 💬 Subtitles enabled",
+    "btn_subtitles_ready": "💬 Add subtitles · instant",
+    "btn_subtitles_slow": "💬 Add subtitles · +a few minutes",
 
     # -- clip-editor labels ------------------------------------------------
     "fmt_audio": "🎵 Audio",
@@ -381,8 +390,10 @@ _EN = {
     "fmt_video": "🎬 Video",
     "skin_cover": "🖼 Cover",
     "skin_vinyl": "💿 Vinyl",
-    "skin_random": "🎲 Random",
-    "skin_subway": "🏄 Subway",
+    "skin_roblox": "🤖 Roblox Parkour",
+    "skin_gta": "🚗 GTA Mega Ramp",
+    "skin_asmr": "🍎 ASMR Cutting",
+    "skin_subway": "🚆 Subway Surfers",
     "skin_aurora": "🌌 Aurora",
     "skin_party": "🪩 Party",
     "skin_lava": "🌋 Lava",
@@ -672,16 +683,13 @@ _RU = {
     "working_on_it": "⏳ Работаю…",
     "downloading_episode": "⬇️ Скачиваю эпизод…",
     "painting": "🎨 Рисую звук…",
+    "preparing_subtitles": "💬 Готовлю субтитры…",
     "uploading": "📤 Отправляю {size}…",
     "upload_rejected": (
         "Аудио я вырезал, но Telegram отказался его принимать. "
         "Попробуйте клип покороче."
     ),
     "cut_cancelled": "✂️ Отменено — ничего не отправлено.",
-    "reskin_hint": (
-        "Хочется другой вид? Нажмите скин ниже — я перерисую этот же клип, "
-        "ничего заново выбирать не нужно."
-    ),
     "full_episode_link": "Полный выпуск",
     "btn_full_episode": "🎧 Открыть полный выпуск",
     "btn_demo": "🎨 Демо всех скинов",
@@ -751,7 +759,8 @@ _RU = {
 
     "menu_screen": (
         "🎙 <b>Podcast Cutter</b>\n"
-        "Найдите эпизод, выберите момент — получите только его.\n\n"
+        "Найдите эпизод, выберите момент — получите нужный кусок аудио, "
+        "кружок или видео и отправьте друзьям.\n\n"
         "Нажмите кнопку ниже или просто пришлите название подкаста."
     ),
     "ask_podcast": "🔍 <b>Какой подкаст?</b>\n\nПришлите его название.",
@@ -779,7 +788,13 @@ _RU = {
     "interval_editor": (
         "✂️ <b>{start} → {end}</b>   <i>({length})</i>\n\n"
         "Пришлите таймкод, чтобы перейти туда — <code>12:30</code> для клипа "
-        "на {length}, или <code>12:30-14:00</code> для точного диапазона."
+        "на {length}, или <code>12:30-14:00</code> для точного диапазона.\n\n"
+        "Выберите формат отправки ниже. Настройки только меняют эту карточку; "
+        "отправка начнётся после синей кнопки <b>✂️ Вырезать</b>."
+    ),
+    "interval_search_hint": (
+        "Не знаете точный интервал? Нажмите «Найти момент по словам» и "
+        "пришлите ключевое слово или фразу из разговора."
     ),
     "back_to_moments": (
         "‹ Назад вернёт к {n} {moments}, найденным по «{phrase}»."
@@ -804,7 +819,8 @@ _RU = {
     "moments_tap": "Нажмите номер, чтобы открыть редактор клипа в этом месте.",
     "result_sent": (
         "✅ Отправлено: <b>{start} → {end}</b>\n\n"
-        "Момент не совсем тот? Подвиньте его кнопками ниже."
+        "Кнопками ниже можно изменить момент или вид. Ничего не отправится, "
+        "пока вы не нажмёте «Вырезать»."
     ),
 
     "stats_24h": "Последние 24 часа",
@@ -825,6 +841,7 @@ _RU = {
     "btn_surprise": "🎲 Удиви меня",
     "btn_recent": "🕘 Недавние",
     "btn_help": "❓ Помощь",
+    "btn_language": "🌐 Сменить язык",
     "btn_accept_terms": "✅ Принимаю",
     "btn_decline_terms": "Отказаться",
 
@@ -837,17 +854,20 @@ _RU = {
     "btn_search_again": "🔎 Искать ещё",
     "btn_earlier": "↺ На 15с раньше",
     "btn_later": "На 15с позже ↻",
-    "btn_another_clip": "✂️ Ещё клип из этого эпизода",
+    "btn_another_clip": "✏️ Изменить и отправить ещё раз",
     "btn_share": "📤 Поделиться эпизодом",
     "btn_open": "🎧 Открыть",
     "btn_retry": "↻ Попробовать ещё раз",
-    "btn_menu_podcast": "🔍 Подкаст",
-    "btn_menu_person": "🔎 Эпизоды",
+    "btn_menu_podcast": "🔍 Найти подкаст",
+    "btn_menu_person": "🔎 Поиск эпизодов",
     "btn_menu_trending": "🔥 Популярное",
-    "btn_menu_surprise": "🎲 Сюрприз",
-    "btn_menu_recent": "🕘 Недавние эпизоды",
-    "btn_menu_help": "❓ Как это работает",
-    "btn_menu_language": "🌐 Язык",
+    "btn_menu_surprise": "🎲 Удиви меня",
+    "btn_menu_recent": "🕘 Недавние",
+    "btn_menu_help": "❓ Помощь",
+    "btn_menu_language": "🌐 Сменить язык",
+    "btn_subtitles_on": "● 💬 Субтитры включены",
+    "btn_subtitles_ready": "💬 Добавить субтитры · сразу",
+    "btn_subtitles_slow": "💬 Добавить субтитры · +несколько минут",
 
     "fmt_audio": "🎵 Аудио",
     "fmt_voice": "🎤 Голосовое",
@@ -855,8 +875,10 @@ _RU = {
     "fmt_video": "🎬 Видео",
     "skin_cover": "🖼 Обложка",
     "skin_vinyl": "💿 Винил",
-    "skin_random": "🎲 Рандом",
-    "skin_subway": "🏄 Сабвей",
+    "skin_roblox": "🤖 Roblox Parkour",
+    "skin_gta": "🚗 GTA Mega Ramp",
+    "skin_asmr": "🍎 ASMR Cutting",
+    "skin_subway": "🚆 Subway Surfers",
     "skin_aurora": "🌌 Сияние",
     "skin_party": "🪩 Вечеринка",
     "skin_lava": "🌋 Лава",

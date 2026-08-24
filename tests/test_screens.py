@@ -139,8 +139,27 @@ class TestIntervalScreen:
         view = screens.interval(self._session(), settings)
         assert "12:30" in view.text and "12:30-14:00" in view.text
 
+    def test_explains_format_confirmation_and_word_search(self, settings):
+        view = screens.interval(self._session(), settings)
+        assert "delivery format" in view.text
+        assert "blue" in view.text and "Cut" in view.text
+        assert "keyword or phrase" in view.text
+
     def test_offers_the_cut_button(self, settings):
         assert kb.ACTION_CUT in payloads(screens.interval(self._session(), settings))
+
+
+class TestResultScreen:
+    def test_has_one_plain_instruction_without_editor_jargon(self, settings):
+        session = Session(language="ru")
+        session.select_episode(make_episode("1"), 60)
+        session.go(Screen.RESULT)
+
+        text = screens.result(session, "podcast_cutter_bot", settings).text
+
+        assert text.count("Ничего не отправится") == 1
+        assert "редактор" not in text.lower()
+        assert "Хотите другую версию" not in text
 
 
 class TestLists:
@@ -183,6 +202,23 @@ class TestLists:
         )
         session.episode_filter = "x"
         assert kb.ACTION_CLEAR_FILTER in payloads(screens.episodes(session, settings))
+
+    def test_full_episode_titles_live_in_text_and_buttons_drop_feed_prefix(
+        self, settings
+    ):
+        session = Session()
+        title = (
+            "Some Show - Episode 3.83.3. - The important title that used to "
+            "disappear from the Telegram button"
+        )
+        session.set_episodes([make_episode("1", title)])
+        session.go(Screen.EPISODES)
+
+        view = screens.episodes(session, settings)
+        button = view.keyboard.inline_keyboard[0][0]
+        assert "The important title" in view.text
+        assert button.text.startswith("#1 · Episode 3.83.3.")
+        assert not button.text.startswith("Some Show")
 
 
 class TestMenu:

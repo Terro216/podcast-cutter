@@ -3,8 +3,8 @@
 Version: 2026-08-18
 
 This Policy describes data processed by the Telegram bot
-`@podcast_cutter_bot`, operated as an independent software project by the Podcast Cutter
-project. Privacy and rights contact: `podcast_cutter@inbox.ru`.
+`@podcast_cutter_bot`, operated as an independent software project. Privacy
+and rights contact: `podcast_cutter@inbox.ru`.
 
 ## Data processed
 
@@ -107,9 +107,9 @@ appropriate, a new Terms version requiring acceptance.
 
 Версия: 2026-08-18
 
-Политика описывает обработку данных Telegram-ботом `@podcast_cutter_bot`,
-который поддерживается Ильёй Медведевым как независимый программный проект.
-Контакт по конфиденциальности и правам: `podcast_cutter@inbox.ru`.
+Политика описывает обработку данных независимым программным проектом —
+Telegram-ботом `@podcast_cutter_bot`. Контакт по конфиденциальности и правам:
+`podcast_cutter@inbox.ru`.
 
 ## Какие данные обрабатываются
 

@@ -1,5 +1,28 @@
 # Handoff — podcast-cutter, 2026-08-12
 
+> **Runtime follow-up, 2026-08-21.** Deployed on
+> `sha256:30a4e2237775…`: DVD no longer uses a
+> cosmetic inset: square video hits the literal frame, while video-note
+> collision points put the placeholder/artwork's outer corner exactly on the
+> circular crop. Both axes collide during the five-second demo. The result
+> screen also has one plain instruction instead of two references to an
+> “editor”. Verified with frame inspection, real ffmpeg renders, `ruff`, and
+> the full suite (`1024 passed, 8 skipped`). Only `podcast-cutter` was
+> recreated; it started healthy with zero restarts and the tunnel was untouched.
+
+> **Earlier runtime note, 2026-08-21.** The curated-loop rollout and follow-up
+> UX/privacy batch first went live on image `sha256:6489735082c0…`, after `ruff` and
+> the full suite (`1022 passed, 8 skipped`): result-screen
+> nudges/skins only edit and reopen the full editor; the blue Cut button is the
+> sole send action; format changes are available there; every circle burns in
+> `@podcast_cutter_bot`; subtitles are an explicit bottom toggle and an unknown
+> episode enters the durable listening queue only after that opt-in; feed-name
+> prefixes no longer crowd episode buttons because full titles live in the
+> message; reply/inline menus agree and both expose language; the public legal
+> contact is `podcast_cutter@inbox.ru`. The reported «вышка» failure was a
+> Telegram `sendMessage` `ReadTimeout` before search, not an index/search error;
+> indexed searches no longer send the redundant progress message first.
+
 > **Runtime note, 2026-08-13.** The 13 August audit's pre-deploy checklist has
 > been carried out: `podcast-data` snapshotted (`/data/backups/predeploy-*.db`,
 > quick_check ok), the test/lint suite rerun green (775 pass, ruff clean), and
@@ -69,7 +92,9 @@ built, deployed and warmed (§3a).
 ## 1. State right now
 
 Deployed and running: **@podcast_cutter_bot** on big-one, container
-`podcast-cutter`, healthy, 0 restarts, no errors in the log.
+`podcast-cutter`, healthy on `sha256:30a4e2237775…`. The current rollout
+started on its first attempt with zero restarts; heartbeat is current and the
+failing streak is zero.
 
 Recent history, newest first, on branch **`harden-source-urls`**:
 
@@ -482,11 +507,14 @@ answer (`scripts/draft_queries.py --verify` prints the listening list), and
 `annotation.fully_corrected` is still empty. The basket yamls say
 `method: text-verified` until that happens.
 
-**Shape.** `podcast_cutter/evals.py` holds the query classes, the scoring and
-the runner; `evals/baskets/{ru,en}.yaml` hold the queries and the episodes;
-`evals/fixtures/` holds committed transcripts; `tests/test_baskets.py` runs the
-whole thing on every push. `scripts/make_fixtures.py` produces the fixtures and
-`scripts/draft_queries.py` helps write and then check the answer key.
+**Shape.** `podcast_cutter/evals.py` holds the query classes, scoring and
+runner; `evals/baskets/{ru,en}.yaml` hold the queries and episode references.
+Full transcripts are deliberately local-only in the gitignored
+`private/eval-fixtures/` (or `EVAL_FIXTURES_DIR`) because they reproduce
+third-party speech. Public CI checks basket shape and skips transcript-derived
+rows; the operator runs the whole regression set locally. `scripts/
+make_fixtures.py` produces the fixtures and `scripts/draft_queries.py` helps
+write and then check the answer key.
 
 **Both runs are offline.** Searching a transcript is milliseconds; *producing*
 one is the cost. So both the reference (`large-v3`) and the shipped model's
@@ -529,7 +557,8 @@ python scripts/make_fixtures.py evals/baskets/ru.yaml evals/baskets/en.yaml \
     --variant reference --model large-v3 --threads 10
 ```
 
-It downloads the episodes itself and writes into `evals/fixtures/`. Both
+It downloads the episodes itself and writes into `private/eval-fixtures/`.
+That directory is gitignored and must stay local or in encrypted backup. Both
 variants of one episode must come from the same recording or the comparison is
 partly between two recordings, so each fixture records the **download's**
 SHA-256 and the script refuses to write one that disagrees with its sibling.
@@ -556,7 +585,7 @@ difference on the decoder rather than on the feed.
 
 ---
 
-## 3c. Two languages — built, tested, not yet redeployed (2026-08-15)
+## 3c. Two languages — built, tested and deployed (2026-08-15)
 
 The bot now speaks English and Russian end to end: every screen, button,
 error, progress line, the inline mode, and the Telegram profile
@@ -587,8 +616,13 @@ How it hangs together — the parts a future change must not break:
 - Left English on purpose: ID3 `comment` tag, `api.py` data fallbacks
   ("Untitled episode" — parse time has no user), operator-only startup errors.
 
-The running container predates this change; it picks the code up on the next
-`docker compose up -d --build podcast-cutter` (see §6 for the tunnel caveat).
+The bilingual path has been live since the 2026-08-15 rollout. The video/demo
+batch described in §5 and the four curated loop buttons were deployed on
+2026-08-21, followed by the UX/privacy batch on image
+`sha256:6489735082c0…` and the DVD/result-copy fix on
+`sha256:30a4e2237775…`; `/srv/podcast-cutter/brainrot/loops` is mounted
+read-only at `/data/brainrot`. Only `podcast-cutter` was recreated in each
+rollout; the media tunnel was left untouched (see §6 for the tunnel caveat).
 
 ## 4. Deliberate decisions worth not re-litigating
 
@@ -621,7 +655,33 @@ The running container predates this change; it picks the code up on the next
 
 ---
 
-## 5. Known gaps, roughly by value
+## 5. Current plan and remaining gaps (updated 2026-08-24)
+
+The old numbered block below is retained as a closure/decision log; it is no
+longer the priority list. The current order is:
+
+1. **Adoption evidence.** Seed distinct `src_<tag>` links, measure first
+   successful cut, repeat use and share-format mix, then fix the largest real
+   funnel drop. Production currently has too few users for feature guesses to
+   be trustworthy.
+2. **Search truth.** Complete the by-ear answer-key pass before changing the
+   recogniser or English morphology. The baskets and hybrid E5 retrieval are
+   deployed; this remaining work improves the ruler, not the plumbing.
+3. **Demo/distribution.** Record the 3–5-minute fallback, refresh the
+   architecture diagram, and set the BotFather-only avatar/inline placeholder.
+   In-bot visual demos are five seconds per available skin, carry the complete
+   source card and burn in `@podcast_cutter_bot`.
+4. **Small operational debts.** Put the restic secret in Bitwarden and monitor
+   the Telegram/media tunnel externally. Queue ETA and transcript LRU wait for
+   evidence that queueing or disk growth is user-visible.
+5. **Later content affordances.** Chapter-aware boundaries and embedded audio
+   artwork are useful but rank below activation/search evidence.
+
+Already closed and not gaps: CI, public repository, API search caching,
+ffmpeg-aware `/cancel`, public-use legal/privacy controls, SQLCipher migration,
+off-host encrypted backups and verified restores.
+
+### Historical closure and decision log
 
 1. **The answer key has not been listened to.** It is written, text-verified
    and green in CI (§3b), but the ±30 s by-ear pass and the two

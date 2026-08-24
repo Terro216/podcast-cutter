@@ -227,12 +227,12 @@ class Settings:
 
     @property
     def brainrot_dir(self) -> Path:
-        """Background loops for the ``brainrot`` video skin.
+        """Curated background loops for the four gameplay video skins.
 
-        On the volume, not in the image: the footage is the operator's own —
-        the repo ships no gameplay, both for size and for rights reasons —
-        and dropping a file here must not require a rebuild. Missing or
-        empty simply renders the skin as a plain card.
+        Mounted read-only, not baked into the image: the footage is the
+        operator's own — the repo ships no gameplay, both for size and for
+        rights reasons. A missing exact file hides that one skin; a file
+        removed after a keyboard was sent falls back to Aurora.
         """
         return self.data_dir / "brainrot"
 

@@ -5,12 +5,12 @@ is a test rather than a script for one reason: a measurement nobody is made to
 look at stops being taken. Every push runs both baskets over both transcripts
 and fails if a number went backwards.
 
-What this can and cannot catch is worth being precise about. It runs over
-committed transcripts, so it cannot notice the recogniser getting worse — that
-takes a new fixture, produced by `scripts/make_fixtures.py`. What it does catch
-is every regression on the path from recognised words to an answer: the lemma
-index, the windowing, the clustering, the placement. All three defects found in
-production so far lived there.
+What this can and cannot catch is worth being precise about. Full transcript
+runs use the operator's gitignored `private/eval-fixtures/`, so ordinary public
+CI checks the baskets' shape and skips rows whose private inputs are absent.
+With local fixtures present this catches every regression on the path from
+recognised words to an answer: the lemma index, windowing, clustering and
+placement. All three defects found in production so far lived there.
 """
 
 from __future__ import annotations
@@ -32,6 +32,12 @@ from podcast_cutter.evals import (
 )
 
 EVALS = Path(__file__).resolve().parent.parent / "evals"
+FIXTURES = Path(
+    os.environ.get(
+        "EVAL_FIXTURES_DIR",
+        Path(__file__).resolve().parent.parent / "private" / "eval-fixtures",
+    )
+)
 BASKETS = sorted(EVALS.glob("baskets/*.yaml"))
 #: reference and asr are the pair the two-run design stands on; small and
 #: speechkit are the candidate recognisers, guarded so the comparison table
@@ -83,7 +89,7 @@ def _fixtures_present(basket, variant: str) -> bool:
     # empty string onto the directory yields the directory, which exists — and
     # the run would then fail deep inside the loader instead of skipping here.
     names = [episode.transcripts.get(variant) for episode in basket.episodes.values()]
-    return all(name and (EVALS / "fixtures" / name).exists() for name in names)
+    return all(name and (FIXTURES / name).exists() for name in names)
 
 
 def test_every_basket_file_is_readable():
@@ -127,12 +133,12 @@ async def test_the_basket_has_not_regressed(
     basket, variant, retrieval, tmp_path, capsys
 ):
     if not _fixtures_present(basket, variant):
-        pytest.skip(f"{variant} fixtures are not committed yet")
+        pytest.skip(f"{variant} fixtures are not available locally")
     embedder = _embedder_or_skip(retrieval)
 
     key = variant if retrieval == "lexical" else f"{variant}+e5"
     answers = await run_variant(
-        basket, EVALS / "fixtures", variant, tmp_path / "basket.db",
+        basket, FIXTURES, variant, tmp_path / "basket.db",
         embedder=embedder,
     )
     label = f"{basket.language}/{key}"
@@ -180,7 +186,7 @@ async def test_the_reference_is_at_least_as_good_as_the_shipped_model(
     scores = {}
     for variant in VARIANTS:
         answers = await run_variant(
-            basket, EVALS / "fixtures", variant, tmp_path / f"{variant}.db"
+            basket, FIXTURES, variant, tmp_path / f"{variant}.db"
         )
         scores[variant] = summarize(answers, variant).hit_at_k
 

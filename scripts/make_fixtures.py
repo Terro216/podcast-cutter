@@ -36,10 +36,11 @@ Silicon laptop, and it needs nothing from big-one. `ffmpeg` on `PATH`, then:
     poetry run python scripts/make_fixtures.py evals/baskets/ru.yaml \\
         evals/baskets/en.yaml --variant reference --model large-v3 --threads 10
 
-It downloads the episodes itself and writes straight into `evals/fixtures/`,
-so the result is a `git add` away. Keep `--compute int8`: the reference is
-going to be corrected by hand regardless, and float32 buys hours rather than
-accuracy where it matters.
+It downloads the episodes itself and writes into the gitignored
+`private/eval-fixtures/`. These are full third-party transcripts: keep them
+locally or in an encrypted operator backup, never add them to Git. Keep
+`--compute int8`: the reference is going to be corrected by hand regardless,
+and float32 buys hours rather than accuracy where it matters.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -218,7 +220,14 @@ async def main(argv: list[str]) -> int:
     parser.add_argument(
         "--fixtures",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "evals" / "fixtures",
+        default=Path(
+            os.environ.get(
+                "EVAL_FIXTURES_DIR",
+                Path(__file__).resolve().parent.parent
+                / "private"
+                / "eval-fixtures",
+            )
+        ),
     )
     parser.add_argument("--work", type=Path, default=Path("/tmp/basket-fixtures"))
     args = parser.parse_args(argv)
@@ -231,8 +240,6 @@ async def main(argv: list[str]) -> int:
     settings = Settings(bot_token="x", api_key="x", api_secret="x", data_dir=args.work)
     proxy = MediaProxy(settings)
     if args.backend == "speechkit":
-        import os
-
         from podcast_cutter.asr import SpeechKit
 
         recognizer = SpeechKit(

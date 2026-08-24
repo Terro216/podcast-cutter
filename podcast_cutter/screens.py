@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from telegram import InlineKeyboardMarkup
 
 from . import keyboards as kb
+from . import video
 from .api import Episode
 from .config import Settings
 from .i18n import plural, t
@@ -91,6 +92,32 @@ def episode_label(episode: Episode) -> str:
     if episode.duration:
         return f"{episode.title}  ·  {format_duration(episode.duration)}"
     return episode.title
+
+
+def compact_episode_title(episode: Episode) -> str:
+    """Drop a repeated feed-name prefix from a one-line episode button."""
+    title = episode.title.strip()
+    feed = episode.feed_title.strip()
+    if feed and title.casefold().startswith(feed.casefold()):
+        remainder = title[len(feed) :].lstrip(" \t—–-:|·")
+        if remainder:
+            title = remainder
+    return title
+
+
+def _episode_page_text(episodes: list[Episode]) -> str:
+    """Fuller titles live in the message; Telegram buttons stay scannable."""
+    lines = []
+    for index, episode in enumerate(episodes, start=1):
+        duration = (
+            f"  ·  {format_duration(episode.duration)}"
+            if episode.duration
+            else ""
+        )
+        lines.append(
+            f"<b>{index}.</b> {esc(truncate(episode.title, 180))}{duration}"
+        )
+    return "\n".join(lines)
 
 
 def _episode_heading(episode: Episode) -> str:
@@ -184,13 +211,17 @@ def episodes(session: Session, settings: Settings) -> View:
             n=count, episodes=plural(lang, "episodes", count),
         )
 
+    numbered = {episode.id: index for index, episode in enumerate(window, start=1)}
+    listing = _episode_page_text(window)
     return View(
-        breadcrumb(session) + heading,
+        breadcrumb(session) + heading + (f"\n\n{listing}" if listing else ""),
         kb.choice_keyboard(
             window,
             kb.EPISODE_PREFIX,
             id_of=lambda e: e.id,
-            label_of=episode_label,
+            label_of=lambda e: (
+                f"#{numbered[e.id]} · {compact_episode_title(e)}"
+            ),
             lang=lang,
             page=page,
             pages=pages,
@@ -325,6 +356,8 @@ def interval(session: Session, settings: Settings) -> View:
             length=format_duration(session.clip_length),
         )
     )
+    if settings.asr_enabled:
+        body += f"\n\n<i>{t(lang, 'interval_search_hint')}</i>"
 
     # Telegram's limits change what is honest to promise per format, so the
     # screen says where the current length stands before the cut button
@@ -364,6 +397,13 @@ def interval(session: Session, settings: Settings) -> View:
             send_as=session.send_as,
             skin=session.skin,
             can_search=settings.asr_enabled,
+            can_subtitle=(settings.asr_enabled or session.episode_transcribed),
+            subtitles=session.subtitles,
+            transcript_ready=session.episode_transcribed,
+            has_artwork=bool(session.episode and session.episode.image),
+            available_skins=video.available_skins(
+                bool(session.episode and session.episode.image), settings=settings
+            ),
             lang=lang,
         ),
     )
@@ -437,7 +477,9 @@ def moments(session: Session) -> View:
     )
 
 
-def result(session: Session, bot_username: str) -> View:
+def result(
+    session: Session, bot_username: str, settings: Settings | None = None
+) -> View:
     lang = session.language
     episode = session.episode
     heading = _episode_heading(episode) if episode else ""
@@ -454,9 +496,6 @@ def result(session: Session, bot_username: str) -> View:
             end=format_duration(session.clip_end),
         )
     )
-    if episode and session.send_as in (FORMAT_NOTE, FORMAT_VIDEO):
-        body += f"\n\n<i>{t(lang, 'reskin_hint')}</i>"
-
     return View(
         body,
         kb.result_keyboard(
@@ -469,6 +508,14 @@ def result(session: Session, bot_username: str) -> View:
             else None,
             send_as=session.send_as,
             skin=session.skin,
+            has_artwork=bool(episode and episode.image),
+            available_skins=(
+                video.available_skins(
+                    bool(episode and episode.image), settings=settings
+                )
+                if settings is not None
+                else None
+            ),
         ),
     )
 

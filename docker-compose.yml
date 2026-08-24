@@ -11,6 +11,10 @@ services:
       # Without this, every `docker compose up --build` recreates the container
       # and takes the log history and the journal with it.
       - podcast-data:/data
+      # Curated, replaceable gameplay loops live outside the database volume:
+      # read-only in the bot, easy to inspect on the host, and deliberately
+      # excluded from the encrypted database backup.
+      - ${BRAINROT_SOURCE_DIR:-/srv/podcast-cutter/brainrot/loops}:/data/brainrot:ro
     environment:
       DATA_DIR: /data
     # Liveness by heartbeat, not by `pgrep`: the bot rewrites

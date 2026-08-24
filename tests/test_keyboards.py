@@ -52,7 +52,7 @@ class TestCallbackVocabulary:
         fixed = [
             kb.NAV_BACK, kb.NAV_MENU, kb.NAV_CANCEL, kb.NAV_NOOP,
             kb.ACTION_CUT, kb.ACTION_RETRY, kb.ACTION_TOGGLE_VOICE,
-            kb.ACTION_NEW_CLIP, kb.ACTION_CLEAR_FILTER,
+            kb.ACTION_NEW_CLIP, kb.ACTION_CLEAR_FILTER, kb.ACTION_SUBTITLES,
         ]
         assert all(len(value.encode()) <= 64 for value in fixed)
 
@@ -198,6 +198,30 @@ class TestIntervalKeyboard:
             for skin in kb.SKIN_LABELS:
                 assert f"{kb.SKIN_PREFIX}:{skin}" in offered
 
+    def test_artwork_only_skins_disappear_when_the_episode_has_no_image(self):
+        offered = payloads(
+            kb.interval_keyboard(
+                60, max_length=900, send_as="note", has_artwork=False
+            )
+        )
+        assert f"{kb.SKIN_PREFIX}:cover" not in offered
+        assert f"{kb.SKIN_PREFIX}:vinyl" not in offered
+        assert f"{kb.SKIN_PREFIX}:dvd" in offered
+        assert f"{kb.SKIN_PREFIX}:matrix" in offered
+
+    def test_loop_skins_disappear_when_no_loop_is_available(self):
+        offered = payloads(
+            kb.interval_keyboard(
+                60,
+                max_length=900,
+                send_as="video",
+                available_skins=("aurora", "party", "lava", "matrix"),
+            )
+        )
+        for skin in ("roblox", "gta", "asmr", "subway"):
+            assert f"{kb.SKIN_PREFIX}:{skin}" not in offered
+        assert f"{kb.SKIN_PREFIX}:aurora" in offered
+
     def test_every_skin_sits_in_some_row(self):
         # The rows are hand-split for width; a skin added to the labels but
         # not to a row would silently never be offered.
@@ -220,6 +244,42 @@ class TestIntervalKeyboard:
     def test_always_offers_a_way_back(self):
         markup = kb.interval_keyboard(60, max_length=900)
         assert kb.NAV_BACK in payloads(markup)
+
+    def test_subtitles_are_an_explicit_bottom_toggle_for_video(self):
+        markup = kb.interval_keyboard(
+            60,
+            max_length=900,
+            send_as="note",
+            can_subtitle=True,
+            subtitles=False,
+            transcript_ready=False,
+        )
+        assert markup.inline_keyboard[-2][0].callback_data == kb.ACTION_SUBTITLES
+        assert "few minutes" in markup.inline_keyboard[-2][0].text
+
+    def test_ready_and_enabled_subtitles_have_honest_labels(self):
+        ready = kb.interval_keyboard(
+            60,
+            max_length=900,
+            send_as="video",
+            can_subtitle=True,
+            transcript_ready=True,
+        )
+        assert any("instant" in label for label in labels(ready))
+        enabled = kb.interval_keyboard(
+            60,
+            max_length=900,
+            send_as="video",
+            can_subtitle=True,
+            subtitles=True,
+        )
+        button = next(
+            b
+            for row in enabled.inline_keyboard
+            for b in row
+            if b.callback_data == kb.ACTION_SUBTITLES
+        )
+        assert button.style == kb.STYLE_SUCCESS
 
 
 class TestResultKeyboard:
@@ -250,11 +310,32 @@ class TestReskinOnResult:
                 assert f"{kb.RESKIN_PREFIX}:{skin}" in data
 
     def test_no_skins_after_plain_audio(self):
-        # Nine buttons that each spend a cut have no business under an mp3.
+        # Skin buttons that each spend a cut have no business under an mp3.
         for fmt in (None, "audio", "voice"):
             markup = kb.result_keyboard("x", send_as=fmt)
             data = [p for p in payloads(markup) if p]
             assert not any(p.startswith(f"{kb.RESKIN_PREFIX}:") for p in data)
+
+    def test_artwork_only_reskins_disappear_without_an_image(self):
+        data = payloads(
+            kb.result_keyboard(
+                "x", send_as="video", skin="aurora", has_artwork=False
+            )
+        )
+        assert f"{kb.RESKIN_PREFIX}:cover" not in data
+        assert f"{kb.RESKIN_PREFIX}:vinyl" not in data
+        assert f"{kb.RESKIN_PREFIX}:dvd" in data
+
+    def test_unavailable_loop_reskins_disappear(self):
+        data = payloads(
+            kb.result_keyboard(
+                "x",
+                send_as="video",
+                available_skins=("cover", "aurora", "dvd"),
+            )
+        )
+        for skin in ("roblox", "gta", "asmr", "subway"):
+            assert f"{kb.RESKIN_PREFIX}:{skin}" not in data
 
     def test_the_sent_skin_is_marked(self):
         markup = kb.result_keyboard("x", send_as="note", skin="matrix")
@@ -308,6 +389,12 @@ class TestMainMenu:
         shown = {b.text for row in markup_rows(kb.main_menu(lang)) for b in row}
         assert shown == {
             i18n.t(lang, key) for key, _ in kb._MENU_LABEL_ACTIONS
+        }
+
+    @pytest.mark.parametrize("lang", i18n.LANGUAGES)
+    def test_reply_menu_includes_language(self, lang):
+        assert i18n.t(lang, "btn_language") in {
+            b.text for row in markup_rows(kb.main_menu(lang)) for b in row
         }
 
 

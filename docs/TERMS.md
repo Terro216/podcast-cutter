@@ -3,8 +3,8 @@
 Version: 2026-08-18
 
 These Terms govern use of the Telegram bot `@podcast_cutter_bot` (the
-“Service”), operated as an independent, non-commercial software project by
-Podcast Cutter project (the “Operator”). Contact: `podcast_cutter@inbox.ru`.
+“Service”), operated as an independent, non-commercial software project (the
+“Operator”). Contact: `podcast_cutter@inbox.ru`.
 
 By pressing the acceptance button or continuing to use a version of the
 Service that requires acceptance, you agree to these Terms. If you do not
@@ -122,8 +122,8 @@ version accepted by a user is recorded with a timestamp.
 Версия: 2026-08-18
 
 Эти Условия регулируют использование Telegram-бота `@podcast_cutter_bot`
-(«Сервис»), который поддерживается Ильёй Медведевым как независимый
-некоммерческий программный проект («Оператор»). Контакт: `podcast_cutter@inbox.ru`.
+(«Сервис»), который работает как независимый некоммерческий программный
+проект («Оператор»). Контакт: `podcast_cutter@inbox.ru`.
 
 Нажимая кнопку принятия или продолжая пользоваться версией Сервиса, которая
 требует принятия, вы соглашаетесь с Условиями. При несогласии не используйте

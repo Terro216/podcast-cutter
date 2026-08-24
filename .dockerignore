@@ -12,6 +12,7 @@ __pycache__
 .pytest_cache
 .ruff_cache
 tests
+private
 scripts
 # …except the one script the runtime image needs: the Docker healthcheck.
 !scripts/healthcheck.py

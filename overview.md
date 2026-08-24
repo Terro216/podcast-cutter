@@ -1,80 +1,77 @@
-# Podcast Cutter Bot — status and roadmap
+# Podcast Cutter — current overview
 
-## What this is
+Updated 2026-08-24. `README.md` is the operator/user reference; `HANDOFF.md`
+keeps the implementation history; `ROADMAP.md` contains the product rationale.
+This page is the short current-state map.
 
-`podcast-cutter` is a Telegram bot built on `python-telegram-bot`. Users search
-for podcasts, browse episodes, name a time interval, and get that segment back
-as an audio file. See `README.md` for setup and layout.
+Deployment note: the video/demo redesign, four curated loops and the follow-up
+UX/privacy batch are live. The host loops are mounted read-only at
+`/data/brainrot`; the final 2026-08-21 rollout passed `ruff` and `1022 passed,
+8 skipped`. The DVD edge/result-copy follow-up raised the full suite to `1024
+passed, 8 skipped` and started successfully on image
+`sha256:30a4e2237775…`.
 
-This document tracks what is done and what is not. It was originally a plan
-written before the core existed; the items below reflect the current code.
+## Product today
 
-## Done
+Podcast Cutter is a bilingual Telegram bot that searches Podcast Index,
+opens an episode, finds a timestamp either manually or by what was said, and
+sends the selected fragment as audio, voice, a circular video note or a square
+video. Post-cut nudges and skin choices reopen the full editor without sending;
+the next file goes out only after the blue Cut button. It also supports recent
+episodes, inline sharing and deep links.
 
-**Core**
-- Audio engine on ffmpeg: stream-copy over HTTP range requests, download-then-cut
-  fallback, and re-encode to MP3 when no container fits the source codec.
-- Output container follows the source codec, so AAC/M4A episodes work.
-- Results are verified with ffprobe before sending — ffmpeg can exit 0 having
-  written an unplayable fragment.
-- Interval parser accepting `MM:SS`, `HH:MM:SS`, raw seconds and `1h30m`, with
-  several range separators, validated against the episode length.
+Search-by-speech is live: local Whisper produces timed utterances, FTS5 plus
+Russian lemmatisation supplies lexical recall, multilingual E5 adds semantic
+retrieval, and the result opens the ordinary clip editor. Transcription jobs
+are durable in SQLite and resume after restart; repeated searches reuse the
+stored transcript.
 
-**Safeguards**
-- Cut duration capped (default 15 min); oversized results are re-encoded before
-  being refused, so the Telegram upload limit is respected.
-- Timeouts on every external call: API requests, ffprobe, ffmpeg, downloads and
-  uploads. Nothing can hang the bot indefinitely.
-- Concurrency: a global semaphore bounds simultaneous ffmpeg jobs, and each user
-  is limited to one cut at a time.
-- Every job gets its own temporary directory, removed in a `finally`.
-- Conversation timeout plus `allow_reentry`, so no state is a dead end and menu
-  buttons always work.
-- Typed errors with user-facing messages, and a global error handler.
-- Config validated at startup, naming any missing variable.
+Visual output is 512×512 H.264 with twelve possible skins. Cover/Vinyl are
+hidden without usable episode artwork; each of Roblox, GTA, ASMR Cutting and
+Subway Surfers is hidden unless its exact operator-owned loop exists. Every
+render starts at a fresh random offset; old/stale choices fall back to Aurora
+rather than yielding an empty card. The Matrix is falling glyph rain, DVD
+bounces inside an explicit visible boundary, and Lava uses rising/merging wax
+fields instead of a rotating gradient. Skin demos are five seconds each,
+include the full source card and burn `@podcast_cutter_bot` into the picture.
 
-**Interface**
-- Screen stack with `‹ Back` and `☰ Menu` everywhere, plus a breadcrumb line.
-- Pagination shows position and total (`‹ 2/7 ›`) instead of bare arrows.
-- Coloured buttons via Bot API 9.4 `style`, so the primary action is obvious.
-- Clip editor: length presets, `◀ −15s` / `+1m ▶` nudges, and a bare timestamp
-  (`12:30`) meaning "a clip starting here".
-- Live download progress bar, throttled to one edit every few seconds, plus a
-  native upload indicator.
-- Audio file or voice note, chosen with a toggle.
-- Post-cut nudges that re-cut, and one-tap "another clip from this episode".
-- Recent-episode list; typing on any list filters it in place.
-- Inline mode (`@bot query` in any chat) and `?start=ep_…` deep links.
+Every captioned result begins with a clickable `@podcast_cutter_bot`, then the
+episode title, show/time range, full-episode link and Podcast Index attribution.
+Video notes cannot carry captions. Every circle burns the bot handle into its
+pixels and its result screen keeps the source link. Subtitles are an explicit
+bottom-of-editor option: instant for a
+stored transcript, or a clearly-labelled several-minute first listen otherwise.
 
-**Operations**
-- SQLite journal of what happened: cuts with outcome, timing and size, plus
-  searches and inline use. `/stats` renders it for admins.
-- Rotating log file under a mounted volume, alongside stdout. Container logs
-  are discarded whenever a redeploy recreates the container, so without this
-  there is no history at all.
-- The recent-episode list is persisted, so it survives a restart.
-- Retention: journal rows past `LOG_RETENTION_DAYS` are purged at startup.
-- Leftover job directories from a crash are swept at startup.
+## Reliability and public-use baseline
 
-**Quality**
-- 388 tests: routers driven through fakes, screens rendered as pure functions,
-  the journal and retention exercised against a real SQLite file, and
-  end-to-end cutting against audio served over a local HTTP server
-  (redirects, 403, 404, codec fallbacks, oversized ID3 tags).
-- ruff clean; runs as a non-root user in Docker.
+- Guarded URLs/redirects, source-duration ceiling, bounded concurrency and
+  per-user rate limits.
+- Range-first cutting with proxy fallback, codec-aware containers, ffprobe
+  verification, upload-size handling and cancellation that kills ffmpeg.
+- SQLCipher state, explicit Terms acceptance, privacy/delete commands,
+  feed blocklist and retention controls.
+- Encrypted off-host restic backups with integrity checks and proven restores.
+- CI runs ruff and more than one thousand tests, including real ffmpeg paths
+  and retrieval-basket structure. Full transcript-derived basket regressions
+  run locally from gitignored private fixtures. Production deployment remains
+  an explicit, approval-gated operation.
 
-## Not done
+## Next plan, in order
 
-- **Mini App.** A web view with a waveform would beat any button-based interval
-  picker, but it needs a separate frontend and HTTPS hosting.
-- **Caching.** Identical searches from different users each hit the API.
-- **Cancel during a cut.** Cancel leaves the screen but does not kill a running
-  ffmpeg job.
-- **Cover art.** Clips carry title/artist/album tags but no embedded artwork.
-- **Chapter awareness.** Feeds that publish chapters could offer them as
-  one-tap clip boundaries.
-- **Session persistence.** Sessions stay in memory on purpose: pickling them
-  would tie on-disk data to the `Session` class layout, so adding a field would
-  break old records at request time, and PTB refuses to start on a corrupt
-  persistence file. A session is a two-minute working set; the recent list is
-  the part worth keeping, and it lives in SQLite with a schema we control.
+1. **Prove adoption.** Invite small cohorts through separate `src_<tag>` links;
+   measure first successful clip, repeat use, share behaviour and failure
+   reasons. Fix the largest observed drop.
+2. **Finish the search ruler.** Complete the by-ear answer-key pass. Use those
+   results to decide whether English stemming or a larger recogniser earns its
+   CPU/complexity cost.
+3. **Package the demo.** Refresh one architecture diagram, record a reliable
+   3–5-minute fallback, and set the BotFather-only avatar/inline placeholder.
+4. **Close small operational debts.** Store the restic secret in Bitwarden and
+   add external monitoring for the Telegram/media tunnel.
+5. **Only then expand features.** Candidates are chapter-aware clip boundaries,
+   embedded artwork for audio, queue ETA and transcript LRU eviction. Their
+   order should come from production evidence, not novelty.
+
+The strategic shift is simple: the core, AI path, safeguards and visual wow are
+already built. The highest-value work now is helping real people reach and
+share a useful first clip, then improving whichever part actually blocks them.

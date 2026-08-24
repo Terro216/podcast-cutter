@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import tempfile
 from collections import Counter, defaultdict
@@ -272,7 +273,14 @@ async def main(argv: list[str]) -> int:
     parser.add_argument(
         "--fixtures",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "evals" / "fixtures",
+        default=Path(
+            os.environ.get(
+                "EVAL_FIXTURES_DIR",
+                Path(__file__).resolve().parent.parent
+                / "private"
+                / "eval-fixtures",
+            )
+        ),
     )
     args = parser.parse_args(argv)
 

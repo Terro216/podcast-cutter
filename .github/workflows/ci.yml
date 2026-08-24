@@ -7,6 +7,9 @@
 
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -18,6 +21,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Gitleaks must see the history, not only the synthetic checkout tip.
+          fetch-depth: 0
+
+      - name: Secret scan (full history)
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks@sha256:aa036a2f4bdfe3cc3c55fa4326308efabb4a6be498c883c864fd1d0d5585438a \
+            git --redact=100 --no-banner /repo
 
       - name: Install ffmpeg
         # The SSRF lock (`-max_redirects 0` in audio.py) only exists in

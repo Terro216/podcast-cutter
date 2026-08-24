@@ -277,9 +277,15 @@ class TestSearching:
         await self._ready(bot, context)
         await text(bot, context, "фолдинг")
         await tap(bot, context, kb.ACTION_FIND)
-        await text(bot, context, "белков")
+        second = await text(bot, context, "белков")
 
         assert indexer.recognizer.calls == 1
+        # An indexed search renders its answer directly. The redundant
+        # progress send used to be the exact request that timed out live.
+        assert len(second.effective_message.children) == 1
+        assert second.effective_message.children[0].edits == []
+        assert "белков" in second.shown
+        await bot.listening.stop()
 
 
 class TestWaitingInLine:

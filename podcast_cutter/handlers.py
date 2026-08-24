@@ -111,8 +111,8 @@ PROGRESS_INTERVAL = 3.0
 
 #: Length of the sample the skin demo renders. Long enough that every skin
 #: shows its motion — the vinyl completes a few turns, the matrix fills the
-#: frame — short enough that ten renders stay around a minute of ffmpeg.
-DEMO_SECONDS = 20
+#: frame — short enough that the available renders stay around a minute.
+DEMO_SECONDS = 5
 
 #: Progress-stage → i18n key. The bar and the estimate carry the detail;
 #: the waiting notes live in the i18n tables next to every other sentence.
@@ -393,7 +393,7 @@ class PodcastCutterBot:
         if screen is Screen.INTERVAL:
             return screens.interval(session, self.settings)
         if screen is Screen.RESULT:
-            return screens.result(session, self.bot_username)
+            return screens.result(session, self.bot_username, self.settings)
         return screens.menu(session)
 
     async def render(self, update: Update, session: Session) -> Message | None:
@@ -548,6 +548,17 @@ class PodcastCutterBot:
         episode = await self._resolve_episode(episode)
         await self._require_episode_allowed(episode)
         session.select_episode(episode, self.settings.default_clip_seconds)
+        if self.store is not None:
+            transcript = await self.store.transcript_for_episode(episode.id)
+            session.episode_transcribed = transcript is not None
+            # Preserve the old useful behaviour for already-known episodes;
+            # a first listen still requires an explicit opt-in below Cut.
+            session.subtitles = transcript is not None
+        if (
+            not episode.image
+            and session.skin in video.ARTWORK_REQUIRED_SKINS
+        ):
+            session.skin = video.DEFAULT_NO_ARTWORK_SKIN
         user_id = self._user_id(update)
         if self.store is not None and user_id is not None:
             await self.store.remember_recent(user_id, episode)
@@ -1026,16 +1037,20 @@ class PodcastCutterBot:
         lang = session.language
         rtf = await self.store.measured_rtf() if self.store else None
         estimate = int((episode.duration or 0) * (rtf or DEFAULT_RTF))
-        opening = t(lang, "getting_ready")
-        if estimate >= 30:
-            opening += (
-                "\n\n<i>"
-                + t(lang, "estimate_note", duration=format_duration(estimate))
-                + "</i>"
+        progress: StatusEditor | None = None
+        if indexed is None:
+            opening = t(lang, "getting_ready")
+            if estimate >= 30:
+                opening += (
+                    "\n\n<i>"
+                    + t(lang, "estimate_note", duration=format_duration(estimate))
+                    + "</i>"
+                )
+            progress = StatusEditor(
+                await update.effective_message.reply_text(
+                    opening, parse_mode="HTML"
+                )
             )
-        progress = StatusEditor(
-            await update.effective_message.reply_text(opening, parse_mode="HTML")
-        )
         started = time.monotonic()
         shown_stage = {"name": ""}
 
@@ -1045,9 +1060,10 @@ class PodcastCutterBot:
             # swallowed by the same limiter.
             changed = stage.stage != shown_stage["name"]
             shown_stage["name"] = stage.stage
-            await progress.set(
-                _listening_text(stage, started, estimate, lang), force=changed
-            )
+            if progress is not None:
+                await progress.set(
+                    _listening_text(stage, started, estimate, lang), force=changed
+                )
 
 
         # "failed" until proven otherwise: an exception this handler did not
@@ -1077,8 +1093,9 @@ class PodcastCutterBot:
             outcome = "ok" if session.moments else "empty"
         except PodcastCutterError as exc:
             outcome = getattr(exc, "code", "error")
-            with contextlib.suppress(TelegramError):
-                await progress.message.delete()
+            if progress is not None:
+                with contextlib.suppress(TelegramError):
+                    await progress.message.delete()
             await self._show_failure(update, session, exc.user_message(lang))
             return
         finally:
@@ -1093,8 +1110,15 @@ class PodcastCutterBot:
             )
 
         session.awaiting = Awaiting.NOTHING
+        session.episode_transcribed = True
         session.go(Screen.MOMENTS)
-        await progress.show(self.view_for(session))
+        if progress is not None:
+            await progress.show(self.view_for(session))
+        else:
+            # An indexed search is local and instant. Avoid the redundant
+            # "getting ready" send that used to double the chance of a
+            # Telegram timeout before the useful result was even computed.
+            await self.render(update, session)
 
     async def _wait_in_line(self, update: Update, episode: Episode, on_progress) -> int:
         """Queue this episode for a first listen and wait for the transcript.
@@ -1422,11 +1446,23 @@ class PodcastCutterBot:
         if prefix == kb.FORMAT_PREFIX:
             if value in FORMATS:
                 session.send_as = value
+                if (
+                    value in (FORMAT_NOTE, FORMAT_VIDEO)
+                    and session.episode is not None
+                    and not session.episode.image
+                    and session.skin in video.ARTWORK_REQUIRED_SKINS
+                ):
+                    session.skin = video.DEFAULT_NO_ARTWORK_SKIN
             await self.render(update, session)
             return
 
         if prefix == kb.SKIN_PREFIX:
-            if value in kb.SKIN_LABELS:
+            value = video.LEGACY_SKINS.get(value, value)
+            available = video.available_skins(
+                bool(session.episode and session.episode.image),
+                settings=self.settings,
+            )
+            if value in available:
                 session.skin = value
             await self.render(update, session)
             return
@@ -1450,20 +1486,34 @@ class PodcastCutterBot:
         if prefix == kb.SHIFT_PREFIX:
             with contextlib.suppress(ValueError):
                 session.move_clip(int(value))
-            await self._start_cut(update, session)
+            session.awaiting = Awaiting.INTERVAL
+            session.replace(Screen.INTERVAL)
+            await self.render(update, session)
             return
 
         if prefix == kb.RESKIN_PREFIX:
-            # Same clip, another look — a real cut, spent from the result
-            # screen so nobody has to walk the editor again for it.
-            if value not in kb.SKIN_LABELS:
+            # Same clip, another look — select it and reopen the whole editor.
+            # No setting button sends media; only the blue Cut action does.
+            value = video.LEGACY_SKINS.get(value, value)
+            available = video.available_skins(
+                bool(session.episode and session.episode.image),
+                settings=self.settings,
+            )
+            if value not in available:
                 await self._stale(update, session)
                 return
-            if value == session.skin:
-                # The marked current skin: nothing to re-render.
-                return
             session.skin = value
-            await self._start_cut(update, session)
+            session.awaiting = Awaiting.INTERVAL
+            session.replace(Screen.INTERVAL)
+            await self.render(update, session)
+            return
+
+        if data == kb.ACTION_SUBTITLES:
+            if session.send_as not in (FORMAT_NOTE, FORMAT_VIDEO):
+                await self._stale(update, session)
+                return
+            session.subtitles = not session.subtitles
+            await self.render(update, session)
             return
 
         # --- searching inside the episode ---------------------------------
@@ -1610,6 +1660,32 @@ class PodcastCutterBot:
             )
             return
 
+        needs_first_listen = await self._needs_subtitle_transcription(
+            session, episode
+        )
+        if needs_first_listen:
+            if self.indexer is None or self.listening is None:
+                exc = TranscriptionDisabled()
+                await self._show_failure(
+                    update, session, exc.user_message(session.language)
+                )
+                return
+            if not self._budget_allows(self._asr_budget, update):
+                await self._log(update, "limit", outcome="asr")
+                await self._show_failure(
+                    update, session, t(session.language, "asr_budget_spent")
+                )
+                return
+            if (
+                not await self.listening.position(episode.id)
+                and await self.listening.depth() >= MAX_ASR_QUEUE
+            ):
+                await self._log(update, "limit", outcome="asr_queue")
+                await self._show_failure(
+                    update, session, t(session.language, "asr_queue_full")
+                )
+                return
+
         if not self._budget_allows(self._cut_budget, update):
             await self.show(
                 update,
@@ -1686,6 +1762,59 @@ class PodcastCutterBot:
         outcome = "failed"
         size_bytes: int | None = None
         detail: str | None = None
+
+        try:
+            await self._prepare_requested_subtitles(
+                update, session, episode, status
+            )
+        except asyncio.CancelledError:
+            await status.show(screens.working(t(lang, "cut_cancelled")))
+            await self._log(
+                update,
+                "cut",
+                outcome="cancelled",
+                episode_id=episode.id,
+                feed_title=episode.feed_title,
+                episode_title=episode.title,
+                start_s=interval.start,
+                length_s=interval.duration,
+                ms=int((time.monotonic() - started) * 1000),
+                detail="subtitle transcription cancelled",
+            )
+            raise
+        except PodcastCutterError as exc:
+            await status.show(screens.failure(exc.user_message(lang), lang))
+            await self._log(
+                update,
+                "cut",
+                outcome=getattr(exc, "code", "error"),
+                episode_id=episode.id,
+                feed_title=episode.feed_title,
+                episode_title=episode.title,
+                start_s=interval.start,
+                length_s=interval.duration,
+                ms=int((time.monotonic() - started) * 1000),
+                detail=exc.user_message(),
+            )
+            return
+        except Exception as exc:
+            logger.exception(
+                "Unexpected subtitle preparation failure for %s", episode.id
+            )
+            await status.show(screens.failure(t(lang, "generic_error"), lang))
+            await self._log(
+                update,
+                "cut",
+                outcome="crash",
+                episode_id=episode.id,
+                feed_title=episode.feed_title,
+                episode_title=episode.title,
+                start_s=interval.start,
+                length_s=interval.duration,
+                ms=int((time.monotonic() - started) * 1000),
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+            return
 
         async with self._job_slots:
             workdir = Path(
@@ -1787,12 +1916,13 @@ class PodcastCutterBot:
     async def _start_demo(self, update: Update, session: Session) -> None:
         """One tap, every skin: a short sample of the current clip rendered
         in each look and sent in a row, so choosing a skin does not cost ten
-        cuts of trial and error.
+        cuts of trial and error. Artwork-only looks are omitted when the
+        episode has no usable cover.
 
-        Charged as a single cut: the sample is capped at
-        :data:`DEMO_SECONDS`, so the whole parade costs about a minute of
-        ffmpeg — one download, ten cheap renders — and it holds the same
-        one-heavy-job-per-user lock and job slot a cut does.
+        Charged as a single cut: every sample is capped at
+        :data:`DEMO_SECONDS` and carries a shareable source caption plus a
+        burned-in bot mark — one download and a bounded set of renders — and
+        it holds the same one-heavy-job-per-user lock and job slot a cut does.
         """
         episode = session.episode
         if episode is None or session.send_as not in (FORMAT_NOTE, FORMAT_VIDEO):
@@ -1904,7 +2034,11 @@ class PodcastCutterBot:
                     proxy=self.media_proxy,
                     lang=lang,
                 )
-                subtitles = await self._subtitles_for(episode, interval)
+                subtitles = (
+                    await self._subtitles_for(episode, interval)
+                    if session.subtitles
+                    else None
+                )
                 cover = None
                 if episode.image:
                     cover = await video.fetch_cover(
@@ -1922,12 +2056,15 @@ class PodcastCutterBot:
                     "connect_timeout": 60,
                 }
                 failed: list[str] = []
-                for index, skin in enumerate(video.SKINS, start=1):
+                demo_skins = video.available_skins(
+                    cover is not None, settings=self.settings
+                )
+                for index, skin in enumerate(demo_skins, start=1):
                     label = t(lang, kb.SKIN_LABELS[skin])
                     await status.set(
                         t(
                             lang, "demo_working",
-                            label=label, i=index, n=len(video.SKINS),
+                            label=label, i=index, n=len(demo_skins),
                         ),
                         force=True,
                     )
@@ -1947,6 +2084,7 @@ class PodcastCutterBot:
                             cover=cover,
                             settings=self.settings,
                             round_frame=round_frame,
+                            watermark=True,
                         )
                     except PodcastCutterError as exc:
                         # One broken look must not sink the parade; the
@@ -1959,8 +2097,15 @@ class PodcastCutterBot:
                     with path.open("rb") as handle:
                         if round_frame:
                             # sendVideoNote has no caption, so the skin's
-                            # name travels one message ahead of it.
-                            await message.reply_text(label)
+                            # full source card travels one message ahead of
+                            # it; the burned-in handle survives forwarding the
+                            # circle without that companion message.
+                            await message.reply_text(
+                                self._clip_caption(
+                                    episode, interval, lang, label=label
+                                ),
+                                parse_mode="HTML",
+                            )
                             await message.reply_video_note(
                                 video_note=handle,
                                 duration=interval.duration,
@@ -1973,7 +2118,10 @@ class PodcastCutterBot:
                                 duration=interval.duration,
                                 width=video.NOTE_SIZE,
                                 height=video.NOTE_SIZE,
-                                caption=label,
+                                caption=self._clip_caption(
+                                    episode, interval, lang, label=label
+                                ),
+                                parse_mode="HTML",
                                 **timeouts,
                             )
                     sent += 1
@@ -2063,6 +2211,50 @@ class PodcastCutterBot:
             or None
         )
 
+    async def _needs_subtitle_transcription(
+        self, session: Session, episode: Episode
+    ) -> bool:
+        """Whether this visual cut explicitly needs a first listen."""
+        if (
+            not session.subtitles
+            or session.send_as not in (FORMAT_NOTE, FORMAT_VIDEO)
+            or self.store is None
+        ):
+            return False
+        transcript = await self.store.transcript_for_episode(episode.id)
+        session.episode_transcribed = transcript is not None
+        return transcript is None
+
+    async def _prepare_requested_subtitles(
+        self,
+        update: Update,
+        session: Session,
+        episode: Episode,
+        status: StatusEditor,
+    ) -> None:
+        """Queue a first listen only when the editor toggle asks for it."""
+        if not await self._needs_subtitle_transcription(session, episode):
+            return
+        if self.listening is None or self.store is None:
+            raise TranscriptionDisabled()
+
+        lang = session.language
+        rtf = await self.store.measured_rtf()
+        estimate = int((episode.duration or 0) * (rtf or DEFAULT_RTF))
+        started = time.monotonic()
+        shown_stage = {"name": ""}
+        await status.set(t(lang, "preparing_subtitles"), force=True)
+
+        async def on_progress(stage) -> None:
+            changed = stage.stage != shown_stage["name"]
+            shown_stage["name"] = stage.stage
+            await status.set(
+                _listening_text(stage, started, estimate, lang), force=changed
+            )
+
+        await self._wait_in_line(update, episode, on_progress)
+        session.episode_transcribed = True
+
     async def _render_video(
         self,
         session: Session,
@@ -2079,7 +2271,17 @@ class PodcastCutterBot:
         anyway. The durable queue earns its complexity protecting minutes of
         CPU across a redeploy; a lost render costs one more tap.
         """
-        subtitles = await self._subtitles_for(episode, interval)
+        subtitles = (
+            await self._subtitles_for(episode, interval)
+            if session.subtitles
+            else None
+        )
+
+        available = video.available_skins(
+            bool(episode.image), settings=self.settings
+        )
+        if session.skin not in available:
+            session.skin = video.DEFAULT_NO_ARTWORK_SKIN
 
         cover = None
         if session.skin in video.COVER_SKINS and episode.image:
@@ -2087,10 +2289,15 @@ class PodcastCutterBot:
                 episode.image, workdir, self.settings
             )
 
+        skin = session.skin
+        if skin in video.ARTWORK_REQUIRED_SKINS and cover is None:
+            skin = video.DEFAULT_NO_ARTWORK_SKIN
+            session.skin = skin
+
         path = await video.render_clip(
             result.path,
             workdir,
-            skin=session.skin,
+            skin=skin,
             duration=float(interval.duration),
             # The renderer fits this to the layout — how many characters
             # survive is a property of the circle, not of the episode.
@@ -2103,6 +2310,9 @@ class PodcastCutterBot:
             cover=cover,
             settings=self.settings,
             round_frame=session.send_as == FORMAT_NOTE,
+            # A video note cannot carry a caption. The burned-in handle is
+            # the attribution that survives when the circle is forwarded.
+            watermark=session.send_as == FORMAT_NOTE,
         )
         size = path.stat().st_size
         if size > self.settings.max_upload_bytes:
@@ -2121,18 +2331,7 @@ class PodcastCutterBot:
         interval: Interval,
         result,
     ) -> None:
-        # The last line is the attribution: a clip is a citation, and a
-        # citation names its source in the same message (ROADMAP §13.4).
-        source = html.escape(
-            episode.episode_url or episode.enclosure_url, quote=True
-        )
-        caption = (
-            f"<b>{esc(truncate(episode.title, 90))}</b>\n"
-            f"{esc(truncate(episode.feed_title, 60))} · "
-            f"{format_duration(interval.start)}–{format_duration(interval.end)}\n"
-            f'<a href="{source}">{t(session.language, "full_episode_link")}</a>'
-            " · <a href=\"https://podcastindex.org\">Podcast Index</a>"
-        )
+        caption = self._clip_caption(episode, interval, session.language)
         timeouts = {
             "read_timeout": self.settings.upload_timeout,
             "write_timeout": self.settings.upload_timeout,
@@ -2191,6 +2390,34 @@ class PodcastCutterBot:
                     parse_mode="HTML",
                     **timeouts,
                 )
+
+    def _clip_caption(
+        self,
+        episode: Episode,
+        interval: Interval,
+        lang: str,
+        *,
+        label: str | None = None,
+    ) -> str:
+        """A self-contained, forwardable source card for every clip/demo."""
+        source = html.escape(
+            episode.episode_url or episode.enclosure_url, quote=True
+        )
+        username = (self.bot_username or "podcast_cutter_bot").lstrip("@")
+        lines = [
+            f'✂️ <a href="https://t.me/{html.escape(username, quote=True)}">'
+            f"@{html.escape(username)}</a>"
+        ]
+        if label:
+            lines.append(f"<b>{esc(label)}</b>")
+        lines.append(
+            f"<b>{esc(truncate(episode.title, 90))}</b>\n"
+            f"{esc(truncate(episode.feed_title, 60))} · "
+            f"{format_duration(interval.start)}–{format_duration(interval.end)}\n"
+            f'<a href="{source}">{t(lang, "full_episode_link")}</a>'
+            " · <a href=\"https://podcastindex.org\">Podcast Index</a>"
+        )
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Inline mode

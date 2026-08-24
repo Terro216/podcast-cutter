@@ -58,6 +58,8 @@ class FakeMessage:
         self.sent_voice: dict | None = None
         self.sent_video_note: dict | None = None
         self.sent_video: dict | None = None
+        self.sent_video_notes: list[dict] = []
+        self.sent_videos: list[dict] = []
 
     async def reply_text(self, text, **kwargs):
         self.replies.append((text, kwargs))
@@ -83,10 +85,12 @@ class FakeMessage:
 
     async def reply_video_note(self, **kwargs):
         self.sent_video_note = kwargs
+        self.sent_video_notes.append(kwargs)
         return FakeMessage()
 
     async def reply_video(self, **kwargs):
         self.sent_video = kwargs
+        self.sent_videos.append(kwargs)
         return FakeMessage()
 
     @property

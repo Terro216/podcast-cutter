@@ -48,6 +48,7 @@ _MENU_LABEL_ACTIONS = (
     ("btn_surprise", "surprise"),
     ("btn_recent", "recent"),
     ("btn_help", "help"),
+    ("btn_language", "language"),
 )
 
 _MENU_ACTIONS: dict[str, str] = {
@@ -79,6 +80,7 @@ def main_menu(lang: str = "en") -> ReplyKeyboardMarkup:
             [t(lang, "btn_search_podcast"), t(lang, "btn_search_person")],
             [t(lang, "btn_trending"), t(lang, "btn_surprise")],
             [t(lang, "btn_recent"), t(lang, "btn_help")],
+            [t(lang, "btn_language")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -99,10 +101,8 @@ SHIFT_PREFIX = "shift"
 #: The language chooser.
 LANG_PREFIX = "lang"
 LEGAL_PREFIX = "legal"
-#: Re-render the clip just sent with another skin, from the result screen.
-#: Its own prefix rather than ``skin:`` because the two mean different
-#: things: ``skin:`` picks a look for the *next* cut, ``reskin:`` spends a
-#: cut right now.
+#: Pick another skin from the result screen, then reopen the full editor.
+#: Its own prefix keeps buttons on already-sent result cards routable.
 RESKIN_PREFIX = "reskin"
 
 NAV_BACK = f"{NAV_PREFIX}:back"
@@ -122,6 +122,7 @@ ACTION_DEMO = "act:demo"
 ACTION_TOGGLE_VOICE = "act:voice"
 ACTION_NEW_CLIP = "act:new"
 ACTION_FIND = "act:find"
+ACTION_SUBTITLES = "act:subtitles"
 LEGAL_ACCEPT = f"{LEGAL_PREFIX}:accept"
 LEGAL_DECLINE = f"{LEGAL_PREFIX}:decline"
 
@@ -148,19 +149,41 @@ SKIN_LABELS = {
     "matrix": "skin_matrix",
     "fractal": "skin_fractal",
     "dvd": "skin_dvd",
-    "random": "skin_random",
+    "roblox": "skin_roblox",
+    "gta": "skin_gta",
+    "asmr": "skin_asmr",
     "subway": "skin_subway",
 }
 
-#: The skin rows split so ten choices do not become ten slivers: the
+#: The skin rows split so twelve choices do not become twelve slivers: the
 #: artwork family first, then the glowing visualisers, then the memes,
-#: with the loop-backed pair closing the block.
+#: with the four curated loop looks closing the block in two rows.
 _SKIN_ROWS = (
     ("cover", "vinyl", "dvd"),
     ("aurora", "party", "lava"),
     ("matrix", "fractal"),
-    ("random", "subway"),
+    ("roblox", "gta"),
+    ("asmr", "subway"),
 )
+
+_ARTWORK_REQUIRED_SKINS = frozenset({"cover", "vinyl"})
+
+
+def _visible_skin_rows(
+    has_artwork: bool,
+    available_skins: Iterable[str] | None = None,
+) -> tuple[tuple[str, ...], ...]:
+    """Keep looks out when their required artwork or loop is unavailable."""
+    available = (
+        set(available_skins) if available_skins is not None else set(SKIN_LABELS)
+    )
+    if not has_artwork:
+        available -= _ARTWORK_REQUIRED_SKINS
+    return tuple(
+        tuple(key for key in row if key in available)
+        for row in _SKIN_ROWS
+        if any(key in available for key in row)
+    )
 
 #: A found moment, carried as its start in seconds rather than an index into a
 #: list: the list lives in a session, and a button on a scrolled-past message
@@ -304,6 +327,11 @@ def interval_keyboard(
     send_as: str = FORMAT_AUDIO,
     skin: str = "bars",
     can_search: bool = False,
+    can_subtitle: bool = False,
+    subtitles: bool = False,
+    transcript_ready: bool = False,
+    has_artwork: bool = True,
+    available_skins: Iterable[str] | None = None,
     lang: str = "en",
 ) -> InlineKeyboardMarkup:
     """The clip editor: pick a length, slide the window, then cut."""
@@ -342,7 +370,7 @@ def interval_keyboard(
         # The skins only matter once a video format is chosen; a permanent
         # block of decoration would bury the cut button under choices that
         # mean nothing for audio.
-        for group in _SKIN_ROWS:
+        for group in _visible_skin_rows(has_artwork, available_skins):
             rows.append(
                 [
                     _button(
@@ -358,6 +386,22 @@ def interval_keyboard(
     rows.append([_button(t(lang, "btn_cut"), ACTION_CUT, STYLE_PRIMARY)])
     if can_search:
         rows.append([_button(t(lang, "btn_find"), ACTION_FIND)])
+    if send_as in (FORMAT_NOTE, FORMAT_VIDEO) and can_subtitle:
+        subtitle_key = (
+            "btn_subtitles_on"
+            if subtitles
+            else "btn_subtitles_ready" if transcript_ready
+            else "btn_subtitles_slow"
+        )
+        rows.append(
+            [
+                _button(
+                    t(lang, subtitle_key),
+                    ACTION_SUBTITLES,
+                    STYLE_SUCCESS if subtitles else None,
+                )
+            ]
+        )
     rows.append(footer_row(lang))
     return InlineKeyboardMarkup(rows)
 
@@ -392,14 +436,16 @@ def result_keyboard(
     episode_url: str | None = None,
     send_as: str | None = None,
     skin: str = "bars",
+    has_artwork: bool = True,
+    available_skins: Iterable[str] | None = None,
 ) -> InlineKeyboardMarkup:
     """Offered after a successful cut: adjust, re-skin, repeat, share — and
     the way back to the whole episode, which is the attribution a clip owes
     its source (see ROADMAP §13.4).
 
-    The skin rows appear only when a visual format was just sent: they spend
-    a real cut on one tap, and offering that under an audio file would be
-    nine buttons of noise."""
+    The skin rows appear only when a visual format was just sent. A tap merely
+    selects the next look and opens the editor; only its blue Cut button sends
+    another file."""
     rows = [
         [
             _button(t(lang, "btn_earlier"), f"{SHIFT_PREFIX}:-15"),
@@ -407,7 +453,7 @@ def result_keyboard(
         ],
     ]
     if send_as in (FORMAT_NOTE, FORMAT_VIDEO):
-        for group in _SKIN_ROWS:
+        for group in _visible_skin_rows(has_artwork, available_skins):
             rows.append(
                 [
                     _button(

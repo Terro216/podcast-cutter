@@ -114,6 +114,16 @@ class TestBaseUrl:
             load_settings()
 
 
+class TestLegalContact:
+    def test_uses_the_dedicated_project_mailbox_by_default(self, monkeypatch):
+        with_env(monkeypatch)
+        assert load_settings().legal_contact == "podcast_cutter@inbox.ru"
+
+    def test_allows_an_operator_override(self, monkeypatch):
+        with_env(monkeypatch, LEGAL_CONTACT="rights@example.org")
+        assert load_settings().legal_contact == "rights@example.org"
+
+
 class TestPodcastBlocklist:
     def test_empty_by_default(self, monkeypatch):
         with_env(monkeypatch)
