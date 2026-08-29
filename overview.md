@@ -1,6 +1,6 @@
 # Podcast Cutter — current overview
 
-Updated 2026-08-24. `README.md` is the operator/user reference; `HANDOFF.md`
+Updated 2026-08-26. `README.md` is the operator/user reference; `HANDOFF.md`
 keeps the implementation history; `ROADMAP.md` contains the product rationale.
 This page is the short current-state map.
 
@@ -10,6 +10,11 @@ UX/privacy batch are live. The host loops are mounted read-only at
 8 skipped`. The DVD edge/result-copy follow-up raised the full suite to `1024
 passed, 8 skipped` and started successfully on image
 `sha256:30a4e2237775…`.
+
+Read-only production verification on 2026-08-26 found both
+`podcast-cutter` and `podcast-cutter-tunnel` running healthy with zero
+restarts; the event-loop heartbeat was advancing every minute. The current
+system map is [docs/architecture.md](docs/architecture.md).
 
 ## Product today
 
@@ -58,19 +63,26 @@ stored transcript, or a clearly-labelled several-minute first listen otherwise.
 
 ## Next plan, in order
 
-1. **Prove adoption.** Invite small cohorts through separate `src_<tag>` links;
-   measure first successful clip, repeat use, share behaviour and failure
-   reasons. Fix the largest observed drop.
+1. **Prove adoption.** Publish the five prepared one-chat/one-tag links and
+   short posts in [docs/seeding-posts.md](docs/seeding-posts.md). Measure tagged
+   arrivals, first successful clip, repeat use and failure reasons, then fix
+   the largest observed drop. Telegram does not expose forwards to bots, so
+   actual sharing is a pilot-feedback question rather than a journal metric.
 2. **Finish the search ruler.** Complete the by-ear answer-key pass. Use those
    results to decide whether English stemming or a larger recogniser earns its
    CPU/complexity cost.
-3. **Package the demo.** Refresh one architecture diagram, record a reliable
-   3–5-minute fallback, and set the BotFather-only avatar/inline placeholder.
+3. **Package the demo.** The current architecture diagram and five short
+   distribution posts are done. Record a reliable 3–5-minute fallback and set
+   the BotFather-only avatar/inline placeholder.
 4. **Close small operational debts.** Store the restic secret in Bitwarden and
    add external monitoring for the Telegram/media tunnel.
-5. **Only then expand features.** Candidates are chapter-aware clip boundaries,
-   embedded artwork for audio, queue ETA and transcript LRU eviction. Their
-   order should come from production evidence, not novelty.
+5. **Only then expand features.** Candidates are chapter-aware clip boundaries
+   (offer or snap to publisher-supplied chapter starts/ends), embedded artwork
+   for audio (write the episode cover into MP3/M4A metadata), queue ETA (show
+   approximate minutes as well as position), and transcript LRU eviction
+   (remove least-recently-used indexes after a configured storage ceiling).
+   None is required by the current core flow; their order comes from pilot
+   evidence, not novelty.
 
 The strategic shift is simple: the core, AI path, safeguards and visual wow are
 already built. The highest-value work now is helping real people reach and

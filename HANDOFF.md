@@ -1,4 +1,11 @@
-# Handoff — podcast-cutter, 2026-08-12
+# Handoff — podcast-cutter, updated 2026-08-26
+
+> **Documentation/distribution follow-up, 2026-08-26.** A read-only live check
+> found `podcast-cutter` and `podcast-cutter-tunnel` healthy with zero restarts;
+> the heartbeat was advancing every minute. `docs/architecture.md` is now the
+> canonical current diagram. `docs/seeding-posts.md` contains five valid,
+> distinct `src_podchat_01`…`05` links and five short Russian posts. Nothing was
+> posted externally and production was not recreated for this docs-only batch.
 
 > **Runtime follow-up, 2026-08-21.** Deployed on
 > `sha256:30a4e2237775…`: DVD no longer uses a
@@ -31,7 +38,7 @@
 > (`audio.py`) and the ASR-lock fix (`asr.py`), the bot came up as
 > @podcast_cutter_bot through the `media-proxy`, dense search and ASR ready, no
 > errors. The audit's **no-healthcheck** gap is now closed: a heartbeat-based
-> Docker healthcheck is live (`e3b5785`), container reports `healthy`. Transient
+> Docker healthcheck is live (`c6c11c7`), container reports `healthy`. Transient
 > `Bad Gateway` from Telegram is handled by PTB's retries. Offsite backups to
 > Yandex Disk are **live** as of
 > 2026-08-13: first snapshot `c01f794d` at `yadisk:/backups/podcast-cutter`,
@@ -67,7 +74,7 @@
 > backup/restore staging. Terms, Privacy Policy, takedown blocklist and the
 > user export/deletion controls are documented in README and `docs/`.
 >
-> **Runtime note, 2026-08-14, night (`cc97ad8`).** User feedback landed and
+> **Runtime note, 2026-08-14, night (`038905b`).** User feedback landed and
 > was right: the first layout died at the circle's edge — clients crop a
 > note to the inscribed circle, and the title and full-width progress bar
 > lost their ends. Reworked: a dedicated round layout (verified by rendering
@@ -96,45 +103,48 @@ Deployed and running: **@podcast_cutter_bot** on big-one, container
 started on its first attempt with zero restarts; heartbeat is current and the
 failing streak is zero.
 
-Recent history, newest first, on branch **`harden-source-urls`**:
+Current public branch is **`main`**; the running application tree matches the
+docs/UX release beneath its later CI-only tip. The table below is the historical
+milestone list, with hashes updated to the rewritten public history:
 
 | commit | what |
 | --- | --- |
-| `e4ea82a` | the clip becomes a video note — four skins, subtitles from the transcript |
-| `727fdad` | docs: name the service when deploying, or the tunnel goes down with the bot |
-| `ca0df54` | `source_bytes` is written, and the dynamic-ad hole is priced |
-| `1eb3949` | the normaliser's version is compared; identical bytes stop colliding |
-| `894efc6` | the listening queue moves into SQLite; a wait has a number |
-| `e3b5785` | a Docker healthcheck that catches a wedged event loop |
-| `c6eaf56` | offsite backup to Yandex Disk, the arr/vaultwarden shape |
-| `e3bef37` | a transcription timeout no longer frees the model mid-decode |
-| `7483267` | ffmpeg no longer follows a redirect the address check never saw |
-| `fd7efcc` | small/speechkit baselines guarded by CI; the one honest 6.2% false hit |
-| `b414df8` | the small and speechkit fixtures; make_fixtures passes the basket's language |
-| `1ccc566` | SpeechKit as the second recogniser behind the one-method door |
-| `91d5f3d` | an expired session says so, and `/reset` exists |
-| `7ce2d4f` | progress bars that count the right thing, and a bar for indexing |
-| `e4e3f7c` | feeds pagination actually fetches the next page |
-| `df40650` | hybrid retrieval: search by meaning, refuse by measurement |
-| `b3af46d` | concurrent updates, per-user budgets, the transcription queue |
-| `1d255b9` | a transcription timeout journals as failure; README layout; bot-side findings |
-| `f9b84ce` | clip placement on the phrase; distinct moments no longer merge |
-| `6c02926` | an extreme compression ratio convicts on its own (the §16 decoder loop) |
-| `c02c7d2` | the answer key: 104 queries, first baselines, the base-model price measured |
-| `603dae4` | the regression guard could not fire below one query's wobble; fixed pre-baseline |
-| `116197d` | the eight reference transcripts |
-| `44701e7` | evaluation baskets: how often the search is wrong, and which way |
-| `a866f4b` | bench what a Whisper model costs on this host |
-| `299b2e2` | place the clip on the spoken word; quote the match back |
-| `4652af5` | real progress, estimate and rotating notes while transcribing |
-| `8360846` | `TELEGRAM_PROXY` — this host can no longer reach Telegram |
-| `ce3987d` | the search UI: ask a phrase, get moments, open the editor |
-| `ca1e13e` | the engine: transcribe, judge, window, index, search |
-| `dccbf01` | `ROADMAP.md` |
-| `b94c57c` | bound where an episode URL may point |
+| `dd07cbd` | the clip becomes a video note — four skins, subtitles from the transcript |
+| `a9c334a` | docs: name the service when deploying, or the tunnel goes down with the bot |
+| `f19464b` | `source_bytes` is written, and the dynamic-ad hole is priced |
+| `9bae631` | the normaliser's version is compared; identical bytes stop colliding |
+| `eb2b4e9` | the listening queue moves into SQLite; a wait has a number |
+| `c6c11c7` | a Docker healthcheck that catches a wedged event loop |
+| `0870595` | offsite backup to Yandex Disk, the arr/vaultwarden shape |
+| `be632d7` | a transcription timeout no longer frees the model mid-decode |
+| `21dc7b3` | ffmpeg no longer follows a redirect the address check never saw |
+| `91d73d9` | small/speechkit baselines guarded by CI; the one honest 6.2% false hit |
+| `4dab1df` | the small and speechkit fixtures; make_fixtures passes the basket's language |
+| `c401231` | SpeechKit as the second recogniser behind the one-method door |
+| `9a75600` | an expired session says so, and `/reset` exists |
+| `d86d2c0` | progress bars that count the right thing, and a bar for indexing |
+| `8395f4b` | feeds pagination actually fetches the next page |
+| `fea4248` | hybrid retrieval: search by meaning, refuse by measurement |
+| `077d72a` | concurrent updates, per-user budgets, the transcription queue |
+| `b4546d0` | a transcription timeout journals as failure; README layout; bot-side findings |
+| `cac97f0` | clip placement on the phrase; distinct moments no longer merge |
+| `d432192` | an extreme compression ratio convicts on its own (the §16 decoder loop) |
+| `e382976` | the answer key: 104 queries, first baselines, the base-model price measured |
+| `4b9a5f8` | the regression guard could not fire below one query's wobble; fixed pre-baseline |
+| `17a8c81` | the eight reference transcripts |
+| `e720817` | evaluation baskets: how often the search is wrong, and which way |
+| `87ab95e` | bench what a Whisper model costs on this host |
+| `6fd41b4` | place the clip on the spoken word; quote the match back |
+| `e6eb055` | real progress, estimate and rotating notes while transcribing |
+| `e97072e` | `TELEGRAM_PROXY` — this host can no longer reach Telegram |
+| `fc7822d` | the search UI: ask a phrase, get moments, open the editor |
+| `1596c9f` | the engine: transcribe, judge, window, index, search |
+| `1b60ab6` | `ROADMAP.md` |
+| `7ddd8de` | bound where an episode URL may point |
 
-**835 tests pass, ruff clean** (8 hybrid basket rows skip unless
-`EMBED_MODEL_DIR` points at the converted model — §6 has the command).
+**1024 tests pass, 8 skip, ruff clean** with the gitignored private transcript
+fixtures present. Public CI checks structure and all non-private paths without
+publishing third-party speech; §6 has the local full-regression commands.
 The answer key exists, the baselines are committed for all four transcript
 variants, and the model comparison table is done — see §3b.
 
@@ -147,7 +157,8 @@ Two things about the deployment that were not true a week ago:
   big-one: those are cores 0–7 of socket 0, node 0, and their SMT siblings are
   16–23. Keep `ASR_THREADS` equal to the width of that set.
 
-Configured and working: `ADMIN_IDS=87752988` (so `/stats` works), journal at
+Configured and working: `ADMIN_IDS` contains the operator's Telegram id (the
+value belongs only in `.env`; do not copy it into public docs), journal at
 `/data/podcast_cutter.db`, logs at `/data/logs/bot.log`, both on the named
 volume `podcast-data`.
 
@@ -166,8 +177,8 @@ Two machines, and confusing them wasted a lot of effort in the last session:
 
 ```
 DE (this dev box)                 big-one (production)
-hostname instance168669…          94.126.204.131
-egress 178.17.48.243              ← the bot runs HERE
+hostname instance168669…          <big-one-address>
+egress <DE-public-address>        ← the bot runs HERE
   shell / my commands run here
   VPN stack lives here (amn0)
 ```
@@ -187,7 +198,7 @@ Other traps found the hard way:
 * `.env` values are **quoted** (`BOT_TOKEN="…"`). `python-dotenv` strips
   quotes, `docker run --env-file` does not — `config._env()` strips them now.
 * Never leave `.env.bak*` lying around; `.gitignore` covers `.env*` since
-  `39090f3`, but `git add -A` is used a lot here.
+  `a4c44a2`, but `git add -A` is used a lot here.
 * The Bash tool's safety classifier goes down sometimes. `Read`/`Write`/`Edit`
   keep working; wait and retry rather than working around it.
 
@@ -203,7 +214,7 @@ Other traps found the hard way:
 | DE | one line in `~/.ssh/authorized_keys`: `restrict,port-forwarding,permitopen="127.0.0.1:3128",command="/bin/false"` |
 | big-one | sidecar `podcast-cutter-tunnel` (`deploy/tunnel/`), autossh holding `-L 0.0.0.0:3128:127.0.0.1:3128` to DE:44222, behind compose profile `proxy` |
 | big-one | key + pinned host key at `~/.podcast-cutter/tunnel/` (outside the repo) |
-| big-one | `.env`: `MEDIA_PROXY=http://media-proxy:3128`, `MEDIA_PROXY_MODE=fallback`, `COMPOSE_PROFILES=proxy`, `TUNNEL_HOST=178.17.48.243` |
+| big-one | `.env`: `MEDIA_PROXY=http://media-proxy:3128`, `MEDIA_PROXY_MODE=fallback`, `COMPOSE_PROFILES=proxy`, `TUNNEL_HOST=<DE-public-address>` |
 
 The tunnel is dialled **from** big-one, which is the one thing that differs from
 option A as it was written below: a reverse tunnel lands on big-one's loopback,
@@ -357,7 +368,7 @@ TCP ports already listening on DE:
   53 80 443 1015 1188 2019 2053 2055 2096 4430
   8080 8082 8443 9091 11111 20530 44222 62789
 
-interfaces: ens3 178.17.48.243/32 · docker0 172.17.0.1 · amn0 172.29.172.1/24
+interfaces: ens3 <DE-public-address>/32 · docker0 172.17.0.1 · amn0 172.29.172.1/24
 routing: no policy rules, single default via ens3 — the Amnezia containers
          serve VPN *clients*, they do not redirect DE's own traffic
 ```
@@ -655,27 +666,33 @@ rollout; the media tunnel was left untouched (see §6 for the tunnel caveat).
 
 ---
 
-## 5. Current plan and remaining gaps (updated 2026-08-24)
+## 5. Current plan and remaining gaps (updated 2026-08-26)
 
 The old numbered block below is retained as a closure/decision log; it is no
 longer the priority list. The current order is:
 
-1. **Adoption evidence.** Seed distinct `src_<tag>` links, measure first
-   successful cut, repeat use and share-format mix, then fix the largest real
-   funnel drop. Production currently has too few users for feature guesses to
-   be trustworthy.
+1. **Adoption evidence.** Five one-chat/one-tag links and five short Russian
+   posts are ready in `docs/seeding-posts.md`. Publish them, measure tagged
+   arrival → first successful cut → later repeat cut, and ask people directly
+   whether they forwarded the result. Telegram exposes no forwarding event;
+   `/stats` must not be described as measuring shares.
 2. **Search truth.** Complete the by-ear answer-key pass before changing the
    recogniser or English morphology. The baskets and hybrid E5 retrieval are
    deployed; this remaining work improves the ruler, not the plumbing.
-3. **Demo/distribution.** Record the 3–5-minute fallback, refresh the
-   architecture diagram, and set the BotFather-only avatar/inline placeholder.
+3. **Demo/distribution.** The current diagram is now
+   `docs/architecture.md`, and the distribution posts are ready. Record the
+   3–5-minute fallback and set the BotFather-only avatar/inline placeholder.
    In-bot visual demos are five seconds per available skin, carry the complete
    source card and burn in `@podcast_cutter_bot`.
 4. **Small operational debts.** Put the restic secret in Bitwarden and monitor
    the Telegram/media tunnel externally. Queue ETA and transcript LRU wait for
    evidence that queueing or disk growth is user-visible.
-5. **Later content affordances.** Chapter-aware boundaries and embedded audio
-   artwork are useful but rank below activation/search evidence.
+5. **Later content affordances.** Chapter-aware boundaries mean offering or
+   snapping to publisher-supplied chapter starts/ends. Embedded audio artwork
+   means writing the episode cover into MP3/M4A metadata. Queue ETA adds an
+   approximate wait beside the durable position; transcript LRU removes the
+   least-recently-used derived indexes after a storage ceiling. All remain
+   below activation/search evidence.
 
 Already closed and not gaps: CI, public repository, API search caching,
 ffmpeg-aware `/cancel`, public-use legal/privacy controls, SQLCipher migration,
@@ -692,7 +709,7 @@ off-host encrypted backups and verified restores.
    In value order: ~~(a) `cluster()` compares window *edges*, not moment
    positions~~ and ~~(b) `locate_phrase` places the clip on the first
    occurrence of *any* query word and searches quarantined utterances~~ —
-   **both already fixed in `f9b84ce`** (cluster compares starts; placement
+   **both already fixed in `cac97f0`** (cluster compares starts; placement
    filters to indexable utterances and to words ≥3 chars). The `ls-t1`
    ranking-3rd symptom attributed to (a) was **misdiagnosed**: a 2026-08-13
    diagnostic showed clustering working (20 raw hits → 15 distinct moments),
@@ -701,11 +718,11 @@ off-host encrypted backups and verified restores.
    lists only 8. That is answer-key incompleteness (the owed by-ear pass,
    item 1), not a search bug. Still genuinely open: ~~(c) an ASR timeout
    releases `LocalWhisper._lock`
-   while the worker still decodes~~ **fixed** (`e3bef37`): the lock is held
+   while the worker still decodes~~ **fixed** (`be632d7`): the lock is held
    until the worker thread actually finishes, so a post-timeout retry waits
    rather than starting a second decode on the same model; a test drives the
    sequence; ~~(d) `NORMALIZER_VERSION` is written to the row but never
-   compared at search time~~ **fixed** (`1eb3949`): `search_windows` compares
+   compared at search time~~ **fixed** (`9bae631`): `search_windows` compares
    before it searches, and a mismatch rebuilds `text_normalized` and
    `text_lemmas` from the stored `windows.text` — seconds of CPU, because
    unlike the chunker the normaliser needs no audio. The stored value is
@@ -720,12 +737,12 @@ off-host encrypted backups and verified restores.
    search) would cost the instant-search property, so this is a tradeoff to
    decide, not a bug to squash. **Now priced (2026-08-14) — see §5.1b;** ~~(f) two episode ids serving identical bytes
    can race into an `IntegrityError` after a full transcription~~ **fixed**
-   (`1eb3949`): a collision it can prove is a duplicate resolves to the row
+   (`9bae631`): a collision it can prove is a duplicate resolves to the row
    that won, and any other `IntegrityError` still raises. The queue serialises
    transcription within a process, so the window that remains is two processes
    over one volume — a redeploy overlap, or a script against the live
    database; ~~temp files
-   leak on the timeout path~~ **fixed** in `e3bef37` (the decoded WAV is
+   leak on the timeout path~~ **fixed** in `be632d7` (the decoded WAV is
    unlinked on the timeout path too). **Only (e) is left, and it is a decision
    rather than a defect.**
 1b. **The dynamic-ad hole (e), measured before deciding.** The premise is that
@@ -782,7 +799,7 @@ off-host encrypted backups and verified restores.
    `RATE_INPUT_PER_MINUTE` / `RATE_CUTS_PER_HOUR` / `RATE_ASR_PER_DAY`,
    0 = off, admins exempt, refusals journalled as `action=limit`. Still
    open from the same review: (b) the SSRF guard checks addresses before
-   the cut. The **redirect half is fixed** (`7483267`): `-max_redirects 0`
+   the cut. The **redirect half is fixed** (`21dc7b3`): `-max_redirects 0`
    on every remote ffmpeg/ffprobe input, so a host that answers resolution
    politely can no longer 302 ffmpeg into `169.254.169.254` after the check
    passed — reproduced on ffmpeg 7.1.5 (a default ffprobe *did* connect to
@@ -842,7 +859,7 @@ off-host encrypted backups and verified restores.
    `listened/ok/resumed`, and `/var/tmp/podcast-cutter/` left empty. **The
    message arrived in Telegram** — confirmed by the recipient, so the chain is
    proven end to end including delivery. The journal row is written whether or
-   not the send succeeds, so a failed send is now also a log line (`ff3814a`).
+   not the send succeeds, so a failed send is now also a log line (`5e0658e`).
 5. ~~**Backups.** Nothing is backed up.~~ **Done and live (2026-08-13).**
    Encrypted restic → rclone-native-yandex, the cinemarr/vaultwarden shape:
    the SQLCipher database (`sqlcipher_export`, `quick_check` and authenticated
@@ -872,7 +889,12 @@ off-host encrypted backups and verified restores.
    🎧 full-episode URL button — which is also what the captionless video
    note gets. `MAX_CUT_SECONDS` stays 900 for explicit ranges; the default
    clip was already 60 s. The denylist/complaint command remains open.
-10. Chapter-aware clip boundaries; embedded cover art in clips.
+10. **Deferred, now defined rather than vague.** Chapter-aware boundaries offer
+    or snap to publisher-supplied section starts/ends. Embedded audio artwork
+    writes the episode cover into MP3/M4A metadata. Queue ETA adds estimated
+    minutes beside the durable position; transcript LRU evicts the least
+    recently used derived indexes after a configured storage ceiling. See the
+    current priority and rationale in `ROADMAP.md` §11.
 11. The audio detour has no monitoring beyond the startup check and the
     journal. `gatus` already runs on DE and could watch the proxy directly —
     and it now matters more, because Telegram goes through the same tunnel.

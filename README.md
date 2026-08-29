@@ -1,7 +1,8 @@
 # podcast-cutter
 
-A Telegram bot that finds a podcast episode, takes a time range, and sends back
-just that segment as an audio file.
+A Telegram bot that finds a podcast episode and sends just the needed moment
+as audio, a voice message, a round video note or a square video. The moment can
+be selected by timestamp or found by what was said.
 
 Telegram bot: https://t.me/podcast_cutter_bot
 
@@ -125,7 +126,11 @@ Ignoring /stats from user 12345678. Set ADMIN_IDS=12345678 to allow it.
 **Where people come from.** Hand out `https://t.me/<bot>?start=src_<tag>` —
 one tag per place you post it — and `/stats` reports how many distinct people
 arrived through each. Tags are lowercased, stripped to `a-z0-9_-` and cut to 32
-characters before they touch the journal.
+characters before they touch the journal. Five ready-to-use links, five short
+Russian posts and an honest measurement checklist are in
+[docs/seeding-posts.md](docs/seeding-posts.md). `/stats` shows arrivals and
+global cut outcomes; cohort conversion requires an aggregate journal query.
+Telegram does not expose forwards to bots, so it cannot measure actual sharing.
 
 **The bot's own profile is set from code**, in `_on_startup`: the command list,
 the short description shown in the profile, and the description on the empty
@@ -183,9 +188,10 @@ API responses are cached only when their response headers explicitly permit
 it. Clips keep source metadata where the output format supports it and link
 back to the publisher-facing episode page when one is available.
 
-Publish the Privacy Policy URL through @BotFather before public use. Durable
-state is encrypted at rest with SQLCipher whenever the application is loaded
-through `load_settings()`; `DATABASE_KEY` is mandatory there. The accepted
+Production's Privacy Policy URL is already published through @BotFather; a new
+bot identity must publish it before public use. Durable state is encrypted at
+rest with SQLCipher whenever the application is loaded through
+`load_settings()`; `DATABASE_KEY` is mandatory there. The accepted
 pet-project recovery policy keeps the complete `.env` (including that key)
 beside the encrypted database inside the separately encrypted restic snapshot.
 The live database, WAL and SHM also use a private umask and mode `0600`.
@@ -277,6 +283,18 @@ needs real credentials and network access.
 ```shell
 poetry run python scripts/check_api.py "Lex Fridman"
 ```
+
+## Documentation map
+
+- [Current overview](overview.md) — what is live and what comes next.
+- [Architecture](docs/architecture.md) — the presentation-sized system map
+  and its five request paths.
+- [Five pilot links and posts](docs/seeding-posts.md) — one tagged link per
+  podcast chat, plus what can and cannot be measured.
+- [Video skins](docs/video-skins.md) — rendering behaviour and loop assets.
+- [Backup policy](docs/backup-policy.md) — encrypted snapshots and restore.
+- [Roadmap](ROADMAP.md) — product rationale and deferred ideas.
+- [Handoff](HANDOFF.md) — production topology, measurements and operator notes.
 
 ## Layout
 

@@ -3,6 +3,12 @@
 `overview.md` records what exists. This file records **where the project is
 going next** and why, including the measurements the decisions rest on.
 
+Current planning snapshot: 2026-08-26. The live system is drawn in
+[`docs/architecture.md`](docs/architecture.md); five attribution links and
+their short podcast-chat posts are ready in
+[`docs/seeding-posts.md`](docs/seeding-posts.md). Distribution itself and the
+recorded fallback demo remain work, not documentation claims.
+
 The occasion is a company pet-project contest, which is a deadline rather than
 a design input — but its scoring does say plainly which parts of the project
 are underweight, so §1 keeps that framing. Everything after it is engineering
@@ -12,8 +18,9 @@ that stands on its own.
 
 ## 1. Why this phase exists
 
-The contest scores 100 points across six axes. Judged honestly, the project
-today lands around 69:
+The contest scores 100 points across six axes. The table below is the
+**8 August baseline** that motivated this phase, not a description of the
+current bot:
 
 | Axis | Points | Now | Why |
 | --- | --- | --- | --- |
@@ -24,8 +31,10 @@ today lands around 69:
 | Idea and originality | 20 | ~10 | **The gap.** "A bot that cuts podcasts" is a utility |
 | Use, emotion, value | 20 | ~12 | Useful, but nothing makes anyone say *oh* |
 
-The engineering is already at finalist level. The idea is not. So this phase
-buys originality and emotion, and only then hardens what a crowd would break.
+Since that baseline the public repository, CI, speech search, evals, durable
+queue, video formats and the architecture diagram have shipped. The remaining
+weakness is evidence of adoption plus a recorded 3–5-minute demo, not missing
+core engineering.
 
 The single change that moves originality, emotion and the AI framing at once:
 **stop requiring the user to know the timestamp.**
@@ -351,13 +360,15 @@ list, logs, and soon transcripts.
   Podcast Index cache, and real cancellation that terminates ffmpeg.
 - **Done:** public-use controls, bilingual Terms/Privacy, blocklist, encrypted
   SQLCipher state, encrypted off-host backup and proved restore.
-- **Still valuable:** recruit real users through distinct `src_<tag>` links and
-  turn `/stats` into evidence about activation, successful first clip, repeat
-  use and the formats people actually share.
+- **Ready to run:** five distinct `src_<tag>` links and short posts now live in
+  `docs/seeding-posts.md`. `/stats` measures unique arrivals and global cut
+  outcomes; aggregate journal queries can measure first/repeat cuts by cohort.
+  Telegram does not report forwarding, so actual sharing needs pilot feedback.
 - **Still manual:** BotFather avatar and inline placeholder; all API-supported
   commands and descriptions are already published at startup.
-- **Demo polish:** keep a recorded fallback and one current architecture
-  diagram. The in-bot skin parade now uses shareable five-second samples.
+- **Demo polish:** the current architecture diagram is done in
+  `docs/architecture.md`. A recorded fallback is still owed. The in-bot skin
+  parade uses shareable five-second samples.
 
 Explicitly dropped: **the Mini App.** A waveform in a web view costs a frontend
 and HTTPS hosting and scores less than transcript search.
@@ -380,10 +391,11 @@ artifact, not an afterthought:
    Anchor answers 403 — and a `fallback` mode that leaves working routes alone.
 5. **0:30 — numbers from `/stats`, and what is next.**
 
-Plus one architecture diagram, and a recorded video as insurance: venue
-internet fails more often than anyone plans for. The bot's own skin demo is
-five seconds per available look, carries the full source card, and burns in
-`@podcast_cutter_bot` so a forwarded captionless circle still leads back.
+Use the diagram in `docs/architecture.md`, and record the walkthrough as
+insurance: venue internet fails more often than anyone plans for. The bot's
+own skin demo is five seconds per available look, carries the full source card,
+and burns in `@podcast_cutter_bot` so a forwarded captionless circle still
+leads back.
 
 ---
 
@@ -410,14 +422,16 @@ five seconds per available look, carries the full source card, and burns in
    queue, notes up
    to a minute and square video up to five, rendered in the cut pool by
    decision rather than by default.
-7. ~~CI and public repo.~~ **Done.** Seed `src_` links with real users next.
-8. **Adoption loop:** first-cut funnel, repeat/share signals, then fix the
-   largest observed drop rather than adding another surface on instinct.
+7. ~~CI and public repo.~~ **Done.** Five one-chat/one-tag links and posts are
+   prepared; publishing them is the next external action.
+8. **Adoption loop:** tagged arrival → first successful cut → another cut on a
+   later visit, plus direct feedback about forwarding. Fix the largest observed
+   drop rather than adding another surface on instinct.
 9. **Search quality:** finish the by-ear answer-key pass; only then price an
    English stemmer or a larger recogniser against measured misses.
-10. **Demo and distribution:** current architecture diagram, recorded
-    3–5-minute run, BotFather avatar/inline placeholder, targeted podcast-chat
-    invitations.
+10. **Demo and distribution:** ~~current architecture diagram and five short
+    podcast-chat posts~~ are done; record the 3–5-minute run, set the BotFather
+    avatar/inline placeholder, and publish the five prepared invitations.
 11. **Operational polish:** copy the backup secret to Bitwarden and add the
     existing proxy/tunnel to external monitoring. Queue ETA and transcript LRU
     stay behind evidence that either is a real user problem.
@@ -425,6 +439,25 @@ five seconds per available look, carries the full source card, and burns in
 The foundation and the wow path are both shipped. The next phase is no longer
 "build the bot"; it is "measure whether strangers reach a useful shared clip,
 then remove the biggest obstacle".
+
+### Deferred ideas, in plain language
+
+- **Chapter-aware boundaries:** when a publisher supplies chapter metadata,
+  show those named sections or offer to snap a clip's start/end to them instead
+  of making the user hunt by seconds. The directory sample found chapters rare,
+  so this is an affordance, not a new foundation.
+- **Artwork inside audio:** write the episode cover into MP3/M4A metadata so a
+  normal audio clip has artwork in Telegram and music players. This is separate
+  from drawing the cover in a video skin.
+- **Queue ETA:** keep the durable position (`2nd in line`) and add an estimate
+  such as `about 7 minutes`, derived from episode lengths and measured host RTF.
+- **Transcript LRU:** set a storage ceiling and delete the least recently used
+  transcript/search indexes first. Audio is already temporary; this is only a
+  bound on the durable derived text and vectors.
+
+These are intentionally below adoption evidence. Build one when the pilot
+shows chapters, waiting time, plain-audio presentation or disk growth is an
+actual obstacle.
 
 ---
 

@@ -2,7 +2,8 @@
 
 What each skin draws, what it needs, and how to feed the one that needs
 feeding. The render behaviour lives in `podcast_cutter/video.py`; the button
-labels in `keyboards.py`/`i18n.py`. This page is for the operator.
+labels in `keyboards.py`/`i18n.py`. This page is for the operator; the renderer's
+place in the request flow is shown in [`architecture.md`](architecture.md).
 
 ## The lineup
 

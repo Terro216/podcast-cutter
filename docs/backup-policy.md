@@ -20,8 +20,11 @@ Everything irreplaceable lives in **one SQLCipher-encrypted SQLite database**,
 
 **Not** backed up, on purpose: cached audio (never stored), the ASR/embedding
 models (`/data/models`, re-downloadable and re-convertible — see HANDOFF §6),
-and rotating logs. Losing a model costs one download; backing it up nightly
-would dwarf the data that actually matters.
+the replaceable `/data/brainrot` loop-video mount, the developer-only
+`private/eval-fixtures/`, and rotating logs. Losing a model costs one download;
+backing replaceable media up nightly would dwarf the database that actually
+matters. Keep the loop source archive and private evaluation fixtures in a
+separate operator-controlled backup if reproducing them would be inconvenient.
 
 ## Consistency
 

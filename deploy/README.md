@@ -1,5 +1,9 @@
 # The audio detour
 
+This page is the detailed media-egress runbook. See
+[`docs/architecture.md`](../docs/architecture.md) for the current whole-system
+diagram; the proxy shown here is only the fallback audio branch of that map.
+
 Roughly a fifth of the directory is unfetchable from the machine the bot runs
 on, and the reason is the source address rather than anything about the request:
 `traffic.megaphone.fm` resolves by GeoDNS to an address that silently drops our
