@@ -140,3 +140,24 @@ Provisioned and verified on big-one:
   and decrypted restore staging were removed. Local staging no longer retains
   `.env`; the complete recovery copy exists only inside encrypted restic.
 - The public Privacy Policy URL was configured through @BotFather.
+
+## Backup monitoring verified — 2026-10-02
+
+The production private `.env` now configures authenticated Gatus endpoints for
+Daily Backup (26h), Weekly Backup Maintenance (192h) and Monthly Restore Drill
+(864h), group `podcast-cutter`. The existing backup image/scripts consume them;
+the bot container was not recreated.
+
+Real systemd jobs completed successfully on 2026-10-02, Moscow time:
+
+- daily 18:55:00–18:55:44, snapshot
+  `565534545fbf54475d83b301af525c9e56e13248ce0fb095844e83fd1bc2e01f`;
+- weekly 18:55:44–18:56:39, repository check found no errors;
+- monthly 18:56:39–18:57:16, full repository read check and SQLCipher restore
+  validation passed.
+
+Recovery configuration is also included in the separate daily encrypted
+two-host recovery repository. Its key and a direct configuration attachment
+are published to Vaultwarden through the infrastructure
+`scripts/recovery-secrets/publish.sh` owner login workflow; that publication
+must be confirmed by `vault_roundtrip=ok`, not inferred from healthy jobs.
