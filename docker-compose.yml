@@ -5,8 +5,6 @@ services:
       dockerfile: Dockerfile
     container_name: podcast-cutter
     restart: unless-stopped
-    env_file:
-      - .env
     volumes:
       # Without this, every `docker compose up --build` recreates the container
       # and takes the log history and the journal with it.
@@ -15,12 +13,46 @@ services:
       # read-only in the bot, easy to inspect on the host, and deliberately
       # excluded from the encrypted database backup.
       - ${BRAINROT_SOURCE_DIR:-/srv/podcast-cutter/brainrot/loops}:/data/brainrot:ro
+    # Only application settings belong in the bot; backup credentials stay
+    # with the backup service. Unset optional keys retain application defaults.
     environment:
-      DATA_DIR: /data
-    # Liveness by heartbeat, not by `pgrep`: the bot rewrites
-    # /data/health/heartbeat from a job on the event loop, and this fails once
-    # it goes stale — the one thing a process-alive check cannot see is a
-    # wedged loop. start_period covers model loading on a cold start.
+      - DATA_DIR=/data
+      - ADMIN_IDS
+      - ASR_BACKEND
+      - ASR_ENABLED
+      - ASR_JOB_RETENTION_HOURS
+      - ASR_MODEL
+      - ASR_THREADS
+      - BOT_TOKEN
+      - DATABASE_KEY
+      - EMBED_MODEL_DIR
+      - LEGAL_BASE_URL
+      - LEGAL_CONTACT
+      - LOG_RETENTION_DAYS
+      - MAX_CONCURRENT_JOBS
+      - MAX_CUT_SECONDS
+      - MAX_SOURCE_SECONDS
+      - MEDIA_PROXY
+      - MEDIA_PROXY_MODE
+      - MEDIA_PROXY_PROBE_URL
+      - PODCAST_API_BASEURL
+      - PODCAST_API_KEY
+      - PODCAST_API_SECRET
+      - PODCAST_BLOCKLIST
+      - RATE_ASR_PER_DAY
+      - RATE_CUTS_PER_HOUR
+      - RATE_INPUT_PER_MINUTE
+      - SPEECHKIT_API_KEY
+      - SPEECHKIT_FOLDER_ID
+      - TELEGRAM_PROXY
+      - TERMS_VERSION
+      - TZ
+      - USER_DATA_RETENTION_DAYS
+      - WORK_DIR
+    # Check both the event loop and successful Telegram polling. A live loop
+    # alone can hide a stuck getUpdates task. The heartbeat job also exits
+    # after 180s without polling progress so unless-stopped can recover it.
+    # start_period covers model loading on a cold start.
     healthcheck:
       test: ["CMD", "python", "/app/scripts/healthcheck.py"]
       interval: 60s

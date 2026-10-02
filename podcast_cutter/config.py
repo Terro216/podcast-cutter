@@ -226,6 +226,11 @@ class Settings:
         return self.data_dir / "health" / "heartbeat"
 
     @property
+    def polling_heartbeat_path(self) -> Path:
+        """Last successful getUpdates request, even when it returned no messages."""
+        return self.data_dir / "health" / "polling"
+
+    @property
     def brainrot_dir(self) -> Path:
         """Curated background loops for the four gameplay video skins.
 

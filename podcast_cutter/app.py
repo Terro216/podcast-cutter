@@ -35,6 +35,7 @@ from .embeddings import build_embedder
 from .handlers import PodcastCutterBot
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES, bot_commands, t
 from .indexer import Indexer
+from .polling import POLLING_STALL_SECONDS, PollingRequest
 from .states import Screen
 from .store import Event, Store
 
@@ -153,7 +154,24 @@ def _touch_heartbeat(settings: Settings) -> None:
 
 
 async def _heartbeat_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    _touch_heartbeat(context.application.bot_data["settings"])
+    application = context.application
+    polling: PollingRequest = application.bot_data["polling_request"]
+    if (
+        application.running
+        and application.updater is not None
+        and application.updater.running
+        and polling.stalled_for >= POLLING_STALL_SECONDS
+    ):
+        logger.critical(
+            "Telegram polling made no progress for %.0fs; exiting for Docker restart",
+            polling.stalled_for,
+        )
+        # Graceful Updater.stop() waits for the polling task, which is the
+        # very task that may be stuck. Exit without that wait. SQLite keeps
+        # pending transcription jobs durable; Docker's unless-stopped policy
+        # restarts us, and startup preserves updates still waiting at Telegram.
+        os._exit(1)
+    _touch_heartbeat(application.bot_data["settings"])
 
 
 async def _on_startup(application: Application) -> None:
@@ -236,9 +254,10 @@ async def _on_startup(application: Application) -> None:
     except TelegramError as exc:
         logger.warning("Could not publish the bot's description: %s", exc)
 
-    # Write one immediately so the container is healthy the moment startup
-    # finishes, then keep it fresh from the event loop. A wedged loop stops
-    # rewriting it, which is the failure a process-alive check cannot see.
+    # Health requires both this loop heartbeat and a successful Telegram poll.
+    # The repeating job also restarts a process whose polling task is stuck
+    # while the rest of the event loop still runs.
+    application.bot_data["polling_request"].start_monitoring()
     _touch_heartbeat(settings)
     if application.job_queue is not None:
         application.job_queue.run_repeating(
@@ -348,10 +367,12 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
         store = Store(settings.database_path, key=settings.database_key)
         store.connect()
     bot = PodcastCutterBot(settings, client, store, build_indexer(settings, store))
+    polling = PollingRequest(settings.polling_heartbeat_path, settings.telegram_proxy)
 
     builder = (
         ApplicationBuilder()
         .token(settings.bot_token)
+        .get_updates_request(polling)
         # Without this PTB processes updates strictly one at a time, and a
         # first-time transcription — minutes of work — freezes the bot for
         # every user at once. Bounded rather than unlimited so a flood cannot
@@ -366,12 +387,9 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
         .post_shutdown(_on_shutdown)
     )
     if settings.telegram_proxy:
-        # Both, deliberately: PTB keeps a second connection pool for long
-        # polling, and routing only the first would leave the bot able to
-        # answer and unable to hear.
-        builder = builder.proxy(settings.telegram_proxy).get_updates_proxy(
-            settings.telegram_proxy
-        )
+        # The dedicated polling transport above uses the same proxy. Both
+        # pools must be routed or the bot can answer but cannot hear.
+        builder = builder.proxy(settings.telegram_proxy)
         logger.info("Talking to Telegram through %s", settings.telegram_proxy)
 
     application = builder.build()
@@ -379,6 +397,7 @@ def build_application(settings: Settings, store: Store | None = None) -> Applica
     application.bot_data["bot"] = bot
     application.bot_data["store"] = store
     application.bot_data["settings"] = settings
+    application.bot_data["polling_request"] = polling
 
     register_handlers(application, bot)
     return application
@@ -396,7 +415,7 @@ def run() -> None:
 
     application = build_application(settings)
     application.run_polling(
-        allowed_updates=Update.ALL_TYPES, drop_pending_updates=True
+        allowed_updates=Update.ALL_TYPES, drop_pending_updates=False
     )
 
 

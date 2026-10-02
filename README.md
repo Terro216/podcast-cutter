@@ -507,6 +507,14 @@ filter that already blocks `traffic.megaphone.fm`.
 main connection pool and the long-polling one — routing only the first leaves a
 bot that can answer but cannot hear.
 
+Updates waiting at Telegram are preserved on startup (`drop_pending_updates=False`).
+The Docker healthcheck requires both a fresh event-loop heartbeat and a successful
+`getUpdates` response; empty polls count as success. Each poll has a 45-second
+total timeout. If polling makes no progress for 180 seconds, the heartbeat job
+exits the process on its next tick (within another minute), and Docker restarts
+it. Completed network failures remain PTB's responsibility to retry; they make
+the polling health marker stale without forcing repeated restarts during an outage.
+
 Two things make this different from `MEDIA_PROXY`, and both are the reason it
 is off by default:
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Docker healthcheck: is the bot's event loop still alive?
+"""Docker healthcheck: are the event loop and Telegram polling both healthy?
 
-The bot rewrites a heartbeat file from a repeating job on the loop (see
-`app._heartbeat_job`). A `pgrep python` check cannot tell a healthy idle bot
-from one whose loop has wedged mid-`getUpdates`; a stale heartbeat can. Exit 0
-if the marker is fresh, 1 otherwise — which is all Docker reads.
+The scheduled heartbeat alone cannot detect a stuck polling task while the
+loop still runs. The polling marker is renewed only by successful getUpdates
+requests, including empty responses. Both markers must be fresh.
 
 No dependencies beyond the standard library, so it runs in the same slim image
 as the bot with no extra install.
@@ -24,18 +23,19 @@ MAX_AGE_SECONDS = 180.0
 
 def main() -> int:
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
-    heartbeat = data_dir / "health" / "heartbeat"
-    try:
-        age = time.time() - heartbeat.stat().st_mtime
-    except FileNotFoundError:
-        print("heartbeat file missing", file=sys.stderr)
-        return 1
-    if age > MAX_AGE_SECONDS:
-        print(
-            f"heartbeat is {age:.0f}s old (> {MAX_AGE_SECONDS:.0f}s)",
-            file=sys.stderr,
-        )
-        return 1
+    for name in ("heartbeat", "polling"):
+        marker = data_dir / "health" / name
+        try:
+            age = time.time() - marker.stat().st_mtime
+        except OSError:
+            print(f"{name} heartbeat missing or unreadable", file=sys.stderr)
+            return 1
+        if age > MAX_AGE_SECONDS:
+            print(
+                f"{name} heartbeat is {age:.0f}s old (> {MAX_AGE_SECONDS:.0f}s)",
+                file=sys.stderr,
+            )
+            return 1
     return 0
 
 

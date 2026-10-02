@@ -1,13 +1,9 @@
-"""The liveness heartbeat and the healthcheck that reads it.
-
-The point of the pair is that it catches a *wedged event loop*, which a
-process-alive check cannot: the bot rewrites the marker from a job on the loop,
-and the healthcheck fails once that marker goes stale.
-"""
+"""Health requires a live event loop and successful Telegram polling."""
 
 from __future__ import annotations
 
 import importlib.util
+import os
 import time
 from pathlib import Path
 
@@ -44,6 +40,7 @@ def test_touch_never_raises_on_an_unwritable_path(tmp_path):
 def test_healthcheck_passes_on_a_fresh_beat(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     _touch_heartbeat(settings)
+    settings.polling_heartbeat_path.touch()
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     assert _load_healthcheck().main() == 0
 
@@ -56,9 +53,24 @@ def test_healthcheck_fails_when_the_marker_is_missing(tmp_path, monkeypatch):
 def test_healthcheck_fails_on_a_stale_beat(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     _touch_heartbeat(settings)
+    settings.polling_heartbeat_path.touch()
     stale = time.time() - 10 * 60
-    import os
-
     os.utime(settings.heartbeat_path, (stale, stale))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert _load_healthcheck().main() == 1
+
+
+def test_live_loop_cannot_hide_missing_polling(tmp_path, monkeypatch):
+    _touch_heartbeat(_settings(tmp_path))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert _load_healthcheck().main() == 1
+
+
+def test_live_loop_cannot_hide_stale_polling(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    _touch_heartbeat(settings)
+    settings.polling_heartbeat_path.touch()
+    stale = time.time() - 600
+    os.utime(settings.polling_heartbeat_path, (stale, stale))
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     assert _load_healthcheck().main() == 1
