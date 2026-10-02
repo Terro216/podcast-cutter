@@ -36,7 +36,8 @@ jobs:
         # The SSRF lock (`-max_redirects 0` in audio.py) requires ffmpeg >= 7.1;
         # Ubuntu 24.04 provides 6.1. BtbN no longer retains the previous 7.1
         # autobuild, so pin its available 8.1 release and published SHA256.
-        # The production image is independent of this CI test-tool version.
+        # Date-based upstream archives can expire: the checksum verifies
+        # integrity, not retention. Production uses its own FFmpeg image.
         run: |
           curl -fsSL -o /tmp/ffmpeg.tar.xz \
             https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-01-13-06/ffmpeg-n8.1.3-14-g330caae0c1-linux64-gpl-8.1.tar.xz
