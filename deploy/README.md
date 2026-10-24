@@ -2,15 +2,16 @@
 
 This page is the detailed media-egress runbook. See
 [`docs/architecture.md`](../docs/architecture.md) for the current whole-system
-diagram; the proxy shown here is only the fallback audio branch of that map.
+diagram; the diagram below describes the fallback audio branch. The same DE
+Tinyproxy also serves Telegram through separate application SSH tunnels.
 
 Roughly a fifth of the directory is unfetchable from the machine the bot runs
 on, and the reason is the source address rather than anything about the request:
 `traffic.megaphone.fm` resolves by GeoDNS to an address that silently drops our
 packets, and Anchor-hosted feeds answer 403 outright. The same URLs succeed from
-the dev box. So audio fetches — and only audio fetches; the directory API and
-Telegram are neither blocked nor anybody else's business — can take a detour
-through a proxy there.
+the dev box. Audio fetches can therefore take a detour through a proxy there.
+The directory API has its own route; Telegram also uses this DE exit in the
+current deployment.
 
 ```
 production                                     dev box (egress the CDNs like)
@@ -108,6 +109,10 @@ Media proxy http://media-proxy:3128 reached https://traffic.megaphone.fm/ (200) 
 
 ## Moving it to another host
 
+This is a shared exit: coordinate changes with the Telegram consumers before
+stopping or moving it. Disabling Podcast Cutter's audio detour alone does not
+remove those consumers.
+
 Nothing in the bot's code names a host. Copy `deploy/media-proxy/` to the new
 machine, bring it up, add the same public key line to its `authorized_keys`,
 pin its host key, and change `TUNNEL_HOST` in production's `.env`. If the new
@@ -139,3 +144,33 @@ docker compose exec -T podcast-cutter sqlite3 -header -column \
   "SELECT count(*) FROM events
     WHERE action='cut' AND outcome='ok' AND detail='route=proxy'"
 ```
+
+## Telegram reliability fix, 2026-10-24
+
+`tinyproxy.conf` sets `Bind 0.0.0.0` to use IPv4 upstream connections. It does
+not pin Telegram/CDN addresses or change host IPv6, DNS, listener access, or SSH
+keys. In about 15 hours before this change, direct DE Telegram probes passed
+180/180 while the shared proxy passed 163/180. Fresh comparisons using the same
+image gave 27/30 for the original config and 100/100 with only this Bind change;
+changing DNS alone did not resolve the stalls.
+
+The DE `media-proxy` container was recreated at 16:06:50 UTC. A configuration-only
+layer over the previously running image preserved Tinyproxy and dependencies.
+After deployment, probes passed 100/100 on DE and 20/20 from each of the running
+For Two, Cinemarr and Podcast Cutter containers. Applications were not restarted.
+These are API reachability checks, not proof of end-to-end message delivery or
+long-term availability. The existing bounded 48-hour observation continues.
+
+The previous image is retained locally as
+`media-proxy:rollback-ipv4-20261024`. If a rollback is needed, run on **DE**:
+
+```sh
+ldocker tag media-proxy:rollback-ipv4-20261024 media-proxy-media-proxy
+ldocker compose -p media-proxy -f deploy/media-proxy/docker-compose.yml \
+  up -d --no-build --pull never --no-deps --wait --wait-timeout 20 media-proxy
+```
+
+Run these commands from the Podcast Cutter project directory. They restore the
+previous runtime image; also revert the Bind source change before any later
+rebuild. This service has no persistent data or credentials; recover from Git
+and its image. Existing tunnel credentials remain in the server recovery flow.
